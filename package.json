@@ -20,7 +20,7 @@
     "analyze": "tsx src/analyze.ts",
     "analyze:morpho-blue": "tsx src/analyze-morpho-blue.ts",
     "run:morpho-executor": "tsx src/run-morpho-executor.ts",
-    "prepare": "tsx src/prepare.ts",
+    "prepare:targets": "tsx src/prepare.ts",
     "execute": "tsx src/execute.ts",
     "compile:liquidator": "tsx src/compile-liquidator.ts",
     "deploy:liquidator": "tsx src/deploy-liquidator.ts",

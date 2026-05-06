@@ -41,13 +41,13 @@ npm run test:smoke
 
 当前线上逻辑仍然是 `Aave V3`：
 
-- `scan / analyze / prepare / execute` 走的都是 `V3` 的 pool / reserve / liquidationCall
+- `scan / analyze / prepare:targets / execute` 走的都是 `V3` 的 pool / reserve / liquidationCall
 - `BNB / Arbitrum / Polygon` 这三条链当前也都挂到 `Aave V3` 协议描述
 
 但仓库现在已经开始按双协议结构准备：
 
 - 市场解析会显式返回当前协议，例如 `Aave V3`
-- `scan / analyze / prepare` 的 JSON 输出会带上 `protocol`
+- `scan / analyze / prepare:targets` 的 JSON 输出会带上 `protocol`
 - 新增 `protocol:report`，专门说明当前生效协议、未来 `V4` 的占位能力和需要替换的部分
 
 查看当前协议准备状态：
@@ -156,20 +156,20 @@ npm run analyze -- --chain polygon --json
 生成可直接用于交易层的 `approve + liquidationCall` 参数和 calldata：
 
 ```bash
-POLYGON_RPC_URL="https://your-polygon-quicknode" npm run prepare -- --chain polygon
-ARBITRUM_RPC_URL="https://your-arbitrum-quicknode" npm run prepare -- --chain arbitrum
+POLYGON_RPC_URL="https://your-polygon-quicknode" npm run prepare:targets -- --chain polygon
+ARBITRUM_RPC_URL="https://your-arbitrum-quicknode" npm run prepare:targets -- --chain arbitrum
 ```
 
 默认只挑当前已可清算的目标。如果你想提前准备观察名单里的目标：
 
 ```bash
-npm run prepare -- --chain polygon --allowRisky
+npm run prepare:targets -- --chain polygon --allowRisky
 ```
 
 指定用户：
 
 ```bash
-npm run prepare -- --chain polygon --user 0xYourTarget
+npm run prepare:targets -- --chain polygon --user 0xYourTarget
 ```
 
 输出字段包括：
