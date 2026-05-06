@@ -312,6 +312,11 @@ function readArg(name: string): string | undefined {
   return undefined;
 }
 
+function readNonEmptyConfig(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function truthy(value: unknown): boolean {
   return value === true || value === "true" || value === "1" || value === 1;
 }
@@ -3403,8 +3408,15 @@ const serveStaticAsset = (
 };
 
 function main(): void {
-  const host = readArg("host") ?? process.env.DASHBOARD_HOST ?? "127.0.0.1";
-  const port = Number(readArg("port") ?? process.env.DASHBOARD_PORT ?? "4310");
+  const host =
+    readNonEmptyConfig(readArg("host")) ??
+    readNonEmptyConfig(process.env.DASHBOARD_HOST) ??
+    "127.0.0.1";
+  const port = Number(
+    readNonEmptyConfig(readArg("port")) ??
+      readNonEmptyConfig(process.env.DASHBOARD_PORT) ??
+      "4310",
+  );
   if (!Number.isFinite(port) || port <= 0) {
     throw new Error(`Invalid dashboard port: ${port}`);
   }
