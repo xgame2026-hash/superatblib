@@ -74,6 +74,24 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
                       <span id="settingsPolygonRpcLabel" class="field-label">POLYGON_RPC_URL</span>
                       <input id="settingsPolygonRpc" class="settings-input" type="text" placeholder="https://..." />
                     </label>
+                    <label class="field">
+                      <span id="settingsFundingModeLabel" class="field-label">Funding mode</span>
+                      <span class="settings-select-wrap">
+                        <select id="settingsFundingMode">
+                          <option value="flash_loan">Flash loan</option>
+                          <option value="self_funded">Self funded</option>
+                        </select>
+                      </span>
+                    </label>
+                    <label class="field">
+                      <span id="settingsLanguageLabel" class="field-label">Language</span>
+                      <span class="settings-select-wrap">
+                        <select id="settingsLanguage">
+                          <option value="zh">简体中文</option>
+                          <option value="en">English</option>
+                        </select>
+                      </span>
+                    </label>
                   </div>
 
                   <div id="settingsExchangeFields" class="settings-form-grid" style="display:none;">

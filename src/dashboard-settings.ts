@@ -410,7 +410,10 @@ export function loadDashboardSettings(): DashboardSettings {
 
 function serializeManagedEnv(env: Record<ManagedKey, string>): string {
   const lines = [
-    "# Client RPC configuration",
+    "# Client configuration",
+    `PRIVATE_KEY=${env.PRIVATE_KEY}`,
+    `DASHBOARD_LANGUAGE=${env.DASHBOARD_LANGUAGE}`,
+    `FUNDING_MODE=${env.FUNDING_MODE}`,
     `ETHEREUM_RPC_URL=${env.ETHEREUM_RPC_URL}`,
     `BNB_RPC_URL=${env.BNB_RPC_URL}`,
     `ARBITRUM_RPC_URL=${env.ARBITRUM_RPC_URL}`,
@@ -425,11 +428,8 @@ function serializeManagedEnv(env: Record<ManagedKey, string>): string {
     {
       title: "# Advanced execution overrides",
       entries: [
-        ["PRIVATE_KEY", ""],
         ["CHAIN", "ethereum"],
         ["MARKET", "aave-v3-ethereum"],
-        ["DASHBOARD_LANGUAGE", "en"],
-        ["FUNDING_MODE", "flash_loan"],
         ["CONTROL_RPC_URL", ""],
         ["EXECUTION_RPC_URL", ""],
         ["FLASHBOTS_RELAY_URL", ""],

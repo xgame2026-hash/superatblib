@@ -192,6 +192,8 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         } else {
           payload = {
             privateKey: readSensitiveSettingsValue('settingsPrivateKey'),
+            fundingMode: document.getElementById('settingsFundingMode').value,
+            language: document.getElementById('settingsLanguage').value,
             ethereumRpcUrl: readSensitiveSettingsValue('settingsEthereumRpc'),
             baseRpcUrl: readSensitiveSettingsValue('settingsBaseRpc'),
             chains: {
