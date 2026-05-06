@@ -23,5 +23,5 @@ function loadEnvFile(filePath: string): void {
 
 const cwd = process.cwd();
 
-loadEnvFile(path.resolve(cwd, ".env"));
 loadEnvFile(path.resolve(cwd, ".env.local"));
+loadEnvFile(path.resolve(cwd, ".env"));

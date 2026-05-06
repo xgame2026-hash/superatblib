@@ -35,6 +35,7 @@ export type MorphoExecutorCheckInput = {
   signal?: string;
   hfMax?: string;
   ethereumRpcUrl?: string;
+  baseRpcUrl?: string;
   executionRpcUrl?: string;
   controlRpcUrl?: string;
   flashbotsRelayUrl?: string;
@@ -108,6 +109,7 @@ export function buildMorphoBlueEthereumExecutorChecks(
   const executionGate = evaluateMorphoExecutionGate(routePlanner);
   const config = resolveMorphoOperationalConfig({
     ethereumRpcUrl: input.ethereumRpcUrl ?? "",
+    baseRpcUrl: input.baseRpcUrl ?? "",
     executionRpcUrl: input.executionRpcUrl ?? "",
     controlRpcUrl: input.controlRpcUrl ?? "",
     flashbotsRelayUrl: input.flashbotsRelayUrl ?? "",
@@ -211,6 +213,7 @@ export function buildMorphoBlueBaseExecutorChecks(
   const configuredHfMax = input.hfMax?.trim() ?? "";
   const config = resolveMorphoOperationalConfig({
     ethereumRpcUrl: input.ethereumRpcUrl ?? "",
+    baseRpcUrl: input.baseRpcUrl ?? "",
     executionRpcUrl: input.executionRpcUrl ?? "",
     controlRpcUrl: input.controlRpcUrl ?? "",
     flashbotsRelayUrl: input.flashbotsRelayUrl ?? "",

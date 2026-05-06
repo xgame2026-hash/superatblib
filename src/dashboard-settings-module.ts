@@ -4,7 +4,7 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
               <div class="page-header">
                 <div>
                   <div id="settingsPageTitle" class="page-title">System setup</div>
-                  <div id="settingsPageSub" class="page-sub">Manage RPC endpoints, private key, chain defaults, language, and chain-specific contracts.</div>
+                  <div id="settingsPageSub" class="page-sub">Manage RPC endpoints and specialized service configuration.</div>
                 </div>
               </div>
             </div>
@@ -15,7 +15,7 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
                   <div class="panel-head">
                     <div>
                       <div id="settingsMenuTitle" class="panel-title">General Settings</div>
-                      <div id="settingsMenuSub" class="panel-sub">System-wide configuration and defaults.</div>
+                      <div id="settingsMenuSub" class="panel-sub">Choose a configuration area.</div>
                     </div>
                   </div>
                   <div class="settings-menu">
@@ -50,133 +50,25 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
                   </div>
 
                   <div id="settingsGeneralFields" class="settings-form-grid">
-                    <label class="field full settings-field-hidden">
-                      <span id="settingsPrivateKeyLabel" class="field-label">Private key</span>
-                      <input id="settingsPrivateKey" class="settings-input" type="text" placeholder="0x..." />
-                    </label>
-
                     <label class="field full">
-                      <span id="settingsBitqueryApiKeyLabel" class="field-label">Bitquery Access Token</span>
-                      <input id="settingsBitqueryApiKey" class="settings-input" type="text" placeholder="BQY_..." />
-                    </label>
-
-                    <label class="field full">
-                      <span id="settingsZeroExApiKeyLabel" class="field-label">0x API Key</span>
-                      <input id="settingsZeroExApiKey" class="settings-input" type="text" placeholder="0x_live_..." />
-                    </label>
-
-                    <label class="field full">
-                      <span id="settingsQuickNodeApiKeyLabel" class="field-label">QuickNode Admin API Key</span>
-                      <input id="settingsQuickNodeApiKey" class="settings-input" type="text" placeholder="qk_..." />
+                      <span id="settingsEthereumRpcLabel" class="field-label">ETHEREUM_RPC_URL</span>
+                      <input id="settingsEthereumRpc" class="settings-input" type="text" placeholder="https://..." />
                     </label>
                     <label class="field full">
-                      <span id="settingsControlRpcLabel" class="field-label">Control RPC URL</span>
-                      <input id="settingsControlRpc" class="settings-input" type="text" />
+                      <span id="settingsBnbRpcLabel" class="field-label">BNB_RPC_URL</span>
+                      <input id="settingsBnbRpc" class="settings-input" type="text" placeholder="https://..." />
                     </label>
                     <label class="field full">
-                      <span id="settingsExecutionRpcLabel" class="field-label">Execution RPC URL</span>
-                      <input id="settingsExecutionRpc" class="settings-input" type="text" />
+                      <span id="settingsArbitrumRpcLabel" class="field-label">ARBITRUM_RPC_URL</span>
+                      <input id="settingsArbitrumRpc" class="settings-input" type="text" placeholder="https://..." />
                     </label>
                     <label class="field full">
-                      <span id="settingsEthereumRpcLabel" class="field-label">Ethereum Chain RPC URL</span>
-                      <input id="settingsEthereumRpc" class="settings-input" type="text" />
+                      <span id="settingsBaseRpcLabel" class="field-label">BASE_RPC_URL</span>
+                      <input id="settingsBaseRpc" class="settings-input" type="text" placeholder="https://..." />
                     </label>
                     <label class="field full">
-                      <span id="settingsFlashbotsRelayLabel" class="field-label">Flashbots Relay URL</span>
-                      <input id="settingsFlashbotsRelay" class="settings-input" type="text" />
-                    </label>
-                    <label class="field full">
-                      <span id="settingsFlashbotsAuthLabel" class="field-label">Flashbots Auth Private Key</span>
-                      <input id="settingsFlashbotsAuth" class="settings-input" type="text" placeholder="0x..." />
-                    </label>
-                    <label class="field">
-                      <span id="settingsBroadcastTransportLabel" class="field-label">Broadcast transport</span>
-                      <span class="settings-select-wrap">
-                        <select id="settingsBroadcastTransport">
-                          <option value="flashbots_bundle">Flashbots bundle</option>
-                          <option value="public_mempool">Public mempool</option>
-                        </select>
-                      </span>
-                    </label>
-                    <label class="field">
-                      <span id="settingsFundingModeLabel" class="field-label">Funding mode</span>
-                      <span class="settings-select-wrap">
-                        <select id="settingsFundingMode">
-                          <option value="flash_loan">Flash loan</option>
-                          <option value="self_funded">Self funded</option>
-                        </select>
-                      </span>
-                    </label>
-
-                    <label class="field full">
-                      <span id="settingsEthereumContractLabel" class="field-label">Aave Ethereum contract</span>
-                      <input id="settingsEthereumContract" class="settings-input" type="text" />
-                    </label>
-
-                    <label class="field">
-                      <span id="settingsDefaultMarketLabel" class="field-label">Default execution market</span>
-                      <span class="settings-select-wrap">
-                        <select id="settingsDefaultMarket">
-                          <option value="aave-v3-ethereum">Aave V3 / Ethereum</option>
-                          <option value="spark-ethereum">SparkLend / Ethereum</option>
-                          <option value="aave-v3-arbitrum">Aave V3 / Arbitrum</option>
-                          <option value="aave-v3-polygon">Aave V3 / Polygon</option>
-                          <option value="aave-v3-bnb">Aave V3 / BNB Chain</option>
-                        </select>
-                      </span>
-                    </label>
-                    <label class="field">
-                      <span id="settingsSparkContractLabel" class="field-label">Spark liquidator contract</span>
-                      <input id="settingsSparkContract" class="settings-input" type="text" />
-                    </label>
-
-                    <label class="field">
-                      <span id="settingsPolygonRpcLabel" class="field-label">Polygon RPC URL</span>
-                      <input id="settingsPolygonRpc" class="settings-input" type="text" />
-                    </label>
-                    <label class="field">
-                      <span id="settingsPolygonContractLabel" class="field-label">Polygon liquidator contract</span>
-                      <input id="settingsPolygonContract" class="settings-input" type="text" />
-                    </label>
-
-                    <label class="field">
-                      <span id="settingsArbitrumRpcLabel" class="field-label">Arbitrum RPC URL</span>
-                      <input id="settingsArbitrumRpc" class="settings-input" type="text" />
-                    </label>
-                    <label class="field">
-                      <span id="settingsArbitrumContractLabel" class="field-label">Arbitrum liquidator contract</span>
-                      <input id="settingsArbitrumContract" class="settings-input" type="text" />
-                    </label>
-
-                    <label class="field">
-                      <span id="settingsBnbRpcLabel" class="field-label">BNB RPC URL</span>
-                      <input id="settingsBnbRpc" class="settings-input" type="text" />
-                    </label>
-                    <label class="field">
-                      <span id="settingsBnbContractLabel" class="field-label">BNB liquidator contract</span>
-                      <input id="settingsBnbContract" class="settings-input" type="text" />
-                    </label>
-
-                    <label class="field">
-                      <span id="settingsExecutionLimitLabel" class="field-label">Target count</span>
-                      <input id="settingsExecutionLimit" class="settings-input" type="text" inputmode="numeric" />
-                    </label>
-                    <label class="field">
-                      <span id="settingsDefaultChainLabel" class="field-label">Default chain</span>
-                      <span class="settings-select-wrap">
-                        <select id="settingsDefaultChain">
-                          <option value="ethereum">Ethereum</option>
-                        </select>
-                      </span>
-                    </label>
-                    <label class="field">
-                      <span id="settingsLanguageLabel" class="field-label">Language</span>
-                      <span class="settings-select-wrap">
-                        <select id="settingsLanguage">
-                          <option value="zh">简体中文</option>
-                          <option value="en">English</option>
-                        </select>
-                      </span>
+                      <span id="settingsPolygonRpcLabel" class="field-label">POLYGON_RPC_URL</span>
+                      <input id="settingsPolygonRpc" class="settings-input" type="text" placeholder="https://..." />
                     </label>
                   </div>
 
@@ -276,7 +168,7 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
                   </div>
 
                   <div id="settingsFoot" class="footer-bar">
-                    <span id="settingsFileHint">.env.local</span>
+                    <span id="settingsFileHint">.env</span>
                     <span id="settingsSaveState">idle</span>
                   </div>
                 </div>

@@ -42,6 +42,7 @@ export function resolveMorphoOperationalConfig(
     | "controlRpcUrl"
     | "executionRpcUrl"
     | "ethereumRpcUrl"
+    | "baseRpcUrl"
     | "flashbotsRelayUrl"
     | "morpho"
   >,
@@ -76,10 +77,14 @@ export function resolveMorphoOperationalConfig(
 
   const baseRpcUrl = hasText(morphoSettings.baseRpcUrl)
     ? morphoSettings.baseRpcUrl.trim()
+    : hasText(settings.baseRpcUrl)
+      ? settings.baseRpcUrl.trim()
     : "";
   const baseRpcSource: RpcSource = hasText(morphoSettings.baseRpcUrl)
     ? "morpho"
-    : "missing";
+    : hasText(settings.baseRpcUrl)
+      ? "chain"
+      : "missing";
 
   const privateRelayUrl = hasText(morphoSettings.privateRelayUrl)
     ? morphoSettings.privateRelayUrl.trim()

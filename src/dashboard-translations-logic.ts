@@ -218,7 +218,7 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           settingsSections: ['通用设置', '交易所', 'Morpho'],
           settingsPanelTitles: ['通用设置', '交易所', 'Morpho 设置'],
           settingsPanelSubs: [
-            '默认执行参数、链与合约配置。',
+            '只配置 ETH、BNB、ARB、BASE、POLYGON 的 RPC，保存到 .env。',
             '配置套利交易所列表与 API 密钥。',
             '把 Morpho 的默认筛选、Ethereum/Base RPC 与私有 relay 收进独立分栏。'
           ],
@@ -506,7 +506,7 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           settingsSections: ['General', 'Exchanges', 'Morpho'],
           settingsPanelTitles: ['General Settings', 'Exchanges', 'Morpho Settings'],
           settingsPanelSubs: [
-            'Default execution parameters, chains, and contracts.',
+            'Configure only ETH, BNB, ARB, BASE, and POLYGON RPCs, saved to .env.',
             'Configure arbitrage venues and exchange API keys.',
             'Keep Morpho defaults, Ethereum/Base RPCs, and private relay out of the execution panel.'
           ],

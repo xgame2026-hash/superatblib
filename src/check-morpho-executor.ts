@@ -119,9 +119,10 @@ async function main(): Promise<void> {
             typeof snapshot.analysis.executionCandidatePositions === "number"
               ? snapshot.analysis.executionCandidatePositions
               : 0,
-        }
+    }
       : null,
     ethereumRpcUrl: settings.ethereumRpcUrl,
+    baseRpcUrl: settings.baseRpcUrl,
     executionRpcUrl: settings.executionRpcUrl,
     controlRpcUrl: settings.controlRpcUrl,
     flashbotsRelayUrl: settings.flashbotsRelayUrl,

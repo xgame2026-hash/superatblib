@@ -29,6 +29,7 @@ const MANAGED_KEYS = [
   "FUNDING_MODE",
   "CONTROL_RPC_URL",
   "ETHEREUM_RPC_URL",
+  "BASE_RPC_URL",
   "EXECUTION_RPC_URL",
   "FLASHBOTS_RELAY_URL",
   "FLASHBOTS_AUTH_PRIVATE_KEY",
@@ -101,6 +102,7 @@ export type DashboardSettings = {
     gate: { apiKey: string; secretKey: string };
   };
   ethereumRpcUrl: string;
+  baseRpcUrl: string;
   chains: Record<
     ChainPreset["key"],
     {
@@ -150,6 +152,7 @@ type DashboardSettingsPatch = Partial<{
     gate: Partial<{ apiKey: string; secretKey: string }>;
   }>;
   ethereumRpcUrl: string;
+  baseRpcUrl: string;
   chains: Partial<
     Record<
       ChainPreset["key"],
@@ -170,7 +173,7 @@ type DashboardSettingsPatch = Partial<{
 }>;
 
 function envLocalPath(): string {
-  return path.resolve(process.cwd(), ".env.local");
+  return path.resolve(process.cwd(), ".env");
 }
 
 function ensureDirectory(filePath: string): void {
@@ -217,6 +220,7 @@ function managedEnvSnapshot(): Record<ManagedKey, string> {
     FUNDING_MODE: process.env.FUNDING_MODE ?? "flash_loan",
     CONTROL_RPC_URL: process.env.CONTROL_RPC_URL ?? "",
     ETHEREUM_RPC_URL: process.env.ETHEREUM_RPC_URL ?? "",
+    BASE_RPC_URL: process.env.BASE_RPC_URL ?? "",
     EXECUTION_RPC_URL: process.env.EXECUTION_RPC_URL ?? "",
     FLASHBOTS_RELAY_URL: process.env.FLASHBOTS_RELAY_URL ?? "",
     FLASHBOTS_AUTH_PRIVATE_KEY:
@@ -381,6 +385,7 @@ export function loadDashboardSettings(): DashboardSettings {
       },
     },
     ethereumRpcUrl: process.env.ETHEREUM_RPC_URL ?? "",
+    baseRpcUrl: process.env.BASE_RPC_URL ?? "",
     chains: {
       ethereum: {
         rpcUrl: process.env.ETHEREUM_RPC_URL ?? "",
@@ -422,6 +427,7 @@ function serializeManagedEnv(env: Record<ManagedKey, string>): string {
     "",
     "# RPCs",
     `ETHEREUM_RPC_URL=${env.ETHEREUM_RPC_URL}`,
+    `BASE_RPC_URL=${env.BASE_RPC_URL}`,
     `POLYGON_RPC_URL=${env.POLYGON_RPC_URL}`,
     `ARBITRUM_RPC_URL=${env.ARBITRUM_RPC_URL}`,
     `BNB_RPC_URL=${env.BNB_RPC_URL}`,
@@ -521,6 +527,9 @@ export function saveDashboardSettings(
   }
   if (patch.ethereumRpcUrl !== undefined) {
     next.ETHEREUM_RPC_URL = patch.ethereumRpcUrl;
+  }
+  if (patch.baseRpcUrl !== undefined) {
+    next.BASE_RPC_URL = patch.baseRpcUrl;
   }
   if (patch.lookbackBlocks !== undefined) {
     next.LOOKBACK_BLOCKS = patch.lookbackBlocks;

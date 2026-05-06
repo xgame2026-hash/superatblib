@@ -49,6 +49,11 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         return state.settingsMasked ? String(state.settingsRawValues[id] || '').trim() : input.value.trim();
       }
 
+      function setInputValue(id, value) {
+        const input = document.getElementById(id);
+        if (input) input.value = value || '';
+      }
+
       function parseArbitrageVenueSelection(value) {
         const allowed = ['binance', 'okx', 'bitget', 'mexc', 'gate'];
         if (typeof value !== 'string') return [];
@@ -143,80 +148,67 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         if (!state.settingsMasked) {
           captureVisibleSensitiveSettings();
         }
-        const payload = {
-          privateKey: readSensitiveSettingsValue('settingsPrivateKey'),
-          bitqueryApiKey: readSensitiveSettingsValue('settingsBitqueryApiKey'),
-          zeroExApiKey: readSensitiveSettingsValue('settingsZeroExApiKey'),
-          quicknodeAdminApiKey: readSensitiveSettingsValue('settingsQuickNodeApiKey'),
-          controlRpcUrl: readSensitiveSettingsValue('settingsControlRpc'),
-          executionRpcUrl: readSensitiveSettingsValue('settingsExecutionRpc'),
-          flashbotsRelayUrl: readSensitiveSettingsValue('settingsFlashbotsRelay'),
-          flashbotsAuthPrivateKey: readSensitiveSettingsValue('settingsFlashbotsAuth'),
-          arbitrageVenues: readSensitiveSettingsValue('settingsArbitrageVenues'),
-          broadcastTransport: document.getElementById('settingsBroadcastTransport').value,
-          fundingMode: document.getElementById('settingsFundingMode').value,
-          limit: document.getElementById('settingsExecutionLimit').value.trim() || state.form.limit || '50',
-          ethereumRpcUrl: readSensitiveSettingsValue('settingsEthereumRpc'),
-          chain: document.getElementById('settingsDefaultChain').value,
-          market: document.getElementById('settingsDefaultMarket').value,
-          language: document.getElementById('settingsLanguage').value,
-          morpho: {
-            ethereumRpcUrl: readSensitiveSettingsValue('settingsMorphoEthereumRpc'),
-            baseRpcUrl: readSensitiveSettingsValue('settingsMorphoBaseRpc'),
-            privateRelayUrl: readSensitiveSettingsValue('settingsMorphoPrivateRelay'),
-            marketId: document.getElementById('settingsMorphoMarketId').value.trim(),
-            signal: document.getElementById('settingsMorphoSignal').value,
-            hfMax: document.getElementById('settingsMorphoHfMax').value.trim()
-          },
-          chains: {
-            ethereum: {
-              rpcUrl: readSensitiveSettingsValue('settingsEthereumRpc'),
-              liquidatorContract: readSensitiveSettingsValue('settingsEthereumContract')
-            },
-            polygon: {
-              rpcUrl: readSensitiveSettingsValue('settingsPolygonRpc'),
-              liquidatorContract: readSensitiveSettingsValue('settingsPolygonContract')
-            },
-            arbitrum: {
-              rpcUrl: readSensitiveSettingsValue('settingsArbitrumRpc'),
-              liquidatorContract: readSensitiveSettingsValue('settingsArbitrumContract')
-            },
-            bnb: {
-              rpcUrl: readSensitiveSettingsValue('settingsBnbRpc'),
-              liquidatorContract: readSensitiveSettingsValue('settingsBnbContract')
+        const section = state.settingsSection === 'exchanges'
+          ? 'exchanges'
+          : (state.settingsSection === 'morpho' ? 'morpho' : 'general');
+        let payload;
+        if (section === 'exchanges') {
+          payload = {
+            arbitrageVenues: readSensitiveSettingsValue('settingsArbitrageVenues'),
+            exchanges: {
+              binance: {
+                apiKey: readSensitiveSettingsValue('settingsBinanceApiKey'),
+                secretKey: readSensitiveSettingsValue('settingsBinanceSecretKey')
+              },
+              okx: {
+                apiKey: readSensitiveSettingsValue('settingsOkxApiKey'),
+                secretKey: readSensitiveSettingsValue('settingsOkxSecretKey')
+              },
+              bitget: {
+                apiKey: readSensitiveSettingsValue('settingsBitgetApiKey'),
+                secretKey: readSensitiveSettingsValue('settingsBitgetSecretKey')
+              },
+              mexc: {
+                apiKey: readSensitiveSettingsValue('settingsMexcApiKey'),
+                secretKey: readSensitiveSettingsValue('settingsMexcSecretKey')
+              },
+              gate: {
+                apiKey: readSensitiveSettingsValue('settingsGateApiKey'),
+                secretKey: readSensitiveSettingsValue('settingsGateSecretKey')
+              }
             }
-          },
-          markets: {
-            'aave-v3-ethereum': {
-              liquidatorContract: readSensitiveSettingsValue('settingsEthereumContract')
-            },
-            'spark-ethereum': {
-              liquidatorContract: readSensitiveSettingsValue('settingsSparkContract')
+          };
+        } else if (section === 'morpho') {
+          payload = {
+            morpho: {
+              ethereumRpcUrl: readSensitiveSettingsValue('settingsMorphoEthereumRpc'),
+              baseRpcUrl: readSensitiveSettingsValue('settingsMorphoBaseRpc'),
+              privateRelayUrl: readSensitiveSettingsValue('settingsMorphoPrivateRelay'),
+              marketId: document.getElementById('settingsMorphoMarketId').value.trim(),
+              signal: document.getElementById('settingsMorphoSignal').value,
+              hfMax: document.getElementById('settingsMorphoHfMax').value.trim()
             }
-          },
-          exchanges: {
-            binance: {
-              apiKey: readSensitiveSettingsValue('settingsBinanceApiKey'),
-              secretKey: readSensitiveSettingsValue('settingsBinanceSecretKey')
-            },
-            okx: {
-              apiKey: readSensitiveSettingsValue('settingsOkxApiKey'),
-              secretKey: readSensitiveSettingsValue('settingsOkxSecretKey')
-            },
-            bitget: {
-              apiKey: readSensitiveSettingsValue('settingsBitgetApiKey'),
-              secretKey: readSensitiveSettingsValue('settingsBitgetSecretKey')
-            },
-            mexc: {
-              apiKey: readSensitiveSettingsValue('settingsMexcApiKey'),
-              secretKey: readSensitiveSettingsValue('settingsMexcSecretKey')
-            },
-            gate: {
-              apiKey: readSensitiveSettingsValue('settingsGateApiKey'),
-              secretKey: readSensitiveSettingsValue('settingsGateSecretKey')
+          };
+        } else {
+          payload = {
+            ethereumRpcUrl: readSensitiveSettingsValue('settingsEthereumRpc'),
+            baseRpcUrl: readSensitiveSettingsValue('settingsBaseRpc'),
+            chains: {
+              ethereum: {
+                rpcUrl: readSensitiveSettingsValue('settingsEthereumRpc')
+              },
+              bnb: {
+                rpcUrl: readSensitiveSettingsValue('settingsBnbRpc')
+              },
+              arbitrum: {
+                rpcUrl: readSensitiveSettingsValue('settingsArbitrumRpc')
+              },
+              polygon: {
+                rpcUrl: readSensitiveSettingsValue('settingsPolygonRpc')
+              }
             }
-          }
-        };
+          };
+        }
 
         text('settingsSaveState', 'saving...');
         try {
@@ -288,13 +280,13 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         state.settingsRawValues.settingsMorphoPrivateRelay = settings.morpho && settings.morpho.privateRelayUrl
           ? settings.morpho.privateRelayUrl
           : '';
+        state.settingsRawValues.settingsBaseRpc = settings.baseRpcUrl || '';
         applySensitiveSettingsVisibility();
-        document.getElementById('settingsDefaultChain').value = settings.chain || 'ethereum';
-        document.getElementById('settingsDefaultMarket').value = settings.market || 'aave-v3-ethereum';
-        document.getElementById('settingsBroadcastTransport').value = settings.broadcastTransport || 'flashbots_bundle';
-        document.getElementById('settingsFundingMode').value = settings.fundingMode || 'flash_loan';
-        document.getElementById('settingsLanguage').value = settings.language || state.language;
-        document.getElementById('settingsExecutionLimit').value = settings.limit || state.form.limit || '50';
+        setInputValue('settingsDefaultMarket', settings.market || 'aave-v3-ethereum');
+        setInputValue('settingsBroadcastTransport', settings.broadcastTransport || 'flashbots_bundle');
+        setInputValue('settingsFundingMode', settings.fundingMode || 'flash_loan');
+        setInputValue('settingsLanguage', settings.language || state.language);
+        setInputValue('settingsExecutionLimit', settings.limit || state.form.limit || '50');
         document.getElementById('settingsMorphoMarketId').value = settings.morpho && settings.morpho.marketId
           ? settings.morpho.marketId
           : '';
@@ -304,7 +296,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         document.getElementById('settingsMorphoHfMax').value = settings.morpho && settings.morpho.hfMax
           ? settings.morpho.hfMax
           : (state.form.hfMax || '1.05');
-        text('settingsFileHint', settingsWrapper.file || '.env.local');
+        text('settingsFileHint', settingsWrapper.file || '.env');
 
         const section = state.settingsSection === 'exchanges'
           ? 'exchanges'

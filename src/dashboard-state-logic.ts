@@ -165,6 +165,7 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         'settingsFlashbotsAuth',
         'settingsArbitrageVenues',
         'settingsEthereumRpc',
+        'settingsBaseRpc',
         'settingsEthereumContract',
         'settingsSparkContract',
         'settingsPolygonRpc',

@@ -169,7 +169,7 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         text('settingsArbitrageVenuesLabel', state.language === 'zh' ? '套利交易所列表' : 'Arbitrage venues');
         text('settingsBroadcastTransportLabel', state.language === 'zh' ? '广播通道' : 'Broadcast transport');
         text('settingsFundingModeLabel', state.language === 'zh' ? '资金模式' : 'Funding mode');
-        text('settingsEthereumRpcLabel', state.language === 'zh' ? 'Ethereum 链 RPC' : 'Ethereum Chain RPC URL');
+        text('settingsEthereumRpcLabel', 'ETHEREUM_RPC_URL');
         text('settingsEthereumContractLabel', state.language === 'zh' ? 'Aave 合约地址' : 'Aave Ethereum contract');
         text('settingsDefaultMarketLabel', state.language === 'zh' ? '默认执行市场' : 'Default execution market');
         text('settingsSparkContractLabel', state.language === 'zh' ? 'Spark 合约地址' : 'Spark liquidator contract');
@@ -179,8 +179,8 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         text('settingsArbitrumContractLabel', state.language === 'zh' ? 'Arbitrum 合约地址' : 'Arbitrum liquidator contract');
         text('settingsBnbRpcLabel', 'BNB_RPC_URL');
         text('settingsBnbContractLabel', state.language === 'zh' ? 'BNB 合约地址' : 'BNB liquidator contract');
+        text('settingsBaseRpcLabel', 'BASE_RPC_URL');
         text('settingsExecutionLimitLabel', t('labels.limit'));
-        text('settingsDefaultChainLabel', state.language === 'zh' ? '默认链' : 'Default chain');
         text('settingsLanguageLabel', state.language === 'zh' ? '语言' : 'Language');
         text('settingsExchangeKeysLabel', state.language === 'zh' ? '交易所公钥 / 私钥' : 'Exchange API Keys');
         text('settingsBinanceApiKeyLabel', state.language === 'zh' ? 'Binance 公钥' : 'Binance API Key');
