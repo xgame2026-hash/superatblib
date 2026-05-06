@@ -163,7 +163,7 @@ const erc20MetadataAbi = parseAbi([
 ]);
 
 const DEFAULT_SNAPSHOT_TTL_MS = 60_000;
-const DEFAULT_MAX_BLOCKS = 250_000;
+const DEFAULT_MAX_BLOCKS = 9_500;
 const EVENT_STORE_VERSION = "market-events-v3";
 const BALANCER_V2_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8" as const;
 
@@ -325,6 +325,9 @@ function isRetryableLogRangeError(error: unknown): boolean {
     message.includes("response size exceeded") ||
     message.includes("query returned more than") ||
     message.includes("block range") ||
+    message.includes("limited to a") ||
+    message.includes("10,000 range") ||
+    message.includes("10000 range") ||
     message.includes("limit exceeded") ||
     message.includes("too many results")
   );

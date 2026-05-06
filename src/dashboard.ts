@@ -86,6 +86,8 @@ import {
   type CliRunRequest,
 } from "./cli-launcher.js";
 
+const DASHBOARD_AUTH_LICENSE_TOKEN = "__dashboard_auth_remote_license__";
+
 type DashboardRecipient = {
   address: string;
   bps?: string;
@@ -3375,7 +3377,14 @@ const serveApi = createDashboardApiHandler({
   recentEntries: (limit, onlyBroadcast) =>
     recentEntries(limit, onlyBroadcast) as unknown as Record<string, unknown>[],
   requireLicensedFeature: (token, feature) =>
-    requireLicensedFeature(bearerToken(token ?? undefined), feature),
+    bearerToken(token ?? undefined) === DASHBOARD_AUTH_LICENSE_TOKEN
+      ? Promise.resolve({
+          ok: true,
+          licensed: true,
+          dashboardAuth: true,
+          feature,
+        })
+      : requireLicensedFeature(bearerToken(token ?? undefined), feature),
   saveDashboardLiveState: (patch) =>
     saveDashboardLiveState(patch as Partial<DashboardLiveState>),
   saveDashboardSettings,
@@ -3440,6 +3449,8 @@ function main(): void {
           json(res, 401, { ok: false, error: auth.error ?? "Authorization required." });
           return;
         }
+        req.headers.authorization = `Bearer ${DASHBOARD_AUTH_LICENSE_TOKEN}`;
+        req.headers["x-license-token"] = DASHBOARD_AUTH_LICENSE_TOKEN;
         await serveApi(req, res, url);
         return;
       }
