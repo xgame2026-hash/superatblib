@@ -1,6 +1,6 @@
 {
   "name": "liq",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Aave V3 liquidation scanner",
   "type": "module",
   "scripts": {
