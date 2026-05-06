@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { IncomingMessage, ServerResponse } from "node:http";
 
 type TextResponder = (
@@ -11,6 +11,7 @@ type TextResponder = (
 const COOKIE_NAME = "dashboard_auth";
 const DEFAULT_LICENSE_CHECK_URL = "https://www.supermtnode.io/api/license/check";
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+const PROCESS_SESSION_SECRET = randomBytes(32).toString("base64url");
 
 type LicenseCheckPayload = {
   ok?: unknown;
@@ -25,11 +26,11 @@ type DashboardAuthResult = {
 };
 
 function sessionSecret(): string {
-  return (
+  const baseSecret =
     process.env.DASHBOARD_AUTH_SECRET ??
     process.env.DASHBOARD_SESSION_SECRET ??
-    "dashboard-auth-session"
-  );
+    "dashboard-auth-session";
+  return `${baseSecret}:${PROCESS_SESSION_SECRET}`;
 }
 
 function licenseCheckUrl(): string {
