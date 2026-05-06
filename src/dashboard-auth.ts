@@ -281,8 +281,8 @@ function dashboardAuthPage(error: string): string {
         margin-bottom: 28px;
       }
       .auth-logo img {
-        width: 42px;
-        height: 42px;
+        width: 150px;
+        height: 37px;
         object-fit: contain;
       }
       .auth-chip {
@@ -353,8 +353,7 @@ function dashboardAuthPage(error: string): string {
   <body>
     <main class="auth-panel">
       <div class="auth-logo">
-        <img src="/img/SuperARB_logo.png" alt="SuperARB" />
-        <span class="auth-chip">SuperARB</span>
+        <img src="/img/supermini.png" alt="SuperARB" />
       </div>
       <h1>Authorization Required</h1>
       <p>Enter the authorization code to open the liquidation workstation.</p>
