@@ -69,7 +69,7 @@ function providerTimeoutMs(): number {
 }
 
 function onchainMarketDataFallbackEnabled(): boolean {
-  return process.env.DASHBOARD_ONCHAIN_MARKET_DATA_FALLBACK === "1";
+  return process.env.DASHBOARD_ONCHAIN_MARKET_DATA_FALLBACK !== "0";
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {

@@ -409,63 +409,96 @@ export function loadDashboardSettings(): DashboardSettings {
 }
 
 function serializeManagedEnv(env: Record<ManagedKey, string>): string {
-  return [
-    "# Dashboard overrides",
-    `PRIVATE_KEY=${env.PRIVATE_KEY}`,
-    `CHAIN=${env.CHAIN}`,
-    `MARKET=${env.MARKET}`,
-    `DASHBOARD_LANGUAGE=${env.DASHBOARD_LANGUAGE}`,
-    `BITQUERY_API_KEY=${env.BITQUERY_API_KEY}`,
-    `ZEROX_API_KEY=${env.ZEROX_API_KEY}`,
-    `QUICKNODE_ADMIN_API_KEY=${env.QUICKNODE_ADMIN_API_KEY}`,
-    `FUNDING_MODE=${env.FUNDING_MODE}`,
-    `CONTROL_RPC_URL=${env.CONTROL_RPC_URL}`,
-    `EXECUTION_RPC_URL=${env.EXECUTION_RPC_URL}`,
-    `FLASHBOTS_RELAY_URL=${env.FLASHBOTS_RELAY_URL}`,
-    `FLASHBOTS_AUTH_PRIVATE_KEY=${env.FLASHBOTS_AUTH_PRIVATE_KEY}`,
-    `BROADCAST_TRANSPORT=${env.BROADCAST_TRANSPORT}`,
-    "",
-    "# RPCs",
+  const lines = [
+    "# Client RPC configuration",
     `ETHEREUM_RPC_URL=${env.ETHEREUM_RPC_URL}`,
+    `BNB_RPC_URL=${env.BNB_RPC_URL}`,
+    `ARBITRUM_RPC_URL=${env.ARBITRUM_RPC_URL}`,
     `BASE_RPC_URL=${env.BASE_RPC_URL}`,
     `POLYGON_RPC_URL=${env.POLYGON_RPC_URL}`,
-    `ARBITRUM_RPC_URL=${env.ARBITRUM_RPC_URL}`,
-    `BNB_RPC_URL=${env.BNB_RPC_URL}`,
-    "",
-    "# Per-chain contracts",
-    `ETHEREUM_LIQUIDATOR_CONTRACT=${env.ETHEREUM_LIQUIDATOR_CONTRACT}`,
-    `AAVE_V3_ETHEREUM_LIQUIDATOR_CONTRACT=${env.AAVE_V3_ETHEREUM_LIQUIDATOR_CONTRACT}`,
-    `SPARK_ETHEREUM_LIQUIDATOR_CONTRACT=${env.SPARK_ETHEREUM_LIQUIDATOR_CONTRACT}`,
-    `POLYGON_LIQUIDATOR_CONTRACT=${env.POLYGON_LIQUIDATOR_CONTRACT}`,
-    `ARBITRUM_LIQUIDATOR_CONTRACT=${env.ARBITRUM_LIQUIDATOR_CONTRACT}`,
-    `BNB_LIQUIDATOR_CONTRACT=${env.BNB_LIQUIDATOR_CONTRACT}`,
-    `LIQUIDATOR_CONTRACT=${env.LIQUIDATOR_CONTRACT}`,
-    "",
-    "# Defaults",
-    `LOOKBACK_BLOCKS=${env.LOOKBACK_BLOCKS}`,
-    `LIMIT=${env.LIMIT}`,
-    `MIN_NET_PROFIT=${env.MIN_NET_PROFIT}`,
-    `MORPHO_MARKET_ID=${env.MORPHO_MARKET_ID}`,
-    `MORPHO_SIGNAL=${env.MORPHO_SIGNAL}`,
-    `MORPHO_HF_MAX=${env.MORPHO_HF_MAX}`,
-    `MORPHO_ETHEREUM_RPC_URL=${env.MORPHO_ETHEREUM_RPC_URL}`,
-    `MORPHO_BASE_RPC_URL=${env.MORPHO_BASE_RPC_URL}`,
-    `MORPHO_PRIVATE_RELAY_URL=${env.MORPHO_PRIVATE_RELAY_URL}`,
-    `ARBITRAGE_VENUES=${env.ARBITRAGE_VENUES}`,
-    "",
-    "# Arbitrage exchange API keys",
-    `BINANCE_API_KEY=${env.BINANCE_API_KEY}`,
-    `BINANCE_SECRET_KEY=${env.BINANCE_SECRET_KEY}`,
-    `OKX_API_KEY=${env.OKX_API_KEY}`,
-    `OKX_SECRET_KEY=${env.OKX_SECRET_KEY}`,
-    `BITGET_API_KEY=${env.BITGET_API_KEY}`,
-    `BITGET_SECRET_KEY=${env.BITGET_SECRET_KEY}`,
-    `MEXC_API_KEY=${env.MEXC_API_KEY}`,
-    `MEXC_SECRET_KEY=${env.MEXC_SECRET_KEY}`,
-    `GATE_API_KEY=${env.GATE_API_KEY}`,
-    `GATE_SECRET_KEY=${env.GATE_SECRET_KEY}`,
-    "",
-  ].join("\n");
+  ];
+
+  const optionalGroups: Array<{
+    title: string;
+    entries: Array<[ManagedKey, string]>;
+  }> = [
+    {
+      title: "# Advanced execution overrides",
+      entries: [
+        ["PRIVATE_KEY", ""],
+        ["CHAIN", "ethereum"],
+        ["MARKET", "aave-v3-ethereum"],
+        ["DASHBOARD_LANGUAGE", "en"],
+        ["FUNDING_MODE", "flash_loan"],
+        ["CONTROL_RPC_URL", ""],
+        ["EXECUTION_RPC_URL", ""],
+        ["FLASHBOTS_RELAY_URL", ""],
+        ["FLASHBOTS_AUTH_PRIVATE_KEY", ""],
+        ["BROADCAST_TRANSPORT", "flashbots_bundle"],
+        ["LOOKBACK_BLOCKS", "30000"],
+        ["LIMIT", "8"],
+        ["MIN_NET_PROFIT", "100"],
+      ],
+    },
+    {
+      title: "# Advanced contracts",
+      entries: [
+        ["ETHEREUM_LIQUIDATOR_CONTRACT", ""],
+        ["AAVE_V3_ETHEREUM_LIQUIDATOR_CONTRACT", ""],
+        ["SPARK_ETHEREUM_LIQUIDATOR_CONTRACT", ""],
+        ["POLYGON_LIQUIDATOR_CONTRACT", ""],
+        ["ARBITRUM_LIQUIDATOR_CONTRACT", ""],
+        ["BNB_LIQUIDATOR_CONTRACT", ""],
+        ["LIQUIDATOR_CONTRACT", ""],
+      ],
+    },
+    {
+      title: "# Optional data and Morpho providers",
+      entries: [
+        ["BITQUERY_API_KEY", ""],
+        ["ZEROX_API_KEY", ""],
+        ["QUICKNODE_ADMIN_API_KEY", ""],
+        ["MORPHO_MARKET_ID", ""],
+        ["MORPHO_SIGNAL", ""],
+        ["MORPHO_HF_MAX", "1.05"],
+        ["MORPHO_ETHEREUM_RPC_URL", ""],
+        ["MORPHO_BASE_RPC_URL", ""],
+        ["MORPHO_PRIVATE_RELAY_URL", ""],
+        ["ARBITRAGE_VENUES", "binance,okx,bitget,mexc,gate"],
+      ],
+    },
+    {
+      title: "# Optional arbitrage exchange API keys",
+      entries: [
+        ["BINANCE_API_KEY", ""],
+        ["BINANCE_SECRET_KEY", ""],
+        ["OKX_API_KEY", ""],
+        ["OKX_SECRET_KEY", ""],
+        ["BITGET_API_KEY", ""],
+        ["BITGET_SECRET_KEY", ""],
+        ["MEXC_API_KEY", ""],
+        ["MEXC_SECRET_KEY", ""],
+        ["GATE_API_KEY", ""],
+        ["GATE_SECRET_KEY", ""],
+      ],
+    },
+  ];
+
+  for (const group of optionalGroups) {
+    const visibleEntries = group.entries.filter(([key, defaultValue]) => {
+      const value = env[key].trim();
+      return value.length > 0 && value !== defaultValue;
+    });
+    if (visibleEntries.length === 0) {
+      continue;
+    }
+    lines.push("", group.title);
+    for (const [key] of visibleEntries) {
+      lines.push(`${key}=${env[key]}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
 }
 
 export function saveDashboardSettings(
