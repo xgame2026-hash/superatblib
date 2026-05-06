@@ -98,6 +98,15 @@ type DashboardVersionCache = {
   githubError: string | null;
 };
 
+type DashboardVersionStatus = {
+  ok: true;
+  appVersion: string;
+  githubVersion: string;
+  githubVersionSource: "github" | "local-fallback";
+  updateRequired: boolean;
+  githubVersionError?: string;
+};
+
 let dashboardVersionCache: DashboardVersionCache | null = null;
 
 type DashboardRecipient = {
@@ -376,6 +385,14 @@ function text(
   res.statusCode = statusCode;
   res.setHeader("content-type", contentType);
   res.end(body);
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function supportedChains(): ChainPreset[] {
@@ -1985,6 +2002,28 @@ function packageVersion(): string {
   }
 }
 
+function versionParts(version: string): number[] {
+  const normalized = version.trim().replace(/^v/i, "");
+  const core = normalized.split(/[+-]/)[0] ?? "";
+  return core.split(".").map((part) => {
+    const value = Number(part.replace(/\D.*$/, ""));
+    return Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+  });
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length, 3);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = leftParts[index] ?? 0;
+    const rightValue = rightParts[index] ?? 0;
+    if (leftValue > rightValue) return 1;
+    if (leftValue < rightValue) return -1;
+  }
+  return 0;
+}
+
 async function githubPackageVersion(): Promise<{
   version: string | null;
   error: string | null;
@@ -2031,16 +2070,157 @@ async function githubPackageVersion(): Promise<{
   };
 }
 
-async function dashboardVersion(): Promise<Record<string, unknown>> {
+async function dashboardVersion(): Promise<DashboardVersionStatus> {
   const github = await githubPackageVersion();
   const appVersion = packageVersion();
+  const githubVersion = github.version ?? appVersion;
   return {
     ok: true,
     appVersion,
-    githubVersion: github.version ?? appVersion,
+    githubVersion,
     githubVersionSource: github.version ? "github" : "local-fallback",
+    updateRequired: Boolean(github.version && compareVersions(github.version, appVersion) > 0),
     ...(github.error ? { githubVersionError: github.error } : {}),
   };
+}
+
+function serveDashboardUpdateRequiredPage(
+  res: ServerResponse,
+  version: DashboardVersionStatus,
+): void {
+  text(
+    res,
+    426,
+    String.raw`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Update Required</title>
+    <link rel="icon" type="image/svg+xml" href="/img/aave-token-round.svg" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        height: 100%;
+        margin: 0;
+        background: #101214;
+        color: #f5f7fa;
+        font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .update-overlay {
+        width: min(520px, 100%);
+        border: 1px solid rgba(255,255,255,0.12);
+        background: #1a1d22;
+        border-radius: 8px;
+        box-shadow: 0 24px 80px rgba(0,0,0,0.36);
+        padding: 28px;
+      }
+      .update-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 22px;
+      }
+      .update-head img {
+        width: 102px;
+        height: 17px;
+      }
+      .version-pill {
+        border: 1px solid rgba(105,240,174,0.48);
+        border-radius: 3px;
+        color: rgba(255,255,255,0.92);
+        font-size: 12px;
+        padding: 2px 7px;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 24px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+      p {
+        margin: 0 0 18px;
+        color: #9ca5b3;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .version-grid {
+        display: grid;
+        gap: 8px;
+        margin: 18px 0;
+        border-top: 1px solid rgba(255,255,255,0.08);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        padding: 14px 0;
+      }
+      .version-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        color: #9ca5b3;
+        font-size: 13px;
+      }
+      .version-row strong {
+        color: #f5f7fa;
+      }
+      code {
+        display: block;
+        margin-top: 8px;
+        padding: 12px;
+        border-radius: 5px;
+        background: #111418;
+        color: #69f0ae;
+        overflow-wrap: anywhere;
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 13px;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+      }
+      .action {
+        flex: 1;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 5px;
+        border: 1px solid rgba(138,125,255,0.55);
+        background: rgba(138,125,255,0.14);
+        color: #f5f7fa;
+        text-decoration: none;
+        font-weight: 700;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="update-overlay" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+      <div class="update-head">
+        <img src="/img/aave.svg" alt="aave" />
+        <span class="version-pill">Update Required</span>
+      </div>
+      <h1 id="updateTitle">发现新版本</h1>
+      <p>GitHub 上有更新版本。当前本地版本不能继续进入控制台，请先更新仓库后重新启动 dashboard。</p>
+      <div class="version-grid">
+        <div class="version-row"><span>本地版本</span><strong>v${escapeHtmlText(version.appVersion)}</strong></div>
+        <div class="version-row"><span>GitHub 最新版本</span><strong>v${escapeHtmlText(version.githubVersion)}</strong></div>
+      </div>
+      <p>在客户端终端执行：</p>
+      <code>git pull &amp;&amp; npm install &amp;&amp; npm run dashboard</code>
+      <div class="actions">
+        <a class="action" href="/">我已更新，重新检查</a>
+      </div>
+    </main>
+  </body>
+</html>`,
+    "text/html; charset=utf-8",
+  );
 }
 
 function dashboardConfig(): Record<string, unknown> {
@@ -3532,8 +3712,19 @@ function main(): void {
           json(res, 401, { ok: false, error: auth.error ?? "Authorization required." });
           return;
         }
+        const version = await dashboardVersion();
         if (url.pathname === "/api/version") {
-          json(res, 200, await dashboardVersion());
+          json(res, 200, version);
+          return;
+        }
+        if (version.updateRequired) {
+          json(res, 426, {
+            ok: false,
+            updateRequired: true,
+            error: "Update required before using the dashboard.",
+            appVersion: version.appVersion,
+            githubVersion: version.githubVersion,
+          });
           return;
         }
         req.headers.authorization = `Bearer ${DASHBOARD_AUTH_LICENSE_TOKEN}`;
@@ -3547,6 +3738,11 @@ function main(): void {
       const auth = await requireDashboardAuth(req);
       if (!auth.authorized) {
         serveDashboardAuthPage(res, text, auth.error ?? "");
+        return;
+      }
+      const version = await dashboardVersion();
+      if (version.updateRequired) {
+        serveDashboardUpdateRequiredPage(res, version);
         return;
       }
       serveHtml(res);
