@@ -41,7 +41,7 @@ type ProviderAttempt = {
 type ProviderFetcher = () => Promise<Record<string, unknown> | null>;
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_PROVIDER_TIMEOUT_MS = 6_000;
+const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
 function hasRealValue(value: string | undefined): boolean {
   if (!value) return false;
@@ -159,8 +159,11 @@ function sourceUnavailablePayload(
   context: EigenphiDashboardProviderContext,
   attempts: ProviderAttempt[],
 ): Record<string, unknown> {
-  const error = attempts.length
-    ? attempts.map((attempt) => `${attempt.provider}: ${attempt.error}`).join(" | ")
+  const configuredAttempts = attempts.filter(
+    (attempt) => attempt.error !== "not configured",
+  );
+  const error = configuredAttempts.length
+    ? configuredAttempts.map((attempt) => `${attempt.provider}: ${attempt.error}`).join(" | ")
     : "No configured market-data provider returned data.";
   const base = {
     ok: false,
@@ -172,7 +175,7 @@ function sourceUnavailablePayload(
     page: context.page ?? 0,
     pageSize: context.pageSize ?? 0,
     error,
-    providerAttempts: attempts,
+    providerAttempts: configuredAttempts,
     sourcePage: context.sourcePage,
   };
 

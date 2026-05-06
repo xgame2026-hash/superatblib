@@ -163,7 +163,7 @@ const erc20MetadataAbi = parseAbi([
 ]);
 
 const DEFAULT_SNAPSHOT_TTL_MS = 60_000;
-const DEFAULT_MAX_BLOCKS = 9_500;
+const DEFAULT_MAX_BLOCKS = 2_400;
 const DEFAULT_BLOCK_TIMESTAMP_CONCURRENCY = 2;
 const EVENT_STORE_VERSION = "market-events-v3";
 const BALANCER_V2_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8" as const;
@@ -265,10 +265,11 @@ function eventSourcesForChain(chain: ChainPreset): EventSource[] {
     });
   }
 
-  if (chain.key === "ethereum") {
+  for (const address of configuredAddresses("DASHBOARD_UNISWAP_V3_POOLS")) {
     sources.push({
       kind: "uniswap-v3",
       label: "Uniswap V3",
+      address,
       events: uniswapV3FlashEvents,
     });
   }

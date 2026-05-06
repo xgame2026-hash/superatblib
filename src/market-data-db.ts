@@ -54,7 +54,13 @@ type LiquidationDbRow = RowDataPacket & {
 let pool: Pool | null = null;
 
 export function marketDataDatabaseConfigured(): boolean {
-  return Boolean(process.env.DATABASE_URL?.trim());
+  const url = process.env.DATABASE_URL?.trim();
+  return Boolean(
+    url &&
+      !url.includes("user:password@host") &&
+      !url.includes("@host:") &&
+      !url.includes("YOUR_"),
+  );
 }
 
 function databaseUrl(): string {
@@ -66,6 +72,9 @@ function databaseUrl(): string {
 }
 
 export function marketDataPool(): Pool {
+  if (!marketDataDatabaseConfigured()) {
+    throw new Error("DATABASE_URL is not configured.");
+  }
   if (!pool) {
     const url = new URL(databaseUrl());
     const configuredLimit = Number(url.searchParams.get("connection_limit"));
