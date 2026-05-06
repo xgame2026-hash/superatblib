@@ -41,6 +41,7 @@ type ProviderAttempt = {
 type ProviderFetcher = () => Promise<Record<string, unknown> | null>;
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_PROVIDER_TIMEOUT_MS = 6_000;
 
 function hasRealValue(value: string | undefined): boolean {
   if (!value) return false;
@@ -58,6 +59,35 @@ function providerCacheDir(): string {
 function providerCacheTtlMs(): number {
   const configured = Number(process.env.DASHBOARD_MARKET_DATA_CACHE_TTL_MS);
   return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_CACHE_TTL_MS;
+}
+
+function providerTimeoutMs(): number {
+  const configured = Number(process.env.DASHBOARD_MARKET_DATA_PROVIDER_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.trunc(configured)
+    : DEFAULT_PROVIDER_TIMEOUT_MS;
+}
+
+function onchainMarketDataFallbackEnabled(): boolean {
+  return process.env.DASHBOARD_ONCHAIN_MARKET_DATA_FALLBACK === "1";
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms.`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function cacheName(context: EigenphiDashboardProviderContext): string {
@@ -149,7 +179,17 @@ function sourceUnavailablePayload(
   if (context.key === "flashloan-overview") {
     return {
       ...base,
-      summary: null,
+      summary: {
+        data: {
+          txCount: 0,
+          amount: 0,
+          fee: 0,
+          flashloanCount: 0,
+          flashloanBorrowerCount: 0,
+          flashloanAssetCount: 0,
+        },
+        updateTimestamp: null,
+      },
       trend: { data: [] },
       protocols: { data: [] },
       latest: { rows: [] },
@@ -185,7 +225,19 @@ function sourceUnavailablePayload(
 
   return {
     ...base,
-    summary: null,
+    summary: {
+      data: {
+        txCount: 0,
+        liquidationAmount: 0,
+        profit: 0,
+        cost: 0,
+        revenue: 0,
+        liquidatedBorrowerCount: 0,
+        liquidatedAssetCount: 0,
+        liquidatorCount: 0,
+      },
+      updateTimestamp: null,
+    },
     trend: { data: [] },
     distribution: { data: [] },
     protocols: { data: [] },
@@ -326,17 +378,23 @@ export async function fetchEigenphiDashboardPayload(
 
   const providers: Array<[string, ProviderFetcher]> = [
     ["mysql-market-events", () => fetchDatabaseMarketDataPayload(context)],
-    ["onchain-market-events", () => fetchOnchainDashboardPayload(context)],
+  ];
+  if (onchainMarketDataFallbackEnabled()) {
+    providers.push(["onchain-market-events", () => fetchOnchainDashboardPayload(context)]);
+  } else {
+    providers.push(["onchain-market-events", async () => null]);
+  }
+  providers.push(
     ["bitquery", () => fetchBitqueryPayload(context)],
     ["dune", () => fetchDunePayload(context)],
-  ];
+  );
   if (process.env.EIGENPHI_FIRESTORE_FALLBACK === "1") {
     providers.push(["eigenphi-firestore", firestoreFetcher]);
   }
 
   for (const [provider, fetcher] of providers) {
     try {
-      const payload = await fetcher();
+      const payload = await withTimeout(fetcher(), providerTimeoutMs(), provider);
       if (!payload) {
         attempts.push({ provider, error: "not configured" });
         continue;
@@ -370,6 +428,7 @@ export function eigenphiDashboardProviderSummary(): Record<string, unknown> {
     cacheTtlMs: providerCacheTtlMs(),
     databaseConfigured: marketDataDatabaseConfigured(),
     primary: onchainDashboardProviderSummary(),
+    onchainFallbackEnabled: onchainMarketDataFallbackEnabled(),
     bitqueryConfigured: hasRealValue(process.env.BITQUERY_API_KEY),
     duneConfigured: hasRealValue(process.env.DUNE_API_KEY),
     firestoreFallback: process.env.EIGENPHI_FIRESTORE_FALLBACK === "1",

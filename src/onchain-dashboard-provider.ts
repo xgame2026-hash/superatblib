@@ -164,6 +164,7 @@ const erc20MetadataAbi = parseAbi([
 
 const DEFAULT_SNAPSHOT_TTL_MS = 60_000;
 const DEFAULT_MAX_BLOCKS = 9_500;
+const DEFAULT_BLOCK_TIMESTAMP_CONCURRENCY = 2;
 const EVENT_STORE_VERSION = "market-events-v3";
 const BALANCER_V2_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8" as const;
 
@@ -188,6 +189,13 @@ function maxBlocks(): number {
   return Number.isFinite(configured) && configured > 0
     ? Math.trunc(configured)
     : DEFAULT_MAX_BLOCKS;
+}
+
+function blockTimestampConcurrency(): number {
+  const configured = Number(process.env.DASHBOARD_ONCHAIN_BLOCK_TIMESTAMP_CONCURRENCY);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.max(1, Math.min(8, Math.trunc(configured)))
+    : DEFAULT_BLOCK_TIMESTAMP_CONCURRENCY;
 }
 
 function eventStoreDir(): string {
@@ -535,7 +543,7 @@ async function blockTimestampMap(
         .map((blockNumber) => blockNumber.toString()),
     ),
   );
-  const pairs = await mapWithConcurrency(blockNumbers, 8, async (blockNumberText) => {
+  const pairs = await mapWithConcurrency(blockNumbers, blockTimestampConcurrency(), async (blockNumberText) => {
     const block = await client.getBlock({ blockNumber: BigInt(blockNumberText) });
     return [blockNumberText, Number(block.timestamp)] as const;
   });
