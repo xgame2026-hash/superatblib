@@ -160,7 +160,7 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         text('saveSettingsButtonLabel', t('saveSettingsCompact'));
         text('toggleSettingsVisibilityLabel', state.settingsMasked ? t('settingsShowSecrets') : t('settingsHideSecrets'));
 
-        text('settingsPrivateKeyLabel', state.language === 'zh' ? '私钥' : 'Private key');
+        text('settingsPrivateKeyLabel', 'PRIVATE_KEY');
         text('settingsBitqueryApiKeyLabel', t('settingsBitqueryApiKeyLabel'));
         text('settingsZeroExApiKeyLabel', t('settingsZeroExApiKeyLabel'));
         text('settingsQuickNodeApiKeyLabel', t('settingsQuickNodeApiKeyLabel'));

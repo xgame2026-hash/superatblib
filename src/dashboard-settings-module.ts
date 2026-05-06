@@ -51,6 +51,10 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
 
                   <div id="settingsGeneralFields" class="settings-form-grid">
                     <label class="field full">
+                      <span id="settingsPrivateKeyLabel" class="field-label">PRIVATE_KEY</span>
+                      <input id="settingsPrivateKey" class="settings-input" type="text" placeholder="0x..." />
+                    </label>
+                    <label class="field full">
                       <span id="settingsEthereumRpcLabel" class="field-label">ETHEREUM_RPC_URL</span>
                       <input id="settingsEthereumRpc" class="settings-input" type="text" placeholder="https://..." />
                     </label>

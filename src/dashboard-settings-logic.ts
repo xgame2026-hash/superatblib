@@ -191,6 +191,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
           };
         } else {
           payload = {
+            privateKey: readSensitiveSettingsValue('settingsPrivateKey'),
             ethereumRpcUrl: readSensitiveSettingsValue('settingsEthereumRpc'),
             baseRpcUrl: readSensitiveSettingsValue('settingsBaseRpc'),
             chains: {
