@@ -5,7 +5,7 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
           <div class="logo-lockup">
             <div class="logo-word">
               <img class="logo-aave" src="/img/aave.svg" alt="aave" />
-                <span class="logo-chip">Multi-Market</span>
+                <span id="appVersionChip" class="logo-chip">v--</span>
             </div>
           </div>
         </div>
@@ -13,7 +13,7 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
           <button id="connectButton" class="connect-button" type="button">
             <span class="connect-main">
               <img src="/img/github.svg" alt="github" />
-              <span id="connectButtonLabel">Connect to GitHub</span>
+              <span id="connectButtonLabel">GitHub latest</span>
             </span>
             <span class="connect-arrow-box">
               <img src="/img/arrow.svg" alt="arrow" />

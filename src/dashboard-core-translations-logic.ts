@@ -77,7 +77,11 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
       }
 
       function applyChromeTranslations() {
-        text('connectButtonLabel', t('connectLocal'));
+        const version = state.data && state.data.version ? state.data.version : {};
+        const appVersion = version.appVersion ? String(version.appVersion) : '';
+        const githubVersion = version.githubVersion ? String(version.githubVersion) : '';
+        text('appVersionChip', appVersion ? 'v' + appVersion : 'v--');
+        text('connectButtonLabel', githubVersion ? 'GitHub v' + githubVersion : 'GitHub latest');
 
         text('overviewPageTitle', t('pages.overview')[0]);
         text('overviewPageSub', t('pages.overview')[1]);

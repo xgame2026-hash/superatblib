@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
 import {
@@ -87,6 +88,17 @@ import {
 } from "./cli-launcher.js";
 
 const DASHBOARD_AUTH_LICENSE_TOKEN = "__dashboard_auth_remote_license__";
+const DEFAULT_GITHUB_PACKAGE_URL =
+  "https://raw.githubusercontent.com/xgame2026-hash/superatblib/main/package.json";
+const GITHUB_VERSION_CACHE_TTL_MS = 60_000;
+
+type DashboardVersionCache = {
+  expiresAt: number;
+  githubVersion: string | null;
+  githubError: string | null;
+};
+
+let dashboardVersionCache: DashboardVersionCache | null = null;
 
 type DashboardRecipient = {
   address: string;
@@ -1960,6 +1972,77 @@ function hasRealValue(value: string | undefined): boolean {
   );
 }
 
+function packageVersion(): string {
+  try {
+    const payload = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as Record<string, unknown>;
+    return typeof payload.version === "string" && payload.version.trim()
+      ? payload.version.trim()
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+async function githubPackageVersion(): Promise<{
+  version: string | null;
+  error: string | null;
+}> {
+  if (dashboardVersionCache && dashboardVersionCache.expiresAt > Date.now()) {
+    return {
+      version: dashboardVersionCache.githubVersion,
+      error: dashboardVersionCache.githubError,
+    };
+  }
+
+  const url = process.env.DASHBOARD_GITHUB_PACKAGE_URL ?? DEFAULT_GITHUB_PACKAGE_URL;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub package request failed (${response.status}).`);
+    }
+    const payload = (await response.json()) as Record<string, unknown>;
+    const version =
+      typeof payload.version === "string" && payload.version.trim()
+        ? payload.version.trim()
+        : null;
+    dashboardVersionCache = {
+      expiresAt: Date.now() + GITHUB_VERSION_CACHE_TTL_MS,
+      githubVersion: version,
+      githubError: version ? null : "GitHub package version missing.",
+    };
+  } catch (error) {
+    dashboardVersionCache = {
+      expiresAt: Date.now() + GITHUB_VERSION_CACHE_TTL_MS,
+      githubVersion: null,
+      githubError: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  return {
+    version: dashboardVersionCache.githubVersion,
+    error: dashboardVersionCache.githubError,
+  };
+}
+
+async function dashboardVersion(): Promise<Record<string, unknown>> {
+  const github = await githubPackageVersion();
+  const appVersion = packageVersion();
+  return {
+    ok: true,
+    appVersion,
+    githubVersion: github.version ?? appVersion,
+    githubVersionSource: github.version ? "github" : "local-fallback",
+    ...(github.error ? { githubVersionError: github.error } : {}),
+  };
+}
+
 function dashboardConfig(): Record<string, unknown> {
   const settings = loadDashboardSettings();
   const chains = supportedChains().map((chain) => ({
@@ -3447,6 +3530,10 @@ function main(): void {
         const auth = await requireDashboardAuth(req);
         if (!auth.authorized) {
           json(res, 401, { ok: false, error: auth.error ?? "Authorization required." });
+          return;
+        }
+        if (url.pathname === "/api/version") {
+          json(res, 200, await dashboardVersion());
           return;
         }
         req.headers.authorization = `Bearer ${DASHBOARD_AUTH_LICENSE_TOKEN}`;

@@ -16,6 +16,7 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         bootLoading: true,
         data: {
           config: null,
+          version: null,
           liveState: null,
           history: null,
           wallet: null,

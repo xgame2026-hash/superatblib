@@ -314,14 +314,15 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
 
       function applyLoadedFoundationData(results) {
         state.data.config = results[0].status === 'fulfilled' ? results[0].value : state.data.config;
-        state.data.liveState = results[1].status === 'fulfilled' ? results[1].value : state.data.liveState;
-        state.data.history = results[2].status === 'fulfilled' ? results[2].value : state.data.history;
-        state.data.wallet = results[3].status === 'fulfilled' && results[3].value ? results[3].value : state.data.wallet;
-        state.data.settings = results[4].status === 'fulfilled' ? results[4].value : state.data.settings;
-        state.data.marketDataIndexStatus = results[5].status === 'fulfilled' ? results[5].value : state.data.marketDataIndexStatus;
-        state.data.quicknodeUsage = results[6].status === 'fulfilled' && results[6].value ? results[6].value : state.data.quicknodeUsage;
-        state.data.strategy = results[7].status === 'fulfilled' && results[7].value
-          ? results[7].value
+        state.data.version = results[1].status === 'fulfilled' ? results[1].value : state.data.version;
+        state.data.liveState = results[2].status === 'fulfilled' ? results[2].value : state.data.liveState;
+        state.data.history = results[3].status === 'fulfilled' ? results[3].value : state.data.history;
+        state.data.wallet = results[4].status === 'fulfilled' && results[4].value ? results[4].value : state.data.wallet;
+        state.data.settings = results[5].status === 'fulfilled' ? results[5].value : state.data.settings;
+        state.data.marketDataIndexStatus = results[6].status === 'fulfilled' ? results[6].value : state.data.marketDataIndexStatus;
+        state.data.quicknodeUsage = results[7].status === 'fulfilled' && results[7].value ? results[7].value : state.data.quicknodeUsage;
+        state.data.strategy = results[8].status === 'fulfilled' && results[8].value
+          ? results[8].value
           : (state.data.strategy || fallbackStrategySummary());
 
         applyLanguagePreferenceFromSettings();
@@ -335,6 +336,7 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
         const config = options || {};
         const results = await Promise.allSettled([
           fetchJson('/api/config'),
+          fetchJson('/api/version'),
           fetchJson('/api/live-state'),
           fetchJson('/api/history?limit=80'),
           config.includeWallet ? fetchJson('/api/wallet').catch(function () { return null; }) : Promise.resolve(state.data.wallet),
