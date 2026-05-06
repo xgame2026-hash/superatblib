@@ -9,28 +9,47 @@ type TextResponder = (
 ) => void;
 
 const COOKIE_NAME = "dashboard_auth";
-const DEFAULT_AUTH_CODE = "liq2026";
+const DEFAULT_LICENSE_CHECK_URL = "https://www.supermtnode.io/api/license/check";
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-function authCode(): string {
-  const configured = (
-    process.env.DASHBOARD_AUTH_CODE ??
-    process.env.DASHBOARD_ACCESS_CODE ??
-    ""
-  ).trim();
-  return configured || DEFAULT_AUTH_CODE;
-}
+type LicenseCheckPayload = {
+  ok?: unknown;
+  valid?: unknown;
+  status?: unknown;
+  error?: unknown;
+};
+
+type DashboardAuthResult = {
+  authorized: boolean;
+  error?: string;
+};
 
 function sessionSecret(): string {
   return (
     process.env.DASHBOARD_AUTH_SECRET ??
     process.env.DASHBOARD_SESSION_SECRET ??
-    `dashboard-auth:${authCode()}`
+    "dashboard-auth-session"
   );
+}
+
+function licenseCheckUrl(): string {
+  return (process.env.DASHBOARD_LICENSE_CHECK_URL ?? DEFAULT_LICENSE_CHECK_URL).trim();
 }
 
 function signSession(payload: string): string {
   return createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
+}
+
+function encodeSessionCode(code: string): string {
+  return Buffer.from(code, "utf8").toString("base64url");
+}
+
+function decodeSessionCode(encoded: string): string | null {
+  try {
+    return Buffer.from(encoded, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
 }
 
 function secureEqual(left: string, right: string): boolean {
@@ -58,9 +77,9 @@ function parseCookies(header: string | string[] | undefined): Record<string, str
   }, {});
 }
 
-function createSessionCookie(): string {
+function createSessionCookie(code: string): string {
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
-  const payload = `v1.${expiresAt}`;
+  const payload = `v1.${expiresAt}.${encodeSessionCode(code)}`;
   const token = `${payload}.${signSession(payload)}`;
   return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`;
 }
@@ -69,17 +88,91 @@ function clearSessionCookie(): string {
   return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
-export function hasDashboardAuth(req: IncomingMessage): boolean {
+async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?: string }> {
+  if (!code) {
+    return { valid: false, error: "Authorization code is required." };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(licenseCheckUrl(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ code }),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (error) {
+    return {
+      valid: false,
+      error: `Authorization service unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+
+  let payload: LicenseCheckPayload;
+  try {
+    payload = (await response.json()) as LicenseCheckPayload;
+  } catch {
+    return { valid: false, error: "Authorization service returned an invalid response." };
+  }
+
+  if (!response.ok) {
+    return {
+      valid: false,
+      error:
+        typeof payload.error === "string" && payload.error.trim()
+          ? payload.error.trim()
+          : `Authorization service rejected the request (${response.status}).`,
+    };
+  }
+
+  if (payload.ok === true && payload.valid === true && payload.status === "active") {
+    return { valid: true };
+  }
+
+  return {
+    valid: false,
+    error:
+      typeof payload.error === "string" && payload.error.trim()
+        ? payload.error.trim()
+        : "Authorization code is not active.",
+  };
+}
+
+function parseSessionCode(req: IncomingMessage): string | null {
   const token = parseCookies(req.headers?.cookie)[COOKIE_NAME];
-  if (!token) return false;
+  if (!token) return null;
   const parts = token.split(".");
-  if (parts.length !== 3 || parts[0] !== "v1") return false;
+  if (parts.length !== 4 || parts[0] !== "v1") return null;
   const expiresAt = Number(parts[1]);
   if (!Number.isFinite(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
-    return false;
+    return null;
   }
-  const payload = `${parts[0]}.${parts[1]}`;
-  return secureEqual(signSession(payload), parts[2]);
+  const code = decodeSessionCode(parts[2]);
+  if (!code) return null;
+  const payload = `${parts[0]}.${parts[1]}.${parts[2]}`;
+  if (!secureEqual(signSession(payload), parts[3])) return null;
+  return code;
+}
+
+export async function requireDashboardAuth(req: IncomingMessage): Promise<DashboardAuthResult> {
+  const code = parseSessionCode(req);
+  if (!code) {
+    return { authorized: false, error: "Authorization required." };
+  }
+
+  const license = await verifyLicenseCode(code);
+  if (!license.valid) {
+    return {
+      authorized: false,
+      error: license.error ?? "Authorization code is invalid.",
+    };
+  }
+
+  return { authorized: true };
 }
 
 export function isDashboardAuthRoute(pathname: string): boolean {
@@ -118,13 +211,14 @@ export async function handleDashboardAuthRoute(
 
   const body = await deps.readBody(req);
   const code = new URLSearchParams(body).get("code")?.trim() ?? "";
-  if (!secureEqual(code, authCode())) {
-    serveDashboardAuthPage(res, deps.text, "Authorization code is invalid.");
+  const license = await verifyLicenseCode(code);
+  if (!license.valid) {
+    serveDashboardAuthPage(res, deps.text, license.error ?? "Authorization code is invalid.");
     return;
   }
 
   res.statusCode = 302;
-  res.setHeader("set-cookie", createSessionCookie());
+  res.setHeader("set-cookie", createSessionCookie(code));
   res.setHeader("location", "/");
   res.end();
 }

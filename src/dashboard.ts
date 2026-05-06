@@ -43,8 +43,8 @@ import {
 } from "./dashboard-http-handler.js";
 import {
   handleDashboardAuthRoute,
-  hasDashboardAuth,
   isDashboardAuthRoute,
+  requireDashboardAuth,
   serveDashboardAuthPage,
 } from "./dashboard-auth.js";
 import {
@@ -3429,27 +3429,35 @@ function main(): void {
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${host}:${port}`);
-    if (isDashboardAuthRoute(url.pathname)) {
-      void handleDashboardAuthRoute(req, res, url.pathname, { readBody, text });
-      return;
-    }
-    const authorized = hasDashboardAuth(req);
-    if (url.pathname.startsWith("/api/")) {
-      if (!authorized) {
-        json(res, 401, { ok: false, error: "Authorization required." });
+    void (async () => {
+      if (isDashboardAuthRoute(url.pathname)) {
+        await handleDashboardAuthRoute(req, res, url.pathname, { readBody, text });
         return;
       }
-      void serveApi(req, res, url);
-      return;
-    }
-    if (serveStaticAsset(res, url.pathname)) {
-      return;
-    }
-    if (!authorized) {
-      serveDashboardAuthPage(res, text);
-      return;
-    }
-    serveHtml(res);
+      if (url.pathname.startsWith("/api/")) {
+        const auth = await requireDashboardAuth(req);
+        if (!auth.authorized) {
+          json(res, 401, { ok: false, error: auth.error ?? "Authorization required." });
+          return;
+        }
+        await serveApi(req, res, url);
+        return;
+      }
+      if (serveStaticAsset(res, url.pathname)) {
+        return;
+      }
+      const auth = await requireDashboardAuth(req);
+      if (!auth.authorized) {
+        serveDashboardAuthPage(res, text, auth.error ?? "");
+        return;
+      }
+      serveHtml(res);
+    })().catch((error) => {
+      json(res, 500, {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   });
 
   server.listen(port, host, () => {
