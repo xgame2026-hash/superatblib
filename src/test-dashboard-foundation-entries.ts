@@ -75,4 +75,10 @@ assert.ok(shellModuleSource.includes('<div id="modal" class="overlay"'), 'shell 
 assert.ok(!shellModuleSource.includes('const consoleController = createDashboardConsoleController({'), 'shell module should not touch runtime wiring');
 assert.ok(!/\n\s*function\s+\w+/m.test(shellModuleSource), 'shell module should not define functions directly');
 
+const authModuleSource = readSource('./dashboard-auth.ts');
+assert.ok(
+  !authModuleSource.includes('Enter the authorization code to open the liquidation workstation.'),
+  'auth page should not include the removed workstation helper sentence'
+);
+
 console.log('dashboard foundation entries ok');
