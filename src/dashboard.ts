@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
 import {
@@ -90,20 +91,26 @@ import {
 const DASHBOARD_AUTH_LICENSE_TOKEN = "__dashboard_auth_remote_license__";
 const DEFAULT_GITHUB_PACKAGE_URL =
   "https://raw.githubusercontent.com/xgame2026-hash/superatblib/main/package.json";
+const DEFAULT_GITHUB_COMMIT_URL =
+  "https://api.github.com/repos/xgame2026-hash/superatblib/commits/main";
 const GITHUB_VERSION_CACHE_TTL_MS = 60_000;
 
 type DashboardVersionCache = {
   expiresAt: number;
   githubVersion: string | null;
+  githubCommitSha: string | null;
   githubError: string | null;
 };
 
 type DashboardVersionStatus = {
   ok: true;
   appVersion: string;
+  appCommitSha: string | null;
   githubVersion: string;
+  githubCommitSha: string | null;
   githubVersionSource: "github" | "local-fallback";
   updateRequired: boolean;
+  updateReason: "version" | "commit" | null;
   githubVersionError?: string;
 };
 
@@ -2002,6 +2009,19 @@ function packageVersion(): string {
   }
 }
 
+function currentGitCommitSha(): string | null {
+  try {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
+}
+
 function versionParts(version: string): number[] {
   const normalized = version.trim().replace(/^v/i, "");
   const core = normalized.split(/[+-]/)[0] ?? "";
@@ -2026,18 +2046,21 @@ function compareVersions(left: string, right: string): number {
 
 async function githubPackageVersion(): Promise<{
   version: string | null;
+  commitSha: string | null;
   error: string | null;
 }> {
   if (dashboardVersionCache && dashboardVersionCache.expiresAt > Date.now()) {
     return {
       version: dashboardVersionCache.githubVersion,
+      commitSha: dashboardVersionCache.githubCommitSha,
       error: dashboardVersionCache.githubError,
     };
   }
 
-  const url = process.env.DASHBOARD_GITHUB_PACKAGE_URL ?? DEFAULT_GITHUB_PACKAGE_URL;
+  const packageUrl = process.env.DASHBOARD_GITHUB_PACKAGE_URL ?? DEFAULT_GITHUB_PACKAGE_URL;
+  const commitUrl = process.env.DASHBOARD_GITHUB_COMMIT_URL ?? DEFAULT_GITHUB_COMMIT_URL;
   try {
-    const response = await fetch(url, {
+    const response = await fetch(packageUrl, {
       headers: {
         accept: "application/json",
       },
@@ -2051,21 +2074,43 @@ async function githubPackageVersion(): Promise<{
       typeof payload.version === "string" && payload.version.trim()
         ? payload.version.trim()
         : null;
+    let commitSha: string | null = null;
+    try {
+      const commitResponse = await fetch(commitUrl, {
+        headers: {
+          accept: "application/vnd.github+json",
+          "user-agent": "superatblib-dashboard",
+        },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (commitResponse.ok) {
+        const commitPayload = (await commitResponse.json()) as Record<string, unknown>;
+        commitSha =
+          typeof commitPayload.sha === "string" && commitPayload.sha.trim()
+            ? commitPayload.sha.trim()
+            : null;
+      }
+    } catch {
+      commitSha = null;
+    }
     dashboardVersionCache = {
       expiresAt: Date.now() + GITHUB_VERSION_CACHE_TTL_MS,
       githubVersion: version,
+      githubCommitSha: commitSha,
       githubError: version ? null : "GitHub package version missing.",
     };
   } catch (error) {
     dashboardVersionCache = {
       expiresAt: Date.now() + GITHUB_VERSION_CACHE_TTL_MS,
       githubVersion: null,
+      githubCommitSha: null,
       githubError: error instanceof Error ? error.message : String(error),
     };
   }
 
   return {
     version: dashboardVersionCache.githubVersion,
+    commitSha: dashboardVersionCache.githubCommitSha,
     error: dashboardVersionCache.githubError,
   };
 }
@@ -2073,13 +2118,26 @@ async function githubPackageVersion(): Promise<{
 async function dashboardVersion(): Promise<DashboardVersionStatus> {
   const github = await githubPackageVersion();
   const appVersion = packageVersion();
+  const appCommitSha = currentGitCommitSha();
   const githubVersion = github.version ?? appVersion;
+  const versionUpdateRequired = Boolean(
+    github.version && compareVersions(github.version, appVersion) > 0,
+  );
+  const commitUpdateRequired = Boolean(
+    !versionUpdateRequired &&
+      github.commitSha &&
+      appCommitSha &&
+      github.commitSha !== appCommitSha,
+  );
   return {
     ok: true,
     appVersion,
+    appCommitSha,
     githubVersion,
+    githubCommitSha: github.commitSha,
     githubVersionSource: github.version ? "github" : "local-fallback",
-    updateRequired: Boolean(github.version && compareVersions(github.version, appVersion) > 0),
+    updateRequired: versionUpdateRequired || commitUpdateRequired,
+    updateReason: versionUpdateRequired ? "version" : commitUpdateRequired ? "commit" : null,
     ...(github.error ? { githubVersionError: github.error } : {}),
   };
 }
@@ -2210,6 +2268,8 @@ function serveDashboardUpdateRequiredPage(
       <div class="version-grid">
         <div class="version-row"><span>本地版本</span><strong>v${escapeHtmlText(version.appVersion)}</strong></div>
         <div class="version-row"><span>GitHub 最新版本</span><strong>v${escapeHtmlText(version.githubVersion)}</strong></div>
+        <div class="version-row"><span>本地提交</span><strong>${escapeHtmlText(version.appCommitSha ? version.appCommitSha.slice(0, 7) : "--")}</strong></div>
+        <div class="version-row"><span>GitHub 最新提交</span><strong>${escapeHtmlText(version.githubCommitSha ? version.githubCommitSha.slice(0, 7) : "--")}</strong></div>
       </div>
       <p>在客户端终端执行：</p>
       <code>git pull &amp;&amp; npm install &amp;&amp; npm run dashboard</code>
