@@ -1,4 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { IncomingMessage, ServerResponse } from "node:http";
 
 type TextResponder = (
@@ -35,6 +37,38 @@ function sessionSecret(): string {
 
 function licenseCheckUrl(): string {
   return (process.env.DASHBOARD_LICENSE_CHECK_URL ?? DEFAULT_LICENSE_CHECK_URL).trim();
+}
+
+function packageVersion(): string {
+  try {
+    const payload = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as Record<string, unknown>;
+    return typeof payload.version === "string" && payload.version.trim()
+      ? payload.version.trim()
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function currentGitCommitSha(): string | null {
+  try {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
+}
+
+function authDisplayVersion(): string {
+  const version = packageVersion();
+  const sha = currentGitCommitSha();
+  return sha ? `v${version}+${sha.slice(0, 7)}` : `v${version}`;
 }
 
 function signSession(payload: string): string {
@@ -229,6 +263,10 @@ function dashboardAuthPage(error: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+  const version = authDisplayVersion()
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
   return String.raw`<!doctype html>
 <html lang="en">
   <head>
@@ -278,12 +316,21 @@ function dashboardAuthPage(error: string): string {
         display: flex;
         align-items: center;
         gap: 10px;
-        margin-bottom: 28px;
+        margin-bottom: 24px;
       }
       .auth-logo img {
         width: 150px;
         height: 37px;
         object-fit: contain;
+      }
+      .auth-version {
+        border: 1px solid rgba(255,255,255,0.7);
+        border-radius: 4px;
+        color: rgba(255,255,255,0.9);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 8px;
+        white-space: nowrap;
       }
       .auth-chip {
         border: 1px solid rgba(255,255,255,0.7);
@@ -354,9 +401,9 @@ function dashboardAuthPage(error: string): string {
     <main class="auth-panel">
       <div class="auth-logo">
         <img src="/img/supermini.png" alt="SuperARB" />
+        <span class="auth-version">${version}</span>
       </div>
       <h1>Authorization Required</h1>
-      <p>Enter the authorization code to open the liquidation workstation.</p>
       <form method="post" action="/auth">
         <label for="code">Authorization Code</label>
         <input id="code" name="code" type="password" autocomplete="current-password" autofocus />
