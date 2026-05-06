@@ -42,6 +42,12 @@ import {
   serveDashboardStaticAsset,
 } from "./dashboard-http-handler.js";
 import {
+  handleDashboardAuthRoute,
+  hasDashboardAuth,
+  isDashboardAuthRoute,
+  serveDashboardAuthPage,
+} from "./dashboard-auth.js";
+import {
   eigenphiDashboardProviderSummary,
   fetchEigenphiDashboardPayload,
 } from "./eigenphi-dashboard-provider.js";
@@ -3423,11 +3429,24 @@ function main(): void {
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${host}:${port}`);
+    if (isDashboardAuthRoute(url.pathname)) {
+      void handleDashboardAuthRoute(req, res, url.pathname, { readBody, text });
+      return;
+    }
+    const authorized = hasDashboardAuth(req);
     if (url.pathname.startsWith("/api/")) {
+      if (!authorized) {
+        json(res, 401, { ok: false, error: "Authorization required." });
+        return;
+      }
       void serveApi(req, res, url);
       return;
     }
     if (serveStaticAsset(res, url.pathname)) {
+      return;
+    }
+    if (!authorized) {
+      serveDashboardAuthPage(res, text);
       return;
     }
     serveHtml(res);
