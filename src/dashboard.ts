@@ -105,8 +105,10 @@ type DashboardVersionCache = {
 type DashboardVersionStatus = {
   ok: true;
   appVersion: string;
+  appDisplayVersion: string;
   appCommitSha: string | null;
   githubVersion: string;
+  githubDisplayVersion: string;
   githubCommitSha: string | null;
   githubVersionSource: "github" | "local-fallback";
   updateRequired: boolean;
@@ -2022,6 +2024,11 @@ function currentGitCommitSha(): string | null {
   }
 }
 
+function displayVersion(version: string, commitSha: string | null): string {
+  const shortSha = commitSha ? commitSha.slice(0, 7) : "";
+  return shortSha ? `${version}+${shortSha}` : version;
+}
+
 function versionParts(version: string): number[] {
   const normalized = version.trim().replace(/^v/i, "");
   const core = normalized.split(/[+-]/)[0] ?? "";
@@ -2132,8 +2139,10 @@ async function dashboardVersion(): Promise<DashboardVersionStatus> {
   return {
     ok: true,
     appVersion,
+    appDisplayVersion: displayVersion(appVersion, appCommitSha),
     appCommitSha,
     githubVersion,
+    githubDisplayVersion: displayVersion(githubVersion, github.commitSha),
     githubCommitSha: github.commitSha,
     githubVersionSource: github.version ? "github" : "local-fallback",
     updateRequired: versionUpdateRequired || commitUpdateRequired,
@@ -2266,8 +2275,8 @@ function serveDashboardUpdateRequiredPage(
       <h1 id="updateTitle">发现新版本</h1>
       <p>GitHub 上有更新版本。当前本地版本不能继续进入控制台，请先更新仓库后重新启动 dashboard。</p>
       <div class="version-grid">
-        <div class="version-row"><span>本地版本</span><strong>v${escapeHtmlText(version.appVersion)}</strong></div>
-        <div class="version-row"><span>GitHub 最新版本</span><strong>v${escapeHtmlText(version.githubVersion)}</strong></div>
+        <div class="version-row"><span>本地版本</span><strong>v${escapeHtmlText(version.appDisplayVersion)}</strong></div>
+        <div class="version-row"><span>GitHub 最新版本</span><strong>v${escapeHtmlText(version.githubDisplayVersion)}</strong></div>
         <div class="version-row"><span>本地提交</span><strong>${escapeHtmlText(version.appCommitSha ? version.appCommitSha.slice(0, 7) : "--")}</strong></div>
         <div class="version-row"><span>GitHub 最新提交</span><strong>${escapeHtmlText(version.githubCommitSha ? version.githubCommitSha.slice(0, 7) : "--")}</strong></div>
       </div>
@@ -3783,7 +3792,9 @@ function main(): void {
             updateRequired: true,
             error: "Update required before using the dashboard.",
             appVersion: version.appVersion,
+            appDisplayVersion: version.appDisplayVersion,
             githubVersion: version.githubVersion,
+            githubDisplayVersion: version.githubDisplayVersion,
           });
           return;
         }

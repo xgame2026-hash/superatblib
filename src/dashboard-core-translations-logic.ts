@@ -80,16 +80,16 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         const version = state.data && state.data.version ? state.data.version : {};
         const appVersion = version.appVersion ? String(version.appVersion) : '';
         const githubVersion = version.githubVersion ? String(version.githubVersion) : '';
-        const appCommit = version.appCommitSha ? String(version.appCommitSha).slice(0, 7) : '';
-        const githubCommit = version.githubCommitSha ? String(version.githubCommitSha).slice(0, 7) : '';
-        text('appVersionChip', appVersion ? 'v' + appVersion : 'v--');
-        text('connectButtonLabel', githubVersion ? 'GitHub v' + githubVersion : 'GitHub latest');
+        const appDisplayVersion = version.appDisplayVersion ? String(version.appDisplayVersion) : appVersion;
+        const githubDisplayVersion = version.githubDisplayVersion ? String(version.githubDisplayVersion) : githubVersion;
+        text('appVersionChip', appDisplayVersion ? 'v' + appDisplayVersion : 'v--');
+        text('connectButtonLabel', githubDisplayVersion ? 'GitHub v' + githubDisplayVersion : 'GitHub latest');
         if (version.updateRequired) {
           text('versionDropdownTitle', '发现新版本');
-          text('versionDropdownSub', 'GitHub 最新版本 v' + (githubVersion || '--') + (githubCommit ? ' / ' + githubCommit : '') + '，请先更新后继续使用。');
-        } else if (githubVersion) {
+          text('versionDropdownSub', 'GitHub 最新版本 v' + (githubDisplayVersion || '--') + '，请先更新后继续使用。');
+        } else if (githubDisplayVersion) {
           text('versionDropdownTitle', '你已经是最新版');
-          text('versionDropdownSub', '版本号 v' + githubVersion + (githubCommit ? ' / commit ' + githubCommit : (appCommit ? ' / commit ' + appCommit : '')));
+          text('versionDropdownSub', '版本号 v' + githubDisplayVersion);
         } else {
           text('versionDropdownTitle', '正在检查版本');
           text('versionDropdownSub', '等待 GitHub 版本信息。');
