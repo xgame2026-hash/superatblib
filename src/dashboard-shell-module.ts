@@ -4,7 +4,7 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
         <div class="topbar-left">
           <div class="logo-lockup">
             <div class="logo-word">
-              <img class="logo-aave" src="/img/aave.svg" alt="aave" />
+              <img class="logo-aave" src="/img/SuperARB_logo.png" alt="SuperARB" />
                 <span id="appVersionChip" class="logo-chip">v--</span>
             </div>
           </div>
@@ -30,7 +30,7 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
 
       <aside class="sidebar">
         <div class="brand-badge">
-          <img src="/img/aave.svg" alt="aave" />
+          <img src="/img/SuperARB_logo.png" alt="SuperARB" />
         </div>
         <div class="sidebar-section">
           <div class="sidebar-caption">nav</div>
@@ -77,8 +77,8 @@ export const DASHBOARD_APP_SHELL_END = String.raw`
           <footer class="app-footer">
             <div class="app-footer-main">
               <div class="app-footer-brand">
-                <img src="/img/aavebtn.svg" alt="Aave" />
-                <span class="logo-chip app-footer-chip">Multi-Market</span>
+                <img src="/img/SuperARB_logo.png" alt="SuperARB" />
+                <span class="logo-chip app-footer-chip">SuperARB</span>
               </div>
 
               <div class="app-footer-nav">

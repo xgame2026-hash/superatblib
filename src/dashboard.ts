@@ -2163,8 +2163,14 @@ function serveDashboardUpdateRequiredPage(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Update Required</title>
-    <link rel="icon" type="image/svg+xml" href="/img/aave-token-round.svg" />
+    <title>SuperARB</title>
+    <meta name="application-name" content="SuperARB" />
+    <meta name="apple-mobile-web-app-title" content="SuperARB" />
+    <meta name="theme-color" content="#101214" />
+    <link rel="icon" type="image/png" href="/img/SuperARB_logo.png" />
+    <link rel="shortcut icon" type="image/png" href="/img/SuperARB_logo.png" />
+    <link rel="apple-touch-icon" href="/img/SuperARB_logo.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <style>
       * { box-sizing: border-box; }
       html, body {
@@ -2194,8 +2200,9 @@ function serveDashboardUpdateRequiredPage(
         margin-bottom: 22px;
       }
       .update-head img {
-        width: 102px;
-        height: 17px;
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
       }
       .version-pill {
         border: 1px solid rgba(105,240,174,0.48);
@@ -2269,7 +2276,7 @@ function serveDashboardUpdateRequiredPage(
   <body>
     <main class="update-overlay" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
       <div class="update-head">
-        <img src="/img/aave.svg" alt="aave" />
+        <img src="/img/SuperARB_logo.png" alt="SuperARB" />
         <span class="version-pill">Update Required</span>
       </div>
       <h1 id="updateTitle">发现新版本</h1>

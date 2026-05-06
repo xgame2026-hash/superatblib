@@ -204,8 +204,8 @@ export const DASHBOARD_BASE_STYLES = String.raw`
       }
 
       .logo-aave {
-        width: 102px;
-        height: 17px;
+        width: 34px;
+        height: 34px;
         object-fit: contain;
       }
 
@@ -3040,8 +3040,8 @@ ${DASHBOARD_TXGRAPH_STYLES}
       }
 
       .app-footer-brand img {
-        width: 112px;
-        height: 20px;
+        width: 34px;
+        height: 34px;
         object-fit: contain;
         opacity: 0.9;
       }

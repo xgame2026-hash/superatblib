@@ -234,8 +234,14 @@ function dashboardAuthPage(error: string): string {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Authorization</title>
-    <link rel="icon" type="image/svg+xml" href="/img/aave-token-round.svg" />
+    <title>SuperARB</title>
+    <meta name="application-name" content="SuperARB" />
+    <meta name="apple-mobile-web-app-title" content="SuperARB" />
+    <meta name="theme-color" content="#101214" />
+    <link rel="icon" type="image/png" href="/img/SuperARB_logo.png" />
+    <link rel="shortcut icon" type="image/png" href="/img/SuperARB_logo.png" />
+    <link rel="apple-touch-icon" href="/img/SuperARB_logo.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <style>
       :root {
         --bg: #101214;
@@ -275,8 +281,9 @@ function dashboardAuthPage(error: string): string {
         margin-bottom: 28px;
       }
       .auth-logo img {
-        width: 102px;
-        height: 17px;
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
       }
       .auth-chip {
         border: 1px solid rgba(255,255,255,0.7);
@@ -346,8 +353,8 @@ function dashboardAuthPage(error: string): string {
   <body>
     <main class="auth-panel">
       <div class="auth-logo">
-        <img src="/img/aave.svg" alt="aave" />
-        <span class="auth-chip">Multi-Market</span>
+        <img src="/img/SuperARB_logo.png" alt="SuperARB" />
+        <span class="auth-chip">SuperARB</span>
       </div>
       <h1>Authorization Required</h1>
       <p>Enter the authorization code to open the liquidation workstation.</p>

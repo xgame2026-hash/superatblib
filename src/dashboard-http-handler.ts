@@ -742,6 +742,18 @@ export function serveDashboardStaticAsset(
     return true;
   }
 
+  if (pathname === "/manifest.webmanifest") {
+    const assetPath = path.resolve(cwd, "src", "manifest.webmanifest");
+    if (!existsSync(assetPath)) {
+      deps.json(res, 404, { error: "Not found" });
+      return true;
+    }
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/manifest+json; charset=utf-8");
+    res.end(readFileSync(assetPath));
+    return true;
+  }
+
   if (
     !pathname.startsWith("/img/") &&
     !pathname.startsWith("/cryptoimg/") &&
