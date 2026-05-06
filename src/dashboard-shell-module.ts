@@ -10,15 +10,21 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
           </div>
         </div>
         <div class="topbar-right">
-          <button id="connectButton" class="connect-button" type="button">
-            <span class="connect-main">
-              <img src="/img/github.svg" alt="github" />
-              <span id="connectButtonLabel">GitHub latest</span>
-            </span>
-            <span class="connect-arrow-box">
-              <img src="/img/arrow.svg" alt="arrow" />
-            </span>
-          </button>
+          <div id="versionMenu" class="version-menu">
+            <button id="connectButton" class="connect-button" type="button" aria-expanded="false" aria-controls="versionDropdown">
+              <span class="connect-main">
+                <img src="/img/github.svg" alt="github" />
+                <span id="connectButtonLabel">GitHub latest</span>
+              </span>
+              <span class="connect-arrow-box">
+                <img src="/img/arrow.svg" alt="arrow" />
+              </span>
+            </button>
+            <div id="versionDropdown" class="version-dropdown" role="status">
+              <div id="versionDropdownTitle" class="version-dropdown-title">Checking version</div>
+              <div id="versionDropdownSub" class="version-dropdown-sub">--</div>
+            </div>
+          </div>
         </div>
       </header>
 

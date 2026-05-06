@@ -1,5 +1,22 @@
 export const DASHBOARD_SHELL_EVENTS_LOGIC = String.raw`
       function bindShellDashboardEvents() {
+        const versionMenu = document.getElementById('versionMenu');
+        const connectButton = document.getElementById('connectButton');
+        if (versionMenu && connectButton) {
+          connectButton.addEventListener('click', function (event) {
+            event.stopPropagation();
+            const open = !versionMenu.classList.contains('open');
+            versionMenu.classList.toggle('open', open);
+            connectButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+          });
+          document.addEventListener('click', function (event) {
+            if (!versionMenu.contains(event.target)) {
+              versionMenu.classList.remove('open');
+              connectButton.setAttribute('aria-expanded', 'false');
+            }
+          });
+        }
+
         document.getElementById('marketSelect').addEventListener('change', function () {
           syncFormFromInputs();
           const settings = state.data.settings && state.data.settings.settings ? state.data.settings.settings : null;

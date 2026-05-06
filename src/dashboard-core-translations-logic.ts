@@ -82,6 +82,16 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         const githubVersion = version.githubVersion ? String(version.githubVersion) : '';
         text('appVersionChip', appVersion ? 'v' + appVersion : 'v--');
         text('connectButtonLabel', githubVersion ? 'GitHub v' + githubVersion : 'GitHub latest');
+        if (version.updateRequired) {
+          text('versionDropdownTitle', '发现新版本');
+          text('versionDropdownSub', 'GitHub 最新版本 v' + (githubVersion || '--') + '，请先更新后继续使用。');
+        } else if (githubVersion) {
+          text('versionDropdownTitle', '你已经是最新版');
+          text('versionDropdownSub', '版本号 v' + githubVersion);
+        } else {
+          text('versionDropdownTitle', '正在检查版本');
+          text('versionDropdownSub', '等待 GitHub 版本信息。');
+        }
 
         text('overviewPageTitle', t('pages.overview')[0]);
         text('overviewPageSub', t('pages.overview')[1]);

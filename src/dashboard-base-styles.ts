@@ -317,6 +317,7 @@ export const DASHBOARD_BASE_STYLES = String.raw`
         gap: 8px;
         justify-content: flex-end;
         min-width: 220px;
+        position: relative;
       }
 
       .top-icons {
@@ -428,6 +429,52 @@ export const DASHBOARD_BASE_STYLES = String.raw`
       .connect-arrow-box img {
         width: 9px;
         height: 9px;
+        transform: rotate(-90deg);
+        transition: transform 180ms ease;
+      }
+
+      .version-menu {
+        position: relative;
+      }
+
+      .version-menu.open .connect-arrow-box img {
+        transform: rotate(0deg);
+      }
+
+      .version-dropdown {
+        position: absolute;
+        right: 0;
+        top: 44px;
+        width: 260px;
+        padding: 14px 16px;
+        border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: #1a1d22;
+        box-shadow: 0 18px 54px rgba(0,0,0,0.36);
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(-6px);
+        transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+        z-index: 60;
+      }
+
+      .version-menu.open .version-dropdown {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+
+      .version-dropdown-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 5px;
+      }
+
+      .version-dropdown-sub {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
       }
 
       .content-scroll {
