@@ -276,10 +276,11 @@ function dashboardAuthPage(error: string): string {
     <meta name="application-name" content="SuperARB" />
     <meta name="apple-mobile-web-app-title" content="SuperARB" />
     <meta name="theme-color" content="#101214" />
-    <link rel="icon" type="image/png" href="/img/SuperARB_logo.png" />
-    <link rel="shortcut icon" type="image/png" href="/img/SuperARB_logo.png" />
-    <link rel="apple-touch-icon" href="/img/SuperARB_logo.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/img/SuperARB_icon_192.png?v=20260507" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/img/SuperARB_icon_512.png?v=20260507" />
+    <link rel="shortcut icon" href="/favicon.ico?v=20260507" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/img/SuperARB_icon_192.png?v=20260507" />
+    <link rel="manifest" href="/manifest.webmanifest?v=20260507" />
     <style>
       :root {
         --bg: #101214;

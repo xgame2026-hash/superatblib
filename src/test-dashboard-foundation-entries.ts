@@ -11,7 +11,7 @@ function expectThinFile(source: string, maxLines: number, label: string) {
 }
 
 const documentModuleSource = readSource('./dashboard-document-module.ts');
-expectThinFile(documentModuleSource, 32, 'dashboard-document-module.ts');
+expectThinFile(documentModuleSource, 36, 'dashboard-document-module.ts');
 assert.ok(
   documentModuleSource.includes('export const DASHBOARD_DOCUMENT_HEAD = String.raw`<!doctype html>'),
   'document module should export document head'

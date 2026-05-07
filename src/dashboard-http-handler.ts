@@ -742,6 +742,19 @@ export function serveDashboardStaticAsset(
     return true;
   }
 
+  if (pathname === "/favicon.ico") {
+    const assetPath = path.resolve(cwd, "src", "img", "favicon.ico");
+    if (!existsSync(assetPath)) {
+      deps.json(res, 404, { error: "Not found" });
+      return true;
+    }
+    res.statusCode = 200;
+    res.setHeader("content-type", "image/x-icon");
+    res.setHeader("cache-control", "no-cache");
+    res.end(readFileSync(assetPath));
+    return true;
+  }
+
   if (pathname === "/manifest.webmanifest") {
     const assetPath = path.resolve(cwd, "src", "manifest.webmanifest");
     if (!existsSync(assetPath)) {
@@ -750,6 +763,7 @@ export function serveDashboardStaticAsset(
     }
     res.statusCode = 200;
     res.setHeader("content-type", "application/manifest+json; charset=utf-8");
+    res.setHeader("cache-control", "no-cache");
     res.end(readFileSync(assetPath));
     return true;
   }
@@ -788,6 +802,9 @@ export function serveDashboardStaticAsset(
 
   res.statusCode = 200;
   res.setHeader("content-type", contentType);
+  if (assetName.startsWith("SuperARB_")) {
+    res.setHeader("cache-control", "no-cache");
+  }
   res.end(readFileSync(assetPath));
   return true;
 }
