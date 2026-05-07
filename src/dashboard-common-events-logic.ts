@@ -85,7 +85,7 @@ export const DASHBOARD_COMMON_EVENTS_LOGIC = String.raw`
             return;
           }
           if (action === 'open-morpho-settings') {
-            state.settingsSection = 'morpho';
+            state.settingsSection = 'general';
             localStorage.setItem('dashboard-settings-section', state.settingsSection);
             setPage('settings');
             return;
@@ -119,16 +119,6 @@ export const DASHBOARD_COMMON_EVENTS_LOGIC = String.raw`
             renderSettings();
           });
         }
-        const settingsSectionMorpho = document.getElementById('settingsSectionMorpho');
-        if (settingsSectionMorpho) {
-          settingsSectionMorpho.addEventListener('click', function () {
-            state.settingsSection = 'morpho';
-            localStorage.setItem('dashboard-settings-section', state.settingsSection);
-            applyTranslations();
-            renderSettings();
-          });
-        }
-
         document.getElementById('modalClose').addEventListener('click', closeModal);
         document.getElementById('modal').addEventListener('click', function (event) {
           if (event.target === document.getElementById('modal')) {

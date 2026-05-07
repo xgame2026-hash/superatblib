@@ -47,12 +47,6 @@ const MANAGED_KEYS = [
   "LOOKBACK_BLOCKS",
   "LIMIT",
   "MIN_NET_PROFIT",
-  "MORPHO_MARKET_ID",
-  "MORPHO_SIGNAL",
-  "MORPHO_HF_MAX",
-  "MORPHO_ETHEREUM_RPC_URL",
-  "MORPHO_BASE_RPC_URL",
-  "MORPHO_PRIVATE_RELAY_URL",
   "ARBITRAGE_VENUES",
   "BINANCE_API_KEY",
   "BINANCE_SECRET_KEY",
@@ -242,12 +236,6 @@ function managedEnvSnapshot(): Record<ManagedKey, string> {
     LOOKBACK_BLOCKS: process.env.LOOKBACK_BLOCKS ?? "30000",
     LIMIT: process.env.LIMIT ?? "8",
     MIN_NET_PROFIT: process.env.MIN_NET_PROFIT ?? "100",
-    MORPHO_MARKET_ID: process.env.MORPHO_MARKET_ID ?? "",
-    MORPHO_SIGNAL: process.env.MORPHO_SIGNAL ?? "",
-    MORPHO_HF_MAX: process.env.MORPHO_HF_MAX ?? "1.05",
-    MORPHO_ETHEREUM_RPC_URL: process.env.MORPHO_ETHEREUM_RPC_URL ?? "",
-    MORPHO_BASE_RPC_URL: process.env.MORPHO_BASE_RPC_URL ?? "",
-    MORPHO_PRIVATE_RELAY_URL: process.env.MORPHO_PRIVATE_RELAY_URL ?? "",
     ARBITRAGE_VENUES: process.env.ARBITRAGE_VENUES ?? "binance,okx,bitget,mexc,gate",
     BINANCE_API_KEY: process.env.BINANCE_API_KEY ?? "",
     BINANCE_SECRET_KEY: process.env.BINANCE_SECRET_KEY ?? "",
@@ -353,12 +341,12 @@ export function loadDashboardSettings(): DashboardSettings {
       process.env.MIN_NET_PROFIT ??
       defaultExecutionMinNetProfit(selectedChain as ChainPreset["key"], selectedMarket),
     morpho: {
-      marketId: process.env.MORPHO_MARKET_ID ?? "",
-      signal: process.env.MORPHO_SIGNAL ?? "",
-      hfMax: process.env.MORPHO_HF_MAX ?? "1.05",
-      ethereumRpcUrl: process.env.MORPHO_ETHEREUM_RPC_URL ?? "",
-      baseRpcUrl: process.env.MORPHO_BASE_RPC_URL ?? "",
-      privateRelayUrl: process.env.MORPHO_PRIVATE_RELAY_URL ?? "",
+      marketId: "",
+      signal: "",
+      hfMax: "1.05",
+      ethereumRpcUrl: "",
+      baseRpcUrl: "",
+      privateRelayUrl: "",
     },
     arbitrageVenues:
       process.env.ARBITRAGE_VENUES ?? "binance,okx,bitget,mexc,gate",
@@ -453,17 +441,11 @@ function serializeManagedEnv(env: Record<ManagedKey, string>): string {
       ],
     },
     {
-      title: "# Optional data and Morpho providers",
+      title: "# Optional data providers",
       entries: [
         ["BITQUERY_API_KEY", ""],
         ["ZEROX_API_KEY", ""],
         ["QUICKNODE_ADMIN_API_KEY", ""],
-        ["MORPHO_MARKET_ID", ""],
-        ["MORPHO_SIGNAL", ""],
-        ["MORPHO_HF_MAX", "1.05"],
-        ["MORPHO_ETHEREUM_RPC_URL", ""],
-        ["MORPHO_BASE_RPC_URL", ""],
-        ["MORPHO_PRIVATE_RELAY_URL", ""],
         ["ARBITRAGE_VENUES", "binance,okx,bitget,mexc,gate"],
       ],
     },
@@ -572,24 +554,6 @@ export function saveDashboardSettings(
   }
   if (patch.minNetProfit !== undefined) {
     next.MIN_NET_PROFIT = patch.minNetProfit;
-  }
-  if (patch.morpho?.marketId !== undefined) {
-    next.MORPHO_MARKET_ID = patch.morpho.marketId;
-  }
-  if (patch.morpho?.signal !== undefined) {
-    next.MORPHO_SIGNAL = patch.morpho.signal;
-  }
-  if (patch.morpho?.hfMax !== undefined) {
-    next.MORPHO_HF_MAX = patch.morpho.hfMax;
-  }
-  if (patch.morpho?.ethereumRpcUrl !== undefined) {
-    next.MORPHO_ETHEREUM_RPC_URL = patch.morpho.ethereumRpcUrl;
-  }
-  if (patch.morpho?.baseRpcUrl !== undefined) {
-    next.MORPHO_BASE_RPC_URL = patch.morpho.baseRpcUrl;
-  }
-  if (patch.morpho?.privateRelayUrl !== undefined) {
-    next.MORPHO_PRIVATE_RELAY_URL = patch.morpho.privateRelayUrl;
   }
   if (patch.arbitrageVenues !== undefined) {
     next.ARBITRAGE_VENUES = patch.arbitrageVenues;

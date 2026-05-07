@@ -183,9 +183,6 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         'settingsMexcApiKey',
         'settingsMexcSecretKey',
         'settingsGateApiKey',
-        'settingsGateSecretKey',
-        'settingsMorphoEthereumRpc',
-        'settingsMorphoBaseRpc',
-        'settingsMorphoPrivateRelay'
+        'settingsGateSecretKey'
       ];
 `;

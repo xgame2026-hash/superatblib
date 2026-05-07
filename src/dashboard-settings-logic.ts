@@ -148,9 +148,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         if (!state.settingsMasked) {
           captureVisibleSensitiveSettings();
         }
-        const section = state.settingsSection === 'exchanges'
-          ? 'exchanges'
-          : (state.settingsSection === 'morpho' ? 'morpho' : 'general');
+        const section = state.settingsSection === 'exchanges' ? 'exchanges' : 'general';
         let payload;
         if (section === 'exchanges') {
           payload = {
@@ -176,17 +174,6 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
                 apiKey: readSensitiveSettingsValue('settingsGateApiKey'),
                 secretKey: readSensitiveSettingsValue('settingsGateSecretKey')
               }
-            }
-          };
-        } else if (section === 'morpho') {
-          payload = {
-            morpho: {
-              ethereumRpcUrl: readSensitiveSettingsValue('settingsMorphoEthereumRpc'),
-              baseRpcUrl: readSensitiveSettingsValue('settingsMorphoBaseRpc'),
-              privateRelayUrl: readSensitiveSettingsValue('settingsMorphoPrivateRelay'),
-              marketId: document.getElementById('settingsMorphoMarketId').value.trim(),
-              signal: document.getElementById('settingsMorphoSignal').value,
-              hfMax: document.getElementById('settingsMorphoHfMax').value.trim()
             }
           };
         } else {
@@ -274,15 +261,6 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         state.settingsRawValues.settingsMexcSecretKey = exchangeSettings.mexc.secretKey || '';
         state.settingsRawValues.settingsGateApiKey = exchangeSettings.gate.apiKey || '';
         state.settingsRawValues.settingsGateSecretKey = exchangeSettings.gate.secretKey || '';
-        state.settingsRawValues.settingsMorphoEthereumRpc = settings.morpho && settings.morpho.ethereumRpcUrl
-          ? settings.morpho.ethereumRpcUrl
-          : '';
-        state.settingsRawValues.settingsMorphoBaseRpc = settings.morpho && settings.morpho.baseRpcUrl
-          ? settings.morpho.baseRpcUrl
-          : '';
-        state.settingsRawValues.settingsMorphoPrivateRelay = settings.morpho && settings.morpho.privateRelayUrl
-          ? settings.morpho.privateRelayUrl
-          : '';
         state.settingsRawValues.settingsBaseRpc = settings.baseRpcUrl || '';
         applySensitiveSettingsVisibility();
         setInputValue('settingsDefaultMarket', settings.market || 'aave-v3-ethereum');
@@ -290,31 +268,20 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         setInputValue('settingsFundingMode', settings.fundingMode || 'flash_loan');
         setInputValue('settingsLanguage', settings.language || state.language);
         setInputValue('settingsExecutionLimit', settings.limit || state.form.limit || '50');
-        document.getElementById('settingsMorphoMarketId').value = settings.morpho && settings.morpho.marketId
-          ? settings.morpho.marketId
-          : '';
-        document.getElementById('settingsMorphoSignal').value = settings.morpho && typeof settings.morpho.signal === 'string'
-          ? settings.morpho.signal
-          : '';
-        document.getElementById('settingsMorphoHfMax').value = settings.morpho && settings.morpho.hfMax
-          ? settings.morpho.hfMax
-          : (state.form.hfMax || '1.05');
         text('settingsFileHint', settingsWrapper.file || '.env');
 
-        const section = state.settingsSection === 'exchanges'
-          ? 'exchanges'
-          : (state.settingsSection === 'morpho' ? 'morpho' : 'general');
+        const section = state.settingsSection === 'exchanges' ? 'exchanges' : 'general';
+        if (state.settingsSection !== section) {
+          state.settingsSection = section;
+          localStorage.setItem('dashboard-settings-section', section);
+        }
         const generalButton = document.getElementById('settingsSectionGeneral');
         const exchangeButton = document.getElementById('settingsSectionExchanges');
-        const morphoButton = document.getElementById('settingsSectionMorpho');
         const generalFields = document.getElementById('settingsGeneralFields');
         const exchangeFields = document.getElementById('settingsExchangeFields');
-        const morphoFields = document.getElementById('settingsMorphoFields');
         if (generalButton) generalButton.classList.toggle('is-active', section === 'general');
         if (exchangeButton) exchangeButton.classList.toggle('is-active', section === 'exchanges');
-        if (morphoButton) morphoButton.classList.toggle('is-active', section === 'morpho');
         if (generalFields) generalFields.style.display = section === 'general' ? 'grid' : 'none';
         if (exchangeFields) exchangeFields.style.display = section === 'exchanges' ? 'grid' : 'none';
-        if (morphoFields) morphoFields.style.display = section === 'morpho' ? 'grid' : 'none';
       }
 `;

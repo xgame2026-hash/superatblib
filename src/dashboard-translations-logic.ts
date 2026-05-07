@@ -95,7 +95,7 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           strategyActionCurrentMarket: '当前执行市场',
           strategyActionOpenConsole: '进入控制台',
           strategyActionOpenMorpho: '打开 Morpho 专题',
-          strategyActionOpenMorphoSettings: '打开 Morpho 设置',
+          strategyActionOpenMorphoSettings: '打开通用设置',
           flashloanSummaryTitle: '汇总',
           flashloanSummaryInfo: '所选周期内的闪电贷核心指标。',
           flashloanSummaryRows: ['闪电贷次数', 'MEV 交易数', '金额', '费用', '借款地址数', '资产数'],
@@ -215,12 +215,11 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           settingsPageSub: '',
           settingsMenuTitle: '设置导航',
           settingsMenuSub: '选择要配置的栏目。',
-          settingsSections: ['通用设置', '交易所', 'Morpho'],
-          settingsPanelTitles: ['通用设置', '交易所', 'Morpho 设置'],
+          settingsSections: ['通用设置', '交易所'],
+          settingsPanelTitles: ['通用设置', '交易所'],
           settingsPanelSubs: [
-            '只配置 ETH、BNB、ARB、BASE、POLYGON 的 RPC，保存到 .env。',
-            '配置套利交易所列表与 API 密钥。',
-            '把 Morpho 的默认筛选、Ethereum/Base RPC 与私有 relay 收进独立分栏。'
+            '配置私钥、语言、资金模式与主链 RPC，保存到 .env。',
+            '配置套利交易所列表与 API 密钥。'
           ],
           settingsBitqueryApiKeyLabel: 'Bitquery Access Token',
           settingsZeroExApiKeyLabel: '0x API Key',
@@ -280,10 +279,6 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           txGraphFailed: '图谱加载失败',
           modalCompleted: '命令完成',
           modalFailed: '命令失败',
-          footerLinks: ['报告', '课堂', '新闻简报', '用户指南'],
-          footerTerms: '条款与条件',
-          footerChangelog: '更新日志',
-          footerCopyright: 'Copyright © 2026 SuperLiquidation',
           close: '关闭',
           expand: '放大',
           clear: '清空'
@@ -383,7 +378,7 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           strategyActionCurrentMarket: 'Current market',
           strategyActionOpenConsole: 'Open console',
           strategyActionOpenMorpho: 'Open Morpho',
-          strategyActionOpenMorphoSettings: 'Morpho settings',
+          strategyActionOpenMorphoSettings: 'General settings',
           flashloanSummaryTitle: 'Flashloan Summary',
           flashloanSummaryInfo: 'Key flashloan metrics for the selected period.',
           flashloanSummaryRows: ['Flashloan Count', 'MEV Tx Count', 'Amount', 'Fee', '# of Borrower', '# of Asset'],
@@ -503,12 +498,11 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           settingsPageSub: '',
           settingsMenuTitle: 'Settings',
           settingsMenuSub: 'Pick a section to configure.',
-          settingsSections: ['General', 'Exchanges', 'Morpho'],
-          settingsPanelTitles: ['General Settings', 'Exchanges', 'Morpho Settings'],
+          settingsSections: ['General', 'Exchanges'],
+          settingsPanelTitles: ['General Settings', 'Exchanges'],
           settingsPanelSubs: [
-            'Configure only ETH, BNB, ARB, BASE, and POLYGON RPCs, saved to .env.',
-            'Configure arbitrage venues and exchange API keys.',
-            'Keep Morpho defaults, Ethereum/Base RPCs, and private relay out of the execution panel.'
+            'Configure private key, language, funding mode, and chain RPCs, saved to .env.',
+            'Configure arbitrage venues and exchange API keys.'
           ],
           settingsBitqueryApiKeyLabel: 'Bitquery Access Token',
           settingsZeroExApiKeyLabel: '0x API Key',
@@ -568,10 +562,6 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           txGraphFailed: 'Graph load failed',
           modalCompleted: 'Command completed',
           modalFailed: 'Command failed',
-          footerLinks: ['Reports', 'Classroom', 'Newsletter', 'User Guide'],
-          footerTerms: 'Terms and Conditions',
-          footerChangelog: 'Changelog',
-          footerCopyright: 'Copyright © 2026 SuperLiquidation',
           close: 'Close',
           expand: 'Expand',
           clear: 'Clear'

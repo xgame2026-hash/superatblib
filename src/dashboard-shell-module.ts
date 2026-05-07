@@ -74,35 +74,6 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
 `;
 
 export const DASHBOARD_APP_SHELL_END = String.raw`
-          <footer class="app-footer">
-            <div class="app-footer-main">
-              <div class="app-footer-brand">
-                <img src="/img/SuperARB_logo.png" alt="SuperARB" />
-                <span class="logo-chip app-footer-chip">SuperARB</span>
-              </div>
-
-              <div class="app-footer-nav">
-                <div class="app-footer-links">
-                  <a class="app-footer-link" href="#" onclick="return false;"><img src="/img/reports.svg" alt="reports" /><span id="footerLinkReports">Reports</span></a>
-                  <a class="app-footer-link" href="#" onclick="return false;"><img src="/img/classroom.svg" alt="classroom" /><span id="footerLinkClassroom">Classroom</span></a>
-                  <a class="app-footer-link" href="#" onclick="return false;"><img src="/img/news2.svg" alt="newsletter" /><span id="footerLinkNewsletter">Newsletter</span></a>
-                  <a class="app-footer-link" href="#" onclick="return false;"><img src="/img/userguide.svg" alt="user guide" /><span id="footerLinkGuide">User Guide</span></a>
-                </div>
-
-                <div class="app-footer-actions">
-                  <div class="app-footer-action"><img src="/img/news.svg" alt="action" /></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="app-footer-bottom">
-              <div class="app-footer-legal">
-                <span id="footerTerms">Terms and Conditions</span>
-                <span id="footerChangelog">Changelog</span>
-              </div>
-              <div id="footerCopyright" class="app-footer-copy">Copyright © 2026 SuperLiquidation</div>
-            </div>
-          </footer>
         </div>
       </div>
     </div>

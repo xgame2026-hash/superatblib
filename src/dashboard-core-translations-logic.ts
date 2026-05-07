@@ -143,20 +143,17 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         const settingsSections = t('settingsSections');
         const settingsPanelTitles = t('settingsPanelTitles');
         const settingsPanelSubs = t('settingsPanelSubs');
-        const settingsSection = state.settingsSection === 'exchanges'
-          ? 'exchanges'
-          : (state.settingsSection === 'morpho' ? 'morpho' : 'general');
+        const settingsSection = state.settingsSection === 'exchanges' ? 'exchanges' : 'general';
         text('settingsMenuTitle', t('settingsMenuTitle'));
         text('settingsMenuSub', t('settingsMenuSub'));
         text('settingsPanelTitle', settingsSection === 'exchanges'
           ? settingsPanelTitles[1]
-          : (settingsSection === 'morpho' ? settingsPanelTitles[2] : settingsPanelTitles[0]));
+          : settingsPanelTitles[0]);
         text('settingsPanelSub', settingsSection === 'exchanges'
           ? settingsPanelSubs[1]
-          : (settingsSection === 'morpho' ? settingsPanelSubs[2] : settingsPanelSubs[0]));
+          : settingsPanelSubs[0]);
         text('settingsSectionGeneral', settingsSections[0]);
         text('settingsSectionExchanges', settingsSections[1]);
-        text('settingsSectionMorpho', settingsSections[2]);
         text('saveSettingsButtonLabel', t('saveSettingsCompact'));
         text('toggleSettingsVisibilityLabel', state.settingsMasked ? t('settingsShowSecrets') : t('settingsHideSecrets'));
 
@@ -195,33 +192,10 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         text('settingsMexcSecretKeyLabel', state.language === 'zh' ? 'MEXC 私钥' : 'MEXC Secret Key');
         text('settingsGateApiKeyLabel', state.language === 'zh' ? 'Gate 公钥' : 'Gate API Key');
         text('settingsGateSecretKeyLabel', state.language === 'zh' ? 'Gate 私钥' : 'Gate Secret Key');
-        text('settingsMorphoEthereumRpcLabel', t('labels.morphoEthereumRpc'));
-        text('settingsMorphoBaseRpcLabel', t('labels.morphoBaseRpc'));
-        text('settingsMorphoPrivateRelayLabel', t('labels.morphoPrivateRelay'));
-        text('settingsMorphoMarketIdLabel', t('labels.morphoMarketId'));
-        text('settingsMorphoSignalLabel', t('labels.morphoSignal'));
-        text('settingsMorphoHfMaxLabel', t('labels.hfMax'));
-        const settingsMorphoSignal = document.getElementById('settingsMorphoSignal');
-        const morphoSignalOptions = t('morphoSignalOptions');
-        if (settingsMorphoSignal && settingsMorphoSignal.options.length >= 4) {
-          settingsMorphoSignal.options[0].textContent = morphoSignalOptions[0];
-          settingsMorphoSignal.options[1].textContent = morphoSignalOptions[1];
-          settingsMorphoSignal.options[2].textContent = morphoSignalOptions[2];
-          settingsMorphoSignal.options[3].textContent = morphoSignalOptions[3];
-        }
-
         const modalClose = document.getElementById('modalClose');
         if (modalClose) modalClose.setAttribute('aria-label', t('close'));
         setIconButtonTitle('terminalExpand', t('expand'));
 
-        const footerLinks = t('footerLinks');
-        text('footerLinkReports', footerLinks[0]);
-        text('footerLinkClassroom', footerLinks[1]);
-        text('footerLinkNewsletter', footerLinks[2]);
-        text('footerLinkGuide', footerLinks[3]);
-        text('footerTerms', t('footerTerms'));
-        text('footerChangelog', t('footerChangelog'));
-        text('footerCopyright', t('footerCopyright'));
         text('distributionFootnoteModal', t('distributionFootnote'));
       }
 `;

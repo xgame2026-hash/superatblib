@@ -70,7 +70,7 @@ assert.ok(
   'shell module should export modal shell'
 );
 assert.ok(shellModuleSource.includes('<header class="topbar">'), 'shell module should include topbar markup');
-assert.ok(shellModuleSource.includes('<footer class="app-footer">'), 'shell module should include footer markup');
+assert.ok(!shellModuleSource.includes('<footer class="app-footer">'), 'shell module should not include footer markup');
 assert.ok(shellModuleSource.includes('<div id="modal" class="overlay"'), 'shell module should include modal markup');
 assert.ok(!shellModuleSource.includes('const consoleController = createDashboardConsoleController({'), 'shell module should not touch runtime wiring');
 assert.ok(!/\n\s*function\s+\w+/m.test(shellModuleSource), 'shell module should not define functions directly');

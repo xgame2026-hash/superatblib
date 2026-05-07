@@ -21,7 +21,6 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
                   <div class="settings-menu">
                     <button id="settingsSectionGeneral" class="ghost-button" type="button">General</button>
                     <button id="settingsSectionExchanges" class="ghost-button" type="button">Exchanges</button>
-                    <button id="settingsSectionMorpho" class="ghost-button" type="button">Morpho</button>
                   </div>
                 </div>
               </article>
@@ -147,45 +146,6 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
                     <label class="field">
                       <span id="settingsGateSecretKeyLabel" class="field-label">Gate Secret Key</span>
                       <input id="settingsGateSecretKey" class="settings-input" type="text" placeholder="secret key" />
-                    </label>
-                  </div>
-
-                  <div id="settingsMorphoFields" class="settings-form-grid" style="display:none;">
-                    <label class="field full">
-                      <span id="settingsMorphoEthereumRpcLabel" class="field-label">Morpho Ethereum RPC</span>
-                      <input id="settingsMorphoEthereumRpc" class="settings-input" type="text" placeholder="https://..." />
-                    </label>
-
-                    <label class="field full">
-                      <span id="settingsMorphoBaseRpcLabel" class="field-label">Morpho Base RPC</span>
-                      <input id="settingsMorphoBaseRpc" class="settings-input" type="text" placeholder="https://..." />
-                    </label>
-
-                    <label class="field full">
-                      <span id="settingsMorphoPrivateRelayLabel" class="field-label">Morpho private relay</span>
-                      <input id="settingsMorphoPrivateRelay" class="settings-input" type="text" placeholder="https://..." />
-                    </label>
-
-                    <label class="field full">
-                      <span id="settingsMorphoMarketIdLabel" class="field-label">Morpho marketId</span>
-                      <input id="settingsMorphoMarketId" class="settings-input" type="text" placeholder="0x... optional" />
-                    </label>
-
-                    <label class="field">
-                      <span id="settingsMorphoSignalLabel" class="field-label">Morpho signal</span>
-                      <span class="settings-select-wrap">
-                        <select id="settingsMorphoSignal">
-                          <option value="">All signals</option>
-                          <option value="liquidatable">Liquidatable</option>
-                          <option value="near-liquidation">Near liquidation</option>
-                          <option value="risky">Low HF</option>
-                        </select>
-                      </span>
-                    </label>
-
-                    <label class="field">
-                      <span id="settingsMorphoHfMaxLabel" class="field-label">Max HF</span>
-                      <input id="settingsMorphoHfMax" class="settings-input" type="text" inputmode="decimal" />
                     </label>
                   </div>
 
