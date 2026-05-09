@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { IncomingMessage, ServerResponse } from "node:http";
+import { request as httpsRequest } from "node:https";
 
 type TextResponder = (
   res: ServerResponse,
@@ -23,6 +24,12 @@ type LicenseCheckPayload = {
   valid?: unknown;
   status?: unknown;
   error?: unknown;
+};
+
+type LicenseCheckResponse = {
+  ok: boolean;
+  status: number;
+  payload: LicenseCheckPayload;
 };
 
 type DashboardAuthResult = {
@@ -138,29 +145,15 @@ async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?
   const transportErrors: string[] = [];
 
   for (const url of licenseCheckUrls()) {
-    let response: Response;
+    let response: LicenseCheckResponse;
     try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": `SuperARB/${packageVersion()} license-check`,
-        },
-        body: JSON.stringify({ code }),
-        signal: AbortSignal.timeout(10000),
-      });
+      response = await postLicenseCheck(url, code);
     } catch (error) {
       transportErrors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
 
-    let payload: LicenseCheckPayload;
-    try {
-      payload = (await response.json()) as LicenseCheckPayload;
-    } catch {
-      transportErrors.push(`${url}: invalid response`);
-      continue;
-    }
+    const { payload } = response;
 
     if (!response.ok) {
       return {
@@ -189,6 +182,81 @@ async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?
     valid: false,
     error: `Authorization service unavailable. Tried ${transportErrors.join("; ")}`,
   };
+}
+
+async function postLicenseCheck(url: string, code: string): Promise<LicenseCheckResponse> {
+  try {
+    return await postLicenseCheckWithFetch(url, code);
+  } catch (fetchError) {
+    try {
+      return await postLicenseCheckWithHttps(url, code);
+    } catch (httpsError) {
+      const left = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      const right = httpsError instanceof Error ? httpsError.message : String(httpsError);
+      throw new Error(`fetch failed (${left}); https fallback failed (${right})`);
+    }
+  }
+}
+
+async function postLicenseCheckWithFetch(url: string, code: string): Promise<LicenseCheckResponse> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": `SuperARB/${packageVersion()} license-check`,
+    },
+    body: JSON.stringify({ code }),
+    signal: AbortSignal.timeout(10000),
+  });
+  let payload: LicenseCheckPayload;
+  try {
+    payload = (await response.json()) as LicenseCheckPayload;
+  } catch {
+    throw new Error("invalid response");
+  }
+  return { ok: response.ok, status: response.status, payload };
+}
+
+function postLicenseCheckWithHttps(url: string, code: string): Promise<LicenseCheckResponse> {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ code });
+    const target = new URL(url);
+    const req = httpsRequest(
+      target,
+      {
+        method: "POST",
+        timeout: 10000,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          "User-Agent": `SuperARB/${packageVersion()} license-check`,
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on("end", () => {
+          try {
+            const raw = Buffer.concat(chunks).toString("utf8");
+            const payload = JSON.parse(raw) as LicenseCheckPayload;
+            resolve({
+              ok: Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 300),
+              status: res.statusCode ?? 0,
+              payload,
+            });
+          } catch {
+            reject(new Error("invalid response"));
+          }
+        });
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy(new Error("request timeout"));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
 }
 
 function parseSessionCode(req: IncomingMessage): string | null {
