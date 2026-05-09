@@ -11,7 +11,10 @@ type TextResponder = (
 ) => void;
 
 const COOKIE_NAME = "dashboard_auth";
-const DEFAULT_LICENSE_CHECK_URL = "https://www.supermtnode.io/api/license/check";
+const DEFAULT_LICENSE_CHECK_URLS = [
+  "https://www.supermtnode.io/api/license/check",
+  "https://supermtnode.io/api/license/check",
+];
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PROCESS_SESSION_SECRET = randomBytes(32).toString("base64url");
 
@@ -35,8 +38,12 @@ function sessionSecret(): string {
   return `${baseSecret}:${PROCESS_SESSION_SECRET}`;
 }
 
-function licenseCheckUrl(): string {
-  return (process.env.DASHBOARD_LICENSE_CHECK_URL ?? DEFAULT_LICENSE_CHECK_URL).trim();
+function licenseCheckUrls(): string[] {
+  const configured = process.env.DASHBOARD_LICENSE_CHECK_URL?.trim();
+  const urls = configured
+    ? configured.split(",").map((url) => url.trim()).filter(Boolean)
+    : DEFAULT_LICENSE_CHECK_URLS;
+  return [...new Set(urls)];
 }
 
 function packageVersion(): string {
@@ -128,52 +135,59 @@ async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?
     return { valid: false, error: "Authorization code is required." };
   }
 
-  let response: Response;
-  try {
-    response = await fetch(licenseCheckUrl(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ code }),
-      signal: AbortSignal.timeout(10000),
-    });
-  } catch (error) {
-    return {
-      valid: false,
-      error: `Authorization service unavailable: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    };
-  }
+  const transportErrors: string[] = [];
 
-  let payload: LicenseCheckPayload;
-  try {
-    payload = (await response.json()) as LicenseCheckPayload;
-  } catch {
-    return { valid: false, error: "Authorization service returned an invalid response." };
-  }
+  for (const url of licenseCheckUrls()) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": `SuperARB/${packageVersion()} license-check`,
+        },
+        body: JSON.stringify({ code }),
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch (error) {
+      transportErrors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
 
-  if (!response.ok) {
+    let payload: LicenseCheckPayload;
+    try {
+      payload = (await response.json()) as LicenseCheckPayload;
+    } catch {
+      transportErrors.push(`${url}: invalid response`);
+      continue;
+    }
+
+    if (!response.ok) {
+      return {
+        valid: false,
+        error:
+          typeof payload.error === "string" && payload.error.trim()
+            ? payload.error.trim()
+            : `Authorization service rejected the request (${response.status}).`,
+      };
+    }
+
+    if (payload.ok === true && payload.valid === true && payload.status === "active") {
+      return { valid: true };
+    }
+
     return {
       valid: false,
       error:
         typeof payload.error === "string" && payload.error.trim()
           ? payload.error.trim()
-          : `Authorization service rejected the request (${response.status}).`,
+          : "Authorization code is not active.",
     };
-  }
-
-  if (payload.ok === true && payload.valid === true && payload.status === "active") {
-    return { valid: true };
   }
 
   return {
     valid: false,
-    error:
-      typeof payload.error === "string" && payload.error.trim()
-        ? payload.error.trim()
-        : "Authorization code is not active.",
+    error: `Authorization service unavailable. Tried ${transportErrors.join("; ")}`,
   };
 }
 
