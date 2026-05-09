@@ -13,6 +13,7 @@ type TextResponder = (
 
 const COOKIE_NAME = "dashboard_auth";
 const DEFAULT_LICENSE_CHECK_URLS = [
+  "https://superarb.ai/api/license/check",
   "https://www.supermtnode.io/api/license/check",
   "https://supermtnode.io/api/license/check",
 ];
