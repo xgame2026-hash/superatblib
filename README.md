@@ -117,6 +117,8 @@ npm install
 npm run dashboard
 ```
 
+详细变更记录见 [升级日志](docs/upgrade-log.md)。
+
 ## 安全建议
 
 - 不要提交 `.env` 文件。

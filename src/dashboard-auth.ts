@@ -531,31 +531,38 @@ function dashboardAuthPage(error: string): string {
         const form = document.getElementById("authForm");
         const codeInput = document.getElementById("code");
         const rememberInput = document.getElementById("rememberCode");
-        const status = document.getElementById("authStatus")?.querySelector("strong");
-        let savedCode = "";
-        try {
-          savedCode = localStorage.getItem(storageKey) || "";
-        } catch {
-          savedCode = "";
-        }
+        const authStatus = document.getElementById("authStatus");
+        const status = authStatus?.querySelector("strong");
+        if (!form || !codeInput || !rememberInput) return;
+
+        const readSavedCode = () => {
+          try {
+            return localStorage.getItem(storageKey) || "";
+          } catch {
+            return "";
+          }
+        };
+        const writeSavedCode = (code) => {
+          try {
+            if (code) {
+              localStorage.setItem(storageKey, code);
+            } else {
+              localStorage.removeItem(storageKey);
+            }
+          } catch {}
+        };
+
+        const savedCode = readSavedCode();
         if (savedCode) {
           codeInput.value = savedCode;
           rememberInput.checked = true;
-          if (status && !document.getElementById("authStatus").dataset.error) {
+          if (status && !authStatus?.dataset.error) {
             status.textContent = "已加载保存的授权码";
           }
         }
         form.addEventListener("submit", () => {
           const code = codeInput.value.trim();
-          if (rememberInput.checked && code) {
-            try {
-              localStorage.setItem(storageKey, code);
-            } catch {}
-          } else {
-            try {
-              localStorage.removeItem(storageKey);
-            } catch {}
-          }
+          writeSavedCode(rememberInput.checked ? code : "");
           if (status) status.textContent = "正在验证授权码";
         });
       })();
