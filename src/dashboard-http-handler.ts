@@ -66,6 +66,7 @@ export type DashboardApiHandlerDeps = {
     force: boolean;
   }) => Promise<unknown>;
   fetchQuickNodeUsage: () => Promise<unknown>;
+  fetchUserRpcUsage: () => Promise<unknown>;
   fetchTxGraph: (payload: {
     txHash: string | null;
     chain: string | null;
@@ -127,6 +128,7 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
     fetchMorphoBlueEthereumDashboardSnapshot,
     fetchMorphoBlueBaseDashboardSnapshot,
     fetchQuickNodeUsage,
+    fetchUserRpcUsage,
     fetchTxGraph,
     json,
     liveStatePatchForResult,
@@ -305,6 +307,11 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
 
     if (url.pathname === "/api/quicknode/usage") {
       json(res, 200, await fetchQuickNodeUsage());
+      return;
+    }
+
+    if (url.pathname === "/api/rpc/usage") {
+      json(res, 200, await fetchUserRpcUsage());
       return;
     }
 
@@ -768,20 +775,23 @@ export function serveDashboardStaticAsset(
     return true;
   }
 
-  if (
-    !pathname.startsWith("/img/") &&
-    !pathname.startsWith("/cryptoimg/") &&
-    !pathname.startsWith("/font/")
-  ) {
+	  if (
+	    !pathname.startsWith("/img/") &&
+	    !pathname.startsWith("/chain/") &&
+	    !pathname.startsWith("/cryptoimg/") &&
+	    !pathname.startsWith("/font/")
+	  ) {
     return false;
   }
 
-  const assetName = path.basename(pathname);
-  const assetDir = pathname.startsWith("/cryptoimg/")
-    ? "cryptoimg"
-    : pathname.startsWith("/font/")
-      ? "font"
-      : "img";
+	  const assetName = path.basename(pathname);
+	  const assetDir = pathname.startsWith("/cryptoimg/")
+	    ? "cryptoimg"
+	    : pathname.startsWith("/chain/")
+	      ? "chain"
+	    : pathname.startsWith("/font/")
+	      ? "font"
+	      : "img";
   const assetPath = path.resolve(cwd, "src", assetDir, assetName);
   if (!existsSync(assetPath)) {
     deps.json(res, 404, { error: "Not found" });

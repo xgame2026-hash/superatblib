@@ -19,6 +19,8 @@ const DEFAULT_LICENSE_CHECK_URLS = [
 ];
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PROCESS_SESSION_SECRET = randomBytes(32).toString("base64url");
+const AUTH_CODE_EXAMPLE = "SMT-XXXX-XXXX-XXXX-XXXX";
+const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
 
 type LicenseCheckPayload = {
   ok?: unknown;
@@ -138,9 +140,21 @@ function clearSessionCookie(): string {
   return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
+function normalizeAuthorizationCode(code: string): string {
+  return code.trim().toUpperCase();
+}
+
+function isAuthorizationCodeFormatValid(code: string): boolean {
+  return AUTH_CODE_PATTERN.test(normalizeAuthorizationCode(code));
+}
+
 async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?: string }> {
-  if (!code) {
+  const normalizedCode = normalizeAuthorizationCode(code);
+  if (!normalizedCode) {
     return { valid: false, error: "Authorization code is required." };
+  }
+  if (!isAuthorizationCodeFormatValid(normalizedCode)) {
+    return { valid: false, error: "Authorization code format is invalid." };
   }
 
   const transportErrors: string[] = [];
@@ -148,7 +162,7 @@ async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?
   for (const url of licenseCheckUrls()) {
     let response: LicenseCheckResponse;
     try {
-      response = await postLicenseCheck(url, code);
+      response = await postLicenseCheck(url, normalizedCode);
     } catch (error) {
       transportErrors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
@@ -162,6 +176,8 @@ async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?
         error:
           typeof payload.error === "string" && payload.error.trim()
             ? payload.error.trim()
+            : response.status === 404
+              ? "Authorization code not found."
             : `Authorization service rejected the request (${response.status}).`,
       };
     }
@@ -172,10 +188,7 @@ async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?
 
     return {
       valid: false,
-      error:
-        typeof payload.error === "string" && payload.error.trim()
-          ? payload.error.trim()
-          : "Authorization code is not active.",
+      error: inactiveAuthorizationError(payload),
     };
   }
 
@@ -183,6 +196,23 @@ async function verifyLicenseCode(code: string): Promise<{ valid: boolean; error?
     valid: false,
     error: `Authorization service unavailable. Tried ${transportErrors.join("; ")}`,
   };
+}
+
+function inactiveAuthorizationError(payload: LicenseCheckPayload): string {
+  if (typeof payload.error === "string" && payload.error.trim()) {
+    return payload.error.trim();
+  }
+  if (typeof payload.status === "string" && payload.status.trim()) {
+    const status = payload.status.trim().toLowerCase();
+    if (status === "missing" || status === "not_found" || status === "not-found") {
+      return "Authorization code not found.";
+    }
+    if (status === "expired") return "Authorization code expired.";
+    if (status === "inactive" || status === "revoked" || status === "disabled") {
+      return "Authorization code is not active.";
+    }
+  }
+  return "Authorization code is not active.";
 }
 
 async function postLicenseCheck(url: string, code: string): Promise<LicenseCheckResponse> {
@@ -328,7 +358,7 @@ export async function handleDashboardAuthRoute(
   }
 
   const body = await deps.readBody(req);
-  const code = new URLSearchParams(body).get("code")?.trim() ?? "";
+  const code = normalizeAuthorizationCode(new URLSearchParams(body).get("code") ?? "");
   const license = await verifyLicenseCode(code);
   if (!license.valid) {
     serveDashboardAuthPage(res, deps.text, license.error ?? "Authorization code is invalid.");
@@ -430,6 +460,7 @@ function dashboardAuthPage(error: string): string {
         font-size: 24px;
         line-height: 1.2;
         letter-spacing: 0;
+        text-align: center;
       }
       label {
         display: block;
@@ -441,7 +472,7 @@ function dashboardAuthPage(error: string): string {
       .auth-status {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
         gap: 12px;
         min-height: 28px;
         margin: 0 0 10px;
@@ -449,11 +480,14 @@ function dashboardAuthPage(error: string): string {
         font-size: 13px;
       }
       .auth-status strong {
-        color: ${error ? "var(--red)" : "var(--muted)"};
+        color: var(--text);
         font-size: 13px;
         font-weight: 700;
         line-height: 1.35;
-        text-align: right;
+        text-align: left;
+      }
+      .auth-status.is-error strong {
+        color: var(--red);
       }
       input {
         width: 100%;
@@ -510,14 +544,21 @@ function dashboardAuthPage(error: string): string {
         <img src="/img/supermini.png" alt="SuperARB" />
         <span class="auth-version">${version}</span>
       </div>
-      <h1>需要授权</h1>
+      <h1>授权码登录</h1>
       <form id="authForm" method="post" action="/auth">
-        <div class="auth-status" id="authStatus" data-error="${hasError ? "1" : ""}">
-          <span>状态提示</span>
+        <div class="auth-status${hasError ? " is-error" : ""}" id="authStatus" data-error="${hasError ? "1" : ""}">
           <strong>${escapedStatusMessage}</strong>
         </div>
-        <label for="code">授权码</label>
-        <input id="code" name="code" type="password" autocomplete="current-password" autofocus />
+        <input
+          id="code"
+          name="code"
+          type="password"
+          autocomplete="current-password"
+          placeholder="${AUTH_CODE_EXAMPLE}"
+          maxlength="23"
+          spellcheck="false"
+          autofocus
+        />
         <label class="remember-row" for="rememberCode">
           <input id="rememberCode" name="rememberCode" type="checkbox" />
           <span>保存授权码</span>
@@ -528,6 +569,8 @@ function dashboardAuthPage(error: string): string {
     <script>
       (() => {
         const storageKey = "superarb-auth-code";
+        const codePattern = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
+        const invalidFormatMessage = "请输入正确的授权码";
         const form = document.getElementById("authForm");
         const codeInput = document.getElementById("code");
         const rememberInput = document.getElementById("rememberCode");
@@ -554,15 +597,30 @@ function dashboardAuthPage(error: string): string {
 
         const savedCode = readSavedCode();
         if (savedCode) {
-          codeInput.value = savedCode;
+          codeInput.value = savedCode.trim().toUpperCase();
           rememberInput.checked = true;
           if (status && !authStatus?.dataset.error) {
             status.textContent = "已加载保存的授权码";
           }
         }
-        form.addEventListener("submit", () => {
-          const code = codeInput.value.trim();
+        form.addEventListener("submit", (event) => {
+          const code = codeInput.value.trim().toUpperCase();
+          if (!code) {
+            event.preventDefault();
+            authStatus?.classList.add("is-error");
+            if (status) status.textContent = "请输入授权码";
+            return;
+          }
+          if (!codePattern.test(code)) {
+            event.preventDefault();
+            writeSavedCode("");
+            authStatus?.classList.add("is-error");
+            if (status) status.textContent = invalidFormatMessage;
+            return;
+          }
+          codeInput.value = code;
           writeSavedCode(rememberInput.checked ? code : "");
+          authStatus?.classList.remove("is-error");
           if (status) status.textContent = "正在验证授权码";
         });
       })();
@@ -576,11 +634,27 @@ function translateAuthStatus(error: string): string {
   const normalized = error.toLowerCase();
   if (error === "Authorization required.") return "请输入授权码";
   if (error === "Authorization code is required.") return "请输入授权码";
-  if (error === "Authorization code is invalid.") return "授权码无效";
-  if (error === "Authorization code is not active.") return "授权码未激活";
-  if (normalized.includes("not active")) return "授权码未激活";
-  if (normalized.includes("expired")) return "授权码已过期";
-  if (normalized.includes("invalid")) return "授权码无效";
+  if (error === "Authorization code format is invalid.") {
+    return "请输入正确的授权码";
+  }
+  if (error === "Authorization code not found.") return "授权码不存在";
+  if (error === "Authorization code is invalid.") {
+    return "请输入正确的授权码";
+  }
+  if (error === "Authorization code is not active.") return "授权码已失效";
+  if (error === "Authorization code expired.") return "授权码已失效";
+  if (normalized.includes("not found") || normalized.includes("not exist")) {
+    return "授权码不存在";
+  }
+  if (
+    normalized.includes("not active") ||
+    normalized.includes("expired") ||
+    normalized.includes("revoked") ||
+    normalized.includes("disabled")
+  ) {
+    return "授权码已失效";
+  }
+  if (normalized.includes("invalid")) return "请输入正确的授权码";
   if (normalized.includes("unavailable")) return "授权服务暂时不可用，请稍后重试";
   if (normalized.includes("rejected")) return "授权服务拒绝了本次请求";
   return error;

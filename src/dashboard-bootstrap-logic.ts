@@ -362,7 +362,7 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
           }).catch(function () {});
         }, 15000);
         setInterval(function () {
-          refreshQuicknodeUsage();
+          refreshRpcUsage();
         }, 60000);
       }
 `;

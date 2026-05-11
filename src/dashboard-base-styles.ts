@@ -136,8 +136,8 @@ export const DASHBOARD_BASE_STYLES = String.raw`
       }
 
       .nav-icon {
-        width: 22px;
-        height: 22px;
+        width: 26px;
+        height: 26px;
         opacity: 0.68;
         object-fit: contain;
         filter: brightness(0) saturate(100%) invert(84%) sepia(6%) saturate(201%) hue-rotate(183deg) brightness(85%) contrast(86%);
@@ -2999,7 +2999,8 @@ ${DASHBOARD_TXGRAPH_STYLES}
       .app-footer {
         position: relative;
         z-index: 18;
-        margin-top: 18px;
+        flex: 0 0 auto;
+        margin-top: auto;
         margin-right: -18px;
         margin-bottom: -18px;
         margin-left: -18px;

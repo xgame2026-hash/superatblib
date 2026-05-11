@@ -33,6 +33,7 @@ expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageMorpho"', 'page assemb
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageConsole"', 'page assembly console');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageArbitrage"', 'page assembly arbitrage');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageTxgraph"', 'page assembly txgraph');
+expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageStrategyPlaza"', 'page assembly strategy plaza');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageSettings"', 'page assembly settings');
 expectExcludes(DASHBOARD_PAGE_ASSEMBLY, '<script>', 'page assembly');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageOverview"', '<section id="pageFlashloan"', 'page assembly order 1');
@@ -43,13 +44,16 @@ expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageConsole"', '<section id="
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageFlashloanConsole"', '<section id="pageLab"', 'page assembly order 6');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageLab"', '<section id="pageArbitrage"', 'page assembly order 6b');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageArbitrage"', '<section id="pageTxgraph"', 'page assembly order 7');
-expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageTxgraph"', '<section id="pageSettings"', 'page assembly order 8');
+expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageTxgraph"', '<section id="pageStrategyPlaza"', 'page assembly order 8');
+expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageStrategyPlaza"', '<section id="pageSettings"', 'page assembly order 9');
 
 expectIncludes(DASHBOARD_BODY_ASSEMBLY, '<div class="app-shell">', 'body assembly shell');
+expectIncludes(DASHBOARD_BODY_ASSEMBLY, '<footer class="app-footer"', 'body assembly footer');
 expectIncludes(DASHBOARD_BODY_ASSEMBLY, '<div id="modal" class="overlay"', 'body assembly modal');
 expectIncludes(DASHBOARD_BODY_ASSEMBLY, 'const consoleController = createDashboardConsoleController({', 'body assembly runtime');
 expectOrder(DASHBOARD_BODY_ASSEMBLY, '<div class="app-shell">', '<section id="pageOverview"', 'body assembly shell before pages');
-expectOrder(DASHBOARD_BODY_ASSEMBLY, '<section id="pageSettings"', '<div id="modal" class="overlay"', 'body assembly pages before modal');
+expectOrder(DASHBOARD_BODY_ASSEMBLY, '<section id="pageSettings"', '<footer class="app-footer"', 'body assembly pages before footer');
+expectOrder(DASHBOARD_BODY_ASSEMBLY, '<footer class="app-footer"', '<div id="modal" class="overlay"', 'body assembly footer before modal');
 expectOrder(DASHBOARD_BODY_ASSEMBLY, '<div id="modal" class="overlay"', 'const consoleController = createDashboardConsoleController({', 'body assembly modal before runtime');
 
 expectIncludes(DASHBOARD_RUNTIME_CORE_ASSEMBLY, '<script src="/vendor/chart.js"></script>', 'runtime core vendor');

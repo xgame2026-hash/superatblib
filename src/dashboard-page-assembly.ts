@@ -7,6 +7,7 @@ import { DASHBOARD_LIQUIDATION_PAGE } from './dashboard-liquidation-module.js';
 import { DASHBOARD_MORPHO_PAGE } from './dashboard-morpho-module.js';
 import { DASHBOARD_OVERVIEW_PAGE } from './dashboard-overview-module.js';
 import { DASHBOARD_SETTINGS_PAGE } from './dashboard-settings-module.js';
+import { DASHBOARD_STRATEGY_PLAZA_PAGE } from './dashboard-strategy-plaza-module.js';
 import { DASHBOARD_TXGRAPH_PAGE } from './dashboard-txgraph-module.js';
 
 // Visual page order matches sidebar navigation order.
@@ -20,5 +21,6 @@ ${DASHBOARD_FLASHLOAN_CONSOLE_PAGE}
 ${DASHBOARD_LAB_PAGE}
 ${DASHBOARD_ARBITRAGE_PAGE}
 ${DASHBOARD_TXGRAPH_PAGE}
+${DASHBOARD_STRATEGY_PLAZA_PAGE}
 ${DASHBOARD_SETTINGS_PAGE}
 `;

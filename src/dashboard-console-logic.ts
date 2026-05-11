@@ -517,6 +517,112 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
           node.textContent = String(state.terminal || '').replace(/\n+$/g, '');
         }
 
+        function walletChainRows() {
+          const wallets = state.data.wallet && Array.isArray(state.data.wallet.wallets)
+            ? state.data.wallet.wallets
+            : [];
+          const rpcUsage = state.data.rpcUsage && state.data.rpcUsage.metrics
+            ? state.data.rpcUsage.metrics
+            : {};
+	          return [
+	            { key: 'ethereum', label: 'ETH', icon: '/chain/eth.svg' },
+	            { key: 'bnb', label: 'BNB', icon: '/chain/bnb.svg' },
+	            { key: 'base', label: 'Base', icon: '/chain/base.svg' },
+	            { key: 'arbitrum', label: 'ARB', icon: '/chain/arb.svg' },
+	            { key: 'polygon', label: 'Polygon', icon: '/chain/Polygon.svg' }
+	          ].map(function (chain) {
+	            const wallet = wallets.find(function (item) { return item && item.chain === chain.key; }) || {};
+	            const rpcMetric = rpcUsage[chain.key] || null;
+	            return {
+	              key: chain.key,
+	              label: chain.label,
+	              icon: chain.icon,
+	              ready: wallet.ready === true,
+	              reason: wallet.reason ? String(wallet.reason) : '',
+	              gas: wallet.nativeBalanceDisplay && wallet.nativeSymbol
+	                ? formatFixedAmount(wallet.nativeBalanceDisplay, 4) + ' ' + String(wallet.nativeSymbol)
+	                : '--',
+	              usdc: wallet.usdcBalanceDisplay ? String(wallet.usdcBalanceDisplay) + ' USDC' : '--',
+	              usdt: wallet.usdtBalanceDisplay ? String(wallet.usdtBalanceDisplay) + ' USDT' : '--',
+	              rpcCalls: formatRpcUsageMetric(rpcMetric),
+	              rpcConfigured: rpcMetric ? rpcMetric.rpcConfigured !== false : false
+	            };
+	          });
+	        }
+
+	        function formatFixedAmount(value, fractionDigits) {
+	          const numeric = Number(value);
+	          if (!Number.isFinite(numeric)) return '--';
+	          return new Intl.NumberFormat('en-US', {
+	            minimumFractionDigits: fractionDigits,
+	            maximumFractionDigits: fractionDigits
+	          }).format(numeric);
+	        }
+
+	        function formatRpcUsageMetric(metric) {
+	          if (!metric || typeof metric.requestCount !== 'number') return '--';
+	          const used = formatInteger(metric.requestCount);
+	          return typeof metric.requestLimit === 'number' && metric.requestLimit > 0
+	            ? used + ' / ' + formatInteger(metric.requestLimit)
+	            : used;
+	        }
+
+	        function renderWalletAssetsTable() {
+	          text('consoleWalletAssetsTitle', state.language === 'zh' ? '钱包资产' : 'Wallet Assets');
+	          text(
+	            'consoleWalletRefresh',
+	            state.language === 'zh'
+	              ? (state.loading.walletAssets ? '刷新中...' : '刷新')
+	              : (state.loading.walletAssets ? 'Refreshing...' : 'Refresh')
+	          );
+	          const refreshButton = document.getElementById('consoleWalletRefresh');
+	          if (refreshButton) refreshButton.disabled = !!state.loading.walletAssets;
+	          text('consoleWalletChainHeader', state.language === 'zh' ? '链' : 'Chain');
+	          text('consoleWalletGasHeader', state.language === 'zh' ? 'Gas 余额' : 'Gas');
+	          text('consoleWalletRpcHeader', state.language === 'zh' ? 'RPC 用量' : 'RPC Usage');
+
+          const rows = walletChainRows();
+          html(
+            'consoleWalletBalanceRows',
+            rows.map(function (row) {
+              const mutedClass = row.ready ? '' : ' class="is-muted"';
+	              const rpcMutedClass = row.rpcConfigured ? '' : ' class="is-muted"';
+	              const title = !row.ready && row.reason ? ' title="' + escapeHtml(row.reason) + '"' : '';
+	              return '<tr' + title + '>' +
+	                '<td class="console-wallet-chain"><img class="console-wallet-chain-icon" src="' + escapeHtml(row.icon) + '" alt="' + escapeHtml(row.label) + '" title="' + escapeHtml(row.label) + '" /></td>' +
+	                '<td' + mutedClass + '>' + escapeHtml(row.gas) + '</td>' +
+                '<td' + mutedClass + '>' + escapeHtml(row.usdc) + '</td>' +
+                '<td' + mutedClass + '>' + escapeHtml(row.usdt) + '</td>' +
+                '<td' + rpcMutedClass + '>' + escapeHtml(row.rpcCalls) + '</td>' +
+                '</tr>';
+            }).join('')
+          );
+        }
+
+        function walletStartupLines(payload) {
+          const wallets = payload && Array.isArray(payload.wallets) ? payload.wallets : [];
+          if (!wallets.length) return '$ 钱包资产读取: --\n';
+          return wallets.map(function (wallet) {
+            const chainName = wallet && wallet.chainName ? String(wallet.chainName) : String(wallet && wallet.chain ? wallet.chain : '--');
+            if (!wallet || wallet.ready !== true) {
+              return '$ ' + chainName + ' 钱包读取失败: ' + String(wallet && wallet.reason ? wallet.reason : '--') + '\n';
+            }
+            return '$ ' +
+              chainName +
+              ' 钱包 ' +
+              shortAddress(String(wallet.address || '--')) +
+              ' | Gas ' +
+              String(wallet.nativeBalanceDisplay || '--') +
+              ' ' +
+              String(wallet.nativeSymbol || '') +
+              ' | USDC ' +
+              String(wallet.usdcBalanceDisplay || '--') +
+              ' | USDT ' +
+              String(wallet.usdtBalanceDisplay || '--') +
+              '\n';
+          }).join('');
+        }
+
         function appendTerminal(chunk) {
           state.terminal += chunk;
           syncTerminalOutput();
@@ -571,7 +677,6 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
         function renderConsole() {
           const wallets = state.data.wallet && state.data.wallet.wallets ? state.data.wallet.wallets : [];
           const selectedWallet = wallets.find(function (item) { return item.chain === state.form.chain; }) || {};
-          const quicknodeMetric = currentQuicknodeMetric();
           const historySummary = state.data.history && state.data.history.summary ? state.data.history.summary : {};
           const targets = deriveTargets();
           const consoleResult = state.hasConsoleRun ? state.lastResult : null;
@@ -697,15 +802,7 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                           source: priorityTarget.source
                         }
                       : null));
-          syncBalanceTicker(selectedWallet);
-          text('consoleRpcUsageLabel', state.language === 'zh' ? 'RPC 调用量' : 'RPC Calls');
-          if (quicknodeMetric && quicknodeMetric.status === 'ok' && typeof quicknodeMetric.requests24h === 'number') {
-            setAnimatedMetric('consoleRpcUsageValue', quicknodeMetric.requests24h, 0);
-          } else {
-            text('consoleRpcUsageValue', '--');
-            const rpcNode = document.getElementById('consoleRpcUsageValue');
-            if (rpcNode) delete rpcNode.dataset.metricValue;
-          }
+          renderWalletAssetsTable();
           text('consoleDecisionLabel', state.language === 'zh' ? '本轮首选目标' : 'Current Priority');
           text(
             'consoleDecisionValue',
@@ -1069,6 +1166,11 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                     '\n'
                   );
                   renderConsole();
+                } else if (event.type === 'wallet') {
+                  if (event.data) state.data.wallet = event.data;
+                  if (event.rpcUsage) state.data.rpcUsage = event.rpcUsage;
+                  appendTerminal(walletStartupLines(event.data));
+                  renderConsole();
                 } else if (event.type === 'stdout' || event.type === 'stderr') {
                   appendTerminalNormalized(event.data);
                 } else if (event.type === 'targets') {
@@ -1284,11 +1386,15 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
           if (actionMorphoReadOnlyButton) {
             actionMorphoReadOnlyButton.addEventListener('click', function () { void startMorphoReadOnlyAnalyze(); });
           }
-          const actionPauseButton = document.getElementById('actionPause');
-          if (actionPauseButton) {
-            actionPauseButton.addEventListener('click', function () { pauseAutoExecute(); });
-          }
-          [
+	          const actionPauseButton = document.getElementById('actionPause');
+	          if (actionPauseButton) {
+	            actionPauseButton.addEventListener('click', function () { pauseAutoExecute(); });
+	          }
+	          const consoleWalletRefresh = document.getElementById('consoleWalletRefresh');
+	          if (consoleWalletRefresh) {
+	            consoleWalletRefresh.addEventListener('click', function () { void refreshWalletAssets(); });
+	          }
+	          [
             ['consoleFilterAll', 'all'],
             ['consoleFilterLiquidatable', 'liquidatable'],
             ['consoleFilterRisky', 'risky'],

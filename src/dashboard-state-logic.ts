@@ -23,6 +23,7 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
           settings: null,
           marketDataIndexStatus: null,
           quicknodeUsage: null,
+          rpcUsage: null,
           strategy: null,
           morphoBlueMarkets: null,
           morphoBlueBaseMarkets: null,
@@ -31,14 +32,15 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
           eigenphiLatestLiquidation: null,
           eigenphiFlashloanOverview: null
         },
-        loading: {
-          morphoBlueMarkets: true,
-          morphoBlueBaseMarkets: true,
-          eigenphiOverview: true,
-          eigenphiLeaderboard: true,
-          eigenphiLatestLiquidation: true,
-          eigenphiFlashloanOverview: true
-        },
+	        loading: {
+	          morphoBlueMarkets: true,
+	          morphoBlueBaseMarkets: true,
+	          eigenphiOverview: true,
+	          eigenphiLeaderboard: true,
+	          eigenphiLatestLiquidation: true,
+	          eigenphiFlashloanOverview: true,
+	          walletAssets: false
+	        },
         latestLiquidation: {
           date: '',
           unit: localStorage.getItem('dashboard-latest-liquidation-unit') || 'usd',
@@ -152,7 +154,7 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         }
       };
 
-      const validPages = ['overview', 'flashloan', 'liquidation', 'morpho', 'console', 'flashloanConsole', 'lab', 'arbitrage', 'txgraph', 'settings'];
+      const validPages = ['overview', 'flashloan', 'liquidation', 'morpho', 'console', 'flashloanConsole', 'lab', 'arbitrage', 'txgraph', 'strategyPlaza', 'settings'];
 
       const SENSITIVE_SETTINGS_FIELD_IDS = [
         'settingsPrivateKey',

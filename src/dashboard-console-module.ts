@@ -14,9 +14,16 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         align-items: stretch;
       }
 
+      #pageConsole.page.active {
+        height: 100%;
+        min-height: 0;
+        align-content: stretch;
+      }
+
       .console-control {
         display: grid;
         gap: 12px;
+        align-content: start;
       }
 
       .quicknode-usage {
@@ -286,6 +293,41 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         height: 100%;
       }
 
+      #pageConsole .console-layout {
+        height: 100%;
+        min-height: 0;
+      }
+
+      #pageConsole .console-main {
+        height: 100%;
+        grid-template-rows: max-content minmax(260px, 1fr);
+      }
+
+      #pageConsole .console-main > .panel:first-child {
+        align-self: start;
+      }
+
+      #pageConsole .console-main > .panel:first-child .panel-inner {
+        height: auto;
+      }
+
+      #pageConsole .terminal-shell {
+        height: auto;
+        min-height: 260px;
+        max-height: none;
+      }
+
+      #pageConsole .console-side {
+        grid-template-rows: minmax(0, 1fr);
+        align-content: stretch;
+      }
+
+      #pageConsole .console-side > .panel {
+        height: 100%;
+        min-height: 0;
+        max-height: none;
+      }
+
       .console-runtime-strip {
         display: grid;
         grid-template-columns: minmax(0, 1.04fr) minmax(0, 1fr);
@@ -315,6 +357,105 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         font-weight: 400;
         color: #f3f6ff;
         word-break: break-word;
+      }
+
+      .console-wallet-assets {
+        display: grid;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.03);
+      }
+
+      .console-wallet-assets-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .console-wallet-assets-title {
+        font-size: 13px;
+        line-height: 1.2;
+        font-weight: 700;
+        color: #f3f6ff;
+      }
+
+      .console-wallet-assets-meta {
+        min-height: 30px;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px;
+        padding: 0 12px;
+        background: rgba(255,255,255,0.04);
+        color: #cfd5df;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        font-size: 12px;
+        line-height: 1;
+        font-weight: 800;
+        transition: border-color 140ms ease, background 140ms ease, color 140ms ease, opacity 140ms ease;
+      }
+
+      .console-wallet-assets-meta:hover {
+        border-color: rgba(105, 240, 174, 0.5);
+        color: #69f0ae;
+      }
+
+      .console-wallet-assets-meta:disabled {
+        cursor: wait;
+        opacity: 0.68;
+      }
+
+      .console-wallet-assets-scroll {
+        overflow-x: auto;
+      }
+
+      .console-wallet-assets-table {
+        width: 100%;
+        min-width: 680px;
+        border-collapse: collapse;
+      }
+
+      .console-wallet-assets-table th,
+      .console-wallet-assets-table td {
+        padding: 8px 10px;
+        border-top: 1px solid rgba(255,255,255,0.07);
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      .console-wallet-assets-table th {
+        font-size: 10.5px;
+        line-height: 1.2;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8e94a4;
+        font-weight: 700;
+      }
+
+      .console-wallet-assets-table td {
+        font-size: 12px;
+        line-height: 1.2;
+        color: #f3f6ff;
+      }
+
+      .console-wallet-assets-table td.is-muted {
+        color: #8e94a4;
+      }
+
+      .console-wallet-chain {
+        width: 58px;
+      }
+
+      .console-wallet-chain-icon {
+        width: 28px;
+        height: 28px;
+        display: block;
+        object-fit: contain;
       }
 
       .console-decision-card {
@@ -414,14 +555,35 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         object-fit: contain;
       }
 
-      @media (max-width: 860px) {
-        .console-ops-grid {
-          grid-template-columns: 1fr;
+	      @media (max-width: 860px) {
+	        .console-ops-grid {
+	          grid-template-columns: 1fr;
+	        }
+
+        #pageConsole .console-main {
+          height: auto;
+          grid-template-rows: max-content minmax(320px, 48vh);
         }
 
-        .console-ops-left .button-grid {
-          grid-template-columns: 1fr;
+        #pageConsole .terminal-shell {
+          height: auto;
+          min-height: 320px;
+          max-height: none;
         }
+
+        #pageConsole .console-side {
+          grid-template-rows: minmax(420px, 1fr);
+        }
+
+        #pageConsole .console-side > .panel {
+          height: auto;
+          min-height: 420px;
+          max-height: none;
+        }
+
+	        .console-ops-left .button-grid {
+	          grid-template-columns: 1fr;
+	        }
 
         .console-machine-shell {
           min-height: 118px;
@@ -927,14 +1089,26 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
               <div class="console-main">
                 <article class="panel">
                   <div class="panel-inner console-control">
-                    <div class="console-runtime-strip">
-                      <div class="console-runtime-metric">
-                        <div id="consoleUsdcLabel" class="console-runtime-label">USDC Balance</div>
-                        <div id="consoleUsdcValue" class="console-runtime-value">--</div>
+                    <div class="console-wallet-assets">
+                      <div class="console-wallet-assets-header">
+                        <div id="consoleWalletAssetsTitle" class="console-wallet-assets-title">Wallet Assets</div>
+	                        <button id="consoleWalletRefresh" class="console-wallet-assets-meta" type="button">刷新</button>
                       </div>
-                      <div class="console-runtime-metric">
-                        <div id="consoleRpcUsageLabel" class="console-runtime-label">RPC Calls</div>
-                        <div id="consoleRpcUsageValue" class="console-runtime-value">--</div>
+                      <div class="console-wallet-assets-scroll">
+                        <table class="console-wallet-assets-table">
+                          <thead>
+	                            <tr>
+	                              <th id="consoleWalletChainHeader">Chain</th>
+	                              <th id="consoleWalletGasHeader">Gas</th>
+	                              <th>USDC</th>
+	                              <th>USDT</th>
+	                              <th id="consoleWalletRpcHeader">RPC Calls</th>
+	                            </tr>
+	                          </thead>
+	                          <tbody id="consoleWalletBalanceRows">
+	                            <tr><td colspan="5">--</td></tr>
+	                          </tbody>
+                        </table>
                       </div>
                     </div>
                     <div class="console-decision-card">

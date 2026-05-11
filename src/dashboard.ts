@@ -240,6 +240,52 @@ type QuickNodeUsagePayload = {
   error?: string;
 };
 
+type DashboardWalletChainKey = ChainPreset["key"] | "base";
+
+type DashboardWalletChain = {
+  key: DashboardWalletChainKey;
+  chainId: number;
+  name: string;
+  defaultRpcEnv: string;
+  nativeSymbol: string;
+  preset?: ChainPreset;
+  tokenBalances?: Partial<
+    Record<"USDC" | "USDT", { asset: `0x${string}`; decimals: number; symbol: string }>
+  >;
+};
+
+type UserRpcUsageMetric = {
+  chain: DashboardWalletChainKey;
+  chainName: string;
+  rpcEnv: string;
+  rpcConfigured: boolean;
+  source: "supermtnode";
+  requestCount: number | null;
+  requestLimit: number | null;
+  remainingRequests: number | null;
+  endpointStatus?: string;
+  endpointSlug?: string;
+  lastUsedAt?: string;
+  status: "ok" | "missing_rpc" | "missing_credentials" | "unmatched" | "error";
+  message?: string;
+};
+
+type UserRpcUsagePayload = {
+  ok: boolean;
+  generatedAt: string;
+  source: "supermtnode";
+  metrics: Record<DashboardWalletChainKey, UserRpcUsageMetric>;
+  error?: string;
+};
+
+type ExecutionWalletSyncPayload = {
+  ok: boolean;
+  generatedAt: string;
+  source: "supermtnode";
+  count: number;
+  error?: string;
+};
+
 type TxGraphChainKey = "ethereum" | ChainPreset["key"];
 
 type TxGraphNode = {
@@ -297,12 +343,41 @@ const TOKEN_BALANCE_OVERRIDES: Partial<
   },
 };
 
+const BASE_TOKEN_BALANCES = {
+  USDC: {
+    asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    decimals: 6,
+    symbol: "USDC",
+  },
+  USDT: {
+    asset: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+    decimals: 6,
+    symbol: "USDT",
+  },
+} as const;
+
 let quickNodeUsageCache:
   | {
       expiresAt: number;
       cacheKey: string;
       payload: QuickNodeUsagePayload;
     }
+  | undefined;
+
+let superMtNodeUsageCache:
+  | {
+      expiresAt: number;
+      cacheKey: string;
+      payload: UserRpcUsagePayload;
+    }
+  | undefined;
+
+let superMtNodeAdminTokenCache:
+  {
+    expiresAt: number;
+    cacheKey: string;
+    token: string;
+  }
   | undefined;
 
 const DEFAULT_WALLET_SNAPSHOT_TTL_MS = 30_000;
@@ -406,6 +481,46 @@ function escapeHtmlText(value: string): string {
 
 function supportedChains(): ChainPreset[] {
   return Object.values(CHAIN_PRESETS).sort((a, b) => a.chainId - b.chainId);
+}
+
+function walletNativeSymbol(chain: ChainPreset["key"]): string {
+  return chain === "polygon" ? "POL" : chain === "bnb" ? "BNB" : "ETH";
+}
+
+function supportedWalletChains(): DashboardWalletChain[] {
+  const presetByKey = new Map(supportedChains().map((chain) => [chain.key, chain]));
+  const fromPreset = (chain: ChainPreset | undefined): DashboardWalletChain[] =>
+    chain
+      ? [
+          {
+            key: chain.key,
+            chainId: chain.chainId,
+            name: chain.name,
+            defaultRpcEnv: chain.defaultRpcEnv,
+            nativeSymbol: walletNativeSymbol(chain.key),
+            preset: chain,
+          },
+        ]
+      : [];
+
+  return [
+    ...fromPreset(presetByKey.get("ethereum")),
+    ...fromPreset(presetByKey.get("bnb")),
+    {
+      key: "base",
+      chainId: 8453,
+      name: "Base",
+      defaultRpcEnv: "BASE_RPC_URL",
+      nativeSymbol: "ETH",
+      tokenBalances: BASE_TOKEN_BALANCES,
+    },
+    ...fromPreset(presetByKey.get("arbitrum")),
+    ...fromPreset(presetByKey.get("polygon")),
+  ];
+}
+
+function walletChainForKey(key: string): DashboardWalletChain | undefined {
+  return supportedWalletChains().find((chain) => chain.key === key);
 }
 
 function supportedExecutionMarkets(): ExecutionMarketPreset[] {
@@ -774,6 +889,23 @@ async function streamAutoExecutionLoop(
   const minNetProfit =
     parseOptionalString(payload.minNetProfit) ??
     defaultExecutionMinNetProfit(chain, tuningMarket);
+  const startupWallets = await Promise.all(
+    supportedWalletChains().map((walletChain) => walletSnapshotForChain(walletChain)),
+  );
+  const [rpcUsage, walletSync] = await Promise.all([
+    fetchUserRpcUsage(),
+    syncExecutionWalletsToSuperMtNode(startupWallets),
+  ]);
+  push({
+    type: "wallet",
+    data: {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      wallets: startupWallets,
+    },
+    rpcUsage,
+    walletSync,
+  });
   await streamLiquidationMonitor({
     chain,
     rpcUrl,
@@ -1082,6 +1214,359 @@ async function fetchQuickNodeUsage(): Promise<QuickNodeUsagePayload> {
     };
 
     return payload;
+  }
+}
+
+type SuperMtNodeEndpoint = {
+  chain?: unknown;
+  endpointSlug?: unknown;
+  httpUrl?: unknown;
+  requestCount?: unknown;
+  requestLimit?: unknown;
+  status?: unknown;
+  lastUsedAt?: unknown;
+};
+
+function superMtNodeApiBaseUrl(): string {
+  return (
+    parseOptionalString(process.env.SUPERMTNODE_API_BASE_URL) ??
+    parseOptionalString(process.env.SUPERMNODE_API_BASE_URL) ??
+    "https://supermtnode.io"
+  ).replace(/\/+$/, "");
+}
+
+function superMtNodeAdminToken(): string | undefined {
+  return (
+    parseOptionalString(process.env.SUPERMTNODE_ADMIN_TOKEN) ??
+    parseOptionalString(process.env.SUPERMNODE_ADMIN_TOKEN)
+  );
+}
+
+function superMtNodeAdminUsername(): string | undefined {
+  return (
+    parseOptionalString(process.env.SUPERMTNODE_ADMIN_USERNAME) ??
+    parseOptionalString(process.env.SUPERMNODE_ADMIN_USERNAME)
+  );
+}
+
+function superMtNodeAdminPassword(): string | undefined {
+  return (
+    parseOptionalString(process.env.SUPERMTNODE_ADMIN_PASSWORD) ??
+    parseOptionalString(process.env.SUPERMNODE_ADMIN_PASSWORD)
+  );
+}
+
+function superMtNodeChainKey(chain: DashboardWalletChainKey): string {
+  if (chain === "ethereum") return "eth";
+  if (chain === "arbitrum") return "arb";
+  return chain;
+}
+
+function rpcEndpointSlugFromUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.pathname.split("/").filter(Boolean).pop();
+  } catch {
+    return value.split("/").filter(Boolean).pop();
+  }
+}
+
+function normalizeRpcEndpointUrl(value: unknown): string {
+  return typeof value === "string" ? value.trim().replace(/\/+$/, "") : "";
+}
+
+function parseUsageCount(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  return null;
+}
+
+function superMtNodeEmptyMetric(
+  chain: DashboardWalletChain,
+  status: UserRpcUsageMetric["status"],
+  message?: string,
+): UserRpcUsageMetric {
+  return {
+    chain: chain.key,
+    chainName: chain.name,
+    rpcEnv: chain.defaultRpcEnv,
+    rpcConfigured: Boolean(parseOptionalString(process.env[chain.defaultRpcEnv])),
+    source: "supermtnode",
+    requestCount: null,
+    requestLimit: null,
+    remainingRequests: null,
+    endpointSlug: rpcEndpointSlugFromUrl(parseOptionalString(process.env[chain.defaultRpcEnv])),
+    status,
+    message,
+  };
+}
+
+async function fetchSuperMtNodeAdminToken(apiBaseUrl: string): Promise<string | undefined> {
+  const configuredToken = superMtNodeAdminToken();
+  if (configuredToken) return configuredToken;
+
+  const username = superMtNodeAdminUsername();
+  const password = superMtNodeAdminPassword();
+  if (!username || !password) return undefined;
+
+  const cacheKey = JSON.stringify({ apiBaseUrl, username });
+  if (
+    superMtNodeAdminTokenCache &&
+    superMtNodeAdminTokenCache.cacheKey === cacheKey &&
+    superMtNodeAdminTokenCache.expiresAt > Date.now()
+  ) {
+    return superMtNodeAdminTokenCache.token;
+  }
+
+  const response = await fetch(`${apiBaseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    throw new Error(`SuperMT Node login failed (${response.status})`);
+  }
+  const payload = await response.json() as Record<string, unknown>;
+  const token = typeof payload.token === "string" ? payload.token : undefined;
+  if (!token) {
+    throw new Error("SuperMT Node login response did not include a token.");
+  }
+  superMtNodeAdminTokenCache = {
+    cacheKey,
+    expiresAt: Date.now() + 10 * 60_000,
+    token,
+  };
+  return token;
+}
+
+function buildSuperMtNodeMetric(
+  chain: DashboardWalletChain,
+  endpoint: SuperMtNodeEndpoint,
+): UserRpcUsageMetric {
+  const requestCount = parseUsageCount(endpoint.requestCount);
+  const requestLimit = parseUsageCount(endpoint.requestLimit);
+  return {
+    chain: chain.key,
+    chainName: chain.name,
+    rpcEnv: chain.defaultRpcEnv,
+    rpcConfigured: Boolean(parseOptionalString(process.env[chain.defaultRpcEnv])),
+    source: "supermtnode",
+    requestCount,
+    requestLimit,
+    remainingRequests:
+      requestCount !== null && requestLimit !== null && requestLimit > 0
+        ? Math.max(0, requestLimit - requestCount)
+        : null,
+    endpointStatus: typeof endpoint.status === "string" ? endpoint.status : undefined,
+    endpointSlug:
+      typeof endpoint.endpointSlug === "string"
+        ? endpoint.endpointSlug
+        : rpcEndpointSlugFromUrl(typeof endpoint.httpUrl === "string" ? endpoint.httpUrl : undefined),
+    lastUsedAt: typeof endpoint.lastUsedAt === "string" ? endpoint.lastUsedAt : undefined,
+    status: "ok",
+  };
+}
+
+async function fetchUserRpcUsage(): Promise<UserRpcUsagePayload> {
+  const apiBaseUrl = superMtNodeApiBaseUrl();
+  const cacheKey = JSON.stringify({
+    apiBaseUrl,
+    token: superMtNodeAdminToken() ? "token" : "",
+    username: superMtNodeAdminUsername() ?? "",
+    rpcs: supportedWalletChains().map((chain) => [chain.key, process.env[chain.defaultRpcEnv] ?? ""]),
+  });
+
+  if (superMtNodeUsageCache && superMtNodeUsageCache.cacheKey === cacheKey && superMtNodeUsageCache.expiresAt > Date.now()) {
+    return superMtNodeUsageCache.payload;
+  }
+
+  const metrics = {} as Record<DashboardWalletChainKey, UserRpcUsageMetric>;
+  const chains = supportedWalletChains();
+
+  for (const chain of chains) {
+    const rpcUrl = parseOptionalString(process.env[chain.defaultRpcEnv]);
+    metrics[chain.key] = rpcUrl
+      ? superMtNodeEmptyMetric(chain, "unmatched", "SuperMT Node endpoint usage is not loaded yet.")
+      : superMtNodeEmptyMetric(chain, "missing_rpc", `${chain.defaultRpcEnv} is not configured.`);
+  }
+
+  try {
+    const token = await fetchSuperMtNodeAdminToken(apiBaseUrl);
+    if (!token) {
+      for (const chain of chains) {
+        if (!metrics[chain.key].rpcConfigured) continue;
+        metrics[chain.key] = superMtNodeEmptyMetric(
+          chain,
+          "missing_credentials",
+          "Set SUPERMTNODE_ADMIN_TOKEN or SUPERMTNODE_ADMIN_USERNAME/SUPERMTNODE_ADMIN_PASSWORD.",
+        );
+      }
+      const payload: UserRpcUsagePayload = {
+        ok: false,
+        generatedAt: new Date().toISOString(),
+        source: "supermtnode",
+        metrics,
+        error: "SuperMT Node admin credentials are not configured.",
+      };
+      superMtNodeUsageCache = { cacheKey, expiresAt: Date.now() + 30_000, payload };
+      return payload;
+    }
+
+    const response = await fetch(`${apiBaseUrl}/api/admin/rpc-endpoints`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(`SuperMT Node endpoint usage request failed (${response.status})`);
+    }
+    const payload = await response.json() as Record<string, unknown>;
+    const endpoints = Array.isArray(payload.endpoints)
+      ? (payload.endpoints.filter((item): item is SuperMtNodeEndpoint => Boolean(item) && typeof item === "object") as SuperMtNodeEndpoint[])
+      : [];
+
+    for (const chain of chains) {
+      const rpcUrl = parseOptionalString(process.env[chain.defaultRpcEnv]);
+      if (!rpcUrl) continue;
+      const slug = rpcEndpointSlugFromUrl(rpcUrl);
+      const normalizedRpcUrl = normalizeRpcEndpointUrl(rpcUrl);
+      const superChain = superMtNodeChainKey(chain.key);
+      const endpoint = endpoints.find((item) => {
+        const itemChain = typeof item.chain === "string" ? item.chain : "";
+        const itemSlug = typeof item.endpointSlug === "string" ? item.endpointSlug : undefined;
+        const itemUrl = normalizeRpcEndpointUrl(item.httpUrl);
+        return (
+          itemChain === superChain &&
+          ((slug && itemSlug === slug) || (itemUrl && itemUrl === normalizedRpcUrl))
+        );
+      });
+      metrics[chain.key] = endpoint
+        ? buildSuperMtNodeMetric(chain, endpoint)
+        : superMtNodeEmptyMetric(
+            chain,
+            "unmatched",
+            "Configured RPC URL was not found in SuperMT Node rpc_endpoints.",
+          );
+    }
+  } catch (error) {
+    for (const chain of chains) {
+      if (!metrics[chain.key].rpcConfigured) continue;
+      metrics[chain.key] = superMtNodeEmptyMetric(
+        chain,
+        "error",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const payload: UserRpcUsagePayload = {
+      ok: false,
+      generatedAt: new Date().toISOString(),
+      source: "supermtnode",
+      metrics,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    superMtNodeUsageCache = { cacheKey, expiresAt: Date.now() + 30_000, payload };
+    return payload;
+  }
+
+  const payload: UserRpcUsagePayload = {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    source: "supermtnode",
+    metrics,
+  };
+  superMtNodeUsageCache = { cacheKey, expiresAt: Date.now() + 30_000, payload };
+  return payload;
+}
+
+function executionWalletChainPayload(wallet: Record<string, unknown>) {
+  return {
+    chain: typeof wallet.chain === "string" ? wallet.chain : "unknown",
+    chainName: typeof wallet.chainName === "string" ? wallet.chainName : undefined,
+    nativeSymbol: typeof wallet.nativeSymbol === "string" ? wallet.nativeSymbol : undefined,
+    nativeBalanceDisplay:
+      typeof wallet.nativeBalanceDisplay === "string" ? wallet.nativeBalanceDisplay : undefined,
+    usdcBalanceDisplay:
+      typeof wallet.usdcBalanceDisplay === "string" ? wallet.usdcBalanceDisplay : undefined,
+    usdtBalanceDisplay:
+      typeof wallet.usdtBalanceDisplay === "string" ? wallet.usdtBalanceDisplay : undefined,
+    ready: wallet.ready === true,
+    reason: typeof wallet.reason === "string" ? wallet.reason : undefined,
+  };
+}
+
+async function syncExecutionWalletsToSuperMtNode(
+  wallets: Record<string, unknown>[],
+): Promise<ExecutionWalletSyncPayload> {
+  const generatedAt = new Date().toISOString();
+  const apiBaseUrl = superMtNodeApiBaseUrl();
+  const grouped = new Map<string, ReturnType<typeof executionWalletChainPayload>[]>();
+
+  for (const wallet of wallets) {
+    const address = typeof wallet.address === "string" ? wallet.address : undefined;
+    if (!address || !isAddress(address)) continue;
+    const checksumAddress = getAddress(address);
+    const chains = grouped.get(checksumAddress) ?? [];
+    chains.push(executionWalletChainPayload(wallet));
+    grouped.set(checksumAddress, chains);
+  }
+
+  if (grouped.size === 0) {
+    return {
+      ok: false,
+      generatedAt,
+      source: "supermtnode",
+      count: 0,
+      error: "No ready wallet address was available to sync.",
+    };
+  }
+
+  try {
+    const token = await fetchSuperMtNodeAdminToken(apiBaseUrl);
+    if (!token) {
+      return {
+        ok: false,
+        generatedAt,
+        source: "supermtnode",
+        count: 0,
+        error: "SuperMT Node admin credentials are not configured.",
+      };
+    }
+
+    const response = await fetch(`${apiBaseUrl}/api/admin/execution-wallets`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        source: "liquidation-dashboard",
+        wallets: Array.from(grouped.entries()).map(([address, chains]) => ({ address, chains })),
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`SuperMT Node execution wallet sync failed (${response.status})`);
+    }
+    const payload = await response.json() as Record<string, unknown>;
+    const count = typeof payload.count === "number" && Number.isFinite(payload.count)
+      ? payload.count
+      : grouped.size;
+    return {
+      ok: true,
+      generatedAt,
+      source: "supermtnode",
+      count,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      generatedAt,
+      source: "supermtnode",
+      count: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -3339,7 +3824,7 @@ function walletSnapshotTtlMs(): number {
 }
 
 function walletSnapshotCacheKey(
-  chain: ChainPreset,
+  chain: DashboardWalletChain,
   privateKey: `0x${string}` | undefined,
   rpcUrl: string | undefined,
 ): string {
@@ -3357,8 +3842,16 @@ function walletSnapshotCacheKey(
 }
 
 async function walletSnapshotForChain(
-  chain: ChainPreset,
+  inputChain: DashboardWalletChain | { key: string },
 ): Promise<Record<string, unknown>> {
+  const chain = walletChainForKey(inputChain.key);
+  if (!chain) {
+    return {
+      chain: inputChain.key,
+      ready: false,
+      reason: `Unsupported chain: ${inputChain.key}`,
+    };
+  }
   const privateKey = process.env.PRIVATE_KEY as `0x${string}` | undefined;
   const rpcUrl = process.env[chain.defaultRpcEnv];
   const cacheKey = walletSnapshotCacheKey(chain, privateKey, rpcUrl);
@@ -3391,7 +3884,7 @@ async function walletSnapshotForChain(
 }
 
 async function fetchUncachedWalletSnapshotForChain(
-  chain: ChainPreset,
+  chain: DashboardWalletChain,
 ): Promise<Record<string, unknown>> {
   const privateKey = process.env.PRIVATE_KEY as `0x${string}` | undefined;
   const rpcUrl = process.env[chain.defaultRpcEnv];
@@ -3399,6 +3892,7 @@ async function fetchUncachedWalletSnapshotForChain(
     return {
       chain: chain.key,
       chainName: chain.name,
+      nativeSymbol: chain.nativeSymbol,
       ready: false,
       reason: !privateKey ? "PRIVATE_KEY missing" : `${chain.defaultRpcEnv} missing`,
     };
@@ -3407,9 +3901,12 @@ async function fetchUncachedWalletSnapshotForChain(
   try {
     const account = privateKeyToAccount(privateKey);
     const client = createPublicClient({ transport: http(rpcUrl) });
-    const market = await resolveMarket(client, chain, undefined, undefined);
+    const market = chain.preset ? await resolveMarket(client, chain.preset, undefined, undefined) : undefined;
     const nativeBalance = await client.getBalance({ address: account.address });
-    const reserveState = await loadReserveMetadata(client, market.poolAddressesProvider);
+    const reserveState =
+      chain.preset && market
+        ? await loadReserveMetadata(client, market.poolAddressesProvider)
+        : undefined;
 
     const buildTokenCandidates = (
       tokenSymbol: "USDC" | "USDT",
@@ -3418,9 +3915,14 @@ async function fetchUncachedWalletSnapshotForChain(
         string,
         { asset: `0x${string}`; decimals: number; symbol?: string }
       >();
+      const fixedToken = chain.tokenBalances?.[tokenSymbol];
+      if (fixedToken) {
+        candidates.set(fixedToken.asset.toLowerCase(), fixedToken);
+      }
+
       const matchedReserve =
-        reserveState.reserves.find((reserve) => reserve.symbol === tokenSymbol) ??
-        reserveState.reserves.find((reserve) =>
+        reserveState?.reserves.find((reserve) => reserve.symbol === tokenSymbol) ??
+        reserveState?.reserves.find((reserve) =>
           String(reserve.symbol).toUpperCase().includes(tokenSymbol),
         );
       if (matchedReserve) {
@@ -3430,7 +3932,7 @@ async function fetchUncachedWalletSnapshotForChain(
           symbol: matchedReserve.symbol,
         });
       }
-      for (const reserve of reserveState.reserves) {
+      for (const reserve of reserveState?.reserves ?? []) {
         if (!String(reserve.symbol).toUpperCase().includes(tokenSymbol)) continue;
         candidates.set(reserve.asset.toLowerCase(), {
           asset: reserve.asset,
@@ -3489,12 +3991,7 @@ async function fetchUncachedWalletSnapshotForChain(
       resolveBestTokenBalance("USDT"),
     ]);
 
-    const nativeSymbol =
-      chain.key === "polygon"
-        ? "POL"
-        : chain.key === "bnb"
-          ? "BNB"
-          : "ETH";
+    const nativeSymbol = chain.nativeSymbol;
     const watchedBalances = [
       {
         key: nativeSymbol.toLowerCase() + "-gas",
@@ -3528,7 +4025,7 @@ async function fetchUncachedWalletSnapshotForChain(
     return {
       chain: chain.key,
       chainName: chain.name,
-      protocol: chain.protocol.key,
+      protocol: chain.preset?.protocol.key ?? "wallet",
       ready: true,
       address: getAddress(account.address),
       nativeSymbol,
@@ -3543,7 +4040,9 @@ async function fetchUncachedWalletSnapshotForChain(
       usdtBalance: usdtToken.balance?.toString(),
       usdtBalanceDisplay: usdtToken.balanceDisplay,
       watchedBalances,
-      liquidatorContract: resolveConfiguredLiquidatorContract(chain.key),
+      liquidatorContract: chain.preset
+        ? resolveConfiguredLiquidatorContract(chain.preset.key)
+        : undefined,
     };
   } catch (error) {
     return {
@@ -3706,6 +4205,7 @@ const serveApi = createDashboardApiHandler({
   fetchMorphoBlueEthereumDashboardSnapshot,
   fetchMorphoBlueBaseDashboardSnapshot,
   fetchQuickNodeUsage,
+  fetchUserRpcUsage,
   fetchTxGraph,
   json,
   liveStatePatchForResult,
@@ -3733,10 +4233,10 @@ const serveApi = createDashboardApiHandler({
     streamArbitrageLoop(payload as DashboardRunRequest, push, isClosed),
   streamAutoExecutionLoop: (payload, push, isClosed) =>
     streamAutoExecutionLoop(payload as DashboardRunRequest, push, isClosed),
-  supportedChains,
+  supportedChains: supportedWalletChains,
   truthy,
   walletSnapshotForChain: (chain) =>
-    walletSnapshotForChain(chain as ChainPreset),
+    walletSnapshotForChain(chain),
 });
 
 const serveHtml = (res: ServerResponse): void => {

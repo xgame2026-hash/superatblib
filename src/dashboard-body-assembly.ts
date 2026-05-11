@@ -1,11 +1,13 @@
 import { DASHBOARD_PAGE_ASSEMBLY } from './dashboard-page-assembly.js';
 import { DASHBOARD_RUNTIME_ASSEMBLY } from './dashboard-runtime-assembly.js';
+import { DASHBOARD_APP_FOOTER } from './dashboard-footer-module.js';
 import { DASHBOARD_APP_SHELL_END, DASHBOARD_APP_SHELL_START, DASHBOARD_MODAL_SHELL } from './dashboard-shell-module.js';
 
-// Body order matters: shell -> pages -> modal -> runtime boot script.
+// Body order matters: shell -> pages -> footer -> modal -> runtime boot script.
 export const DASHBOARD_BODY_ASSEMBLY = String.raw`
 ${DASHBOARD_APP_SHELL_START}
 ${DASHBOARD_PAGE_ASSEMBLY}
+${DASHBOARD_APP_FOOTER}
 
 ${DASHBOARD_APP_SHELL_END}
 

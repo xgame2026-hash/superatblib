@@ -62,6 +62,9 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
             <button class="nav-button" type="button" data-page="txgraph" title="Query">
               <img class="nav-icon" src="/img/menu_3.svg" alt="query" />
             </button>
+            <button class="nav-button" type="button" data-page="strategyPlaza" title="策略广场">
+              <img class="nav-icon" src="/img/ai.svg" alt="strategy plaza" />
+            </button>
             <button class="nav-button" type="button" data-page="settings" title="Settings">
               <img class="nav-icon" src="/img/menu_5.svg" alt="settings" />
             </button>

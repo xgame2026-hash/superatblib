@@ -64,6 +64,7 @@ function createDeps(): DashboardApiHandlerDeps {
     fetchMorphoBlueEthereumDashboardSnapshot: async () => ({ ok: true, type: "morpho" }),
     fetchMorphoBlueBaseDashboardSnapshot: async () => ({ ok: true, type: "morpho-base" }),
     fetchQuickNodeUsage: async () => ({ ok: true, type: "quicknode" }),
+    fetchUserRpcUsage: async () => ({ ok: true, type: "user-rpc" }),
     fetchTxGraph: async () => ({ ok: true, type: "tx-graph" }),
     json: (res, statusCode, payload) => {
       res.statusCode = statusCode;

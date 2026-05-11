@@ -320,10 +320,10 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
         state.data.wallet = results[4].status === 'fulfilled' && results[4].value ? results[4].value : state.data.wallet;
         state.data.settings = results[5].status === 'fulfilled' ? results[5].value : state.data.settings;
         state.data.marketDataIndexStatus = results[6].status === 'fulfilled' ? results[6].value : state.data.marketDataIndexStatus;
-        state.data.quicknodeUsage = results[7].status === 'fulfilled' && results[7].value ? results[7].value : state.data.quicknodeUsage;
-        state.data.strategy = results[8].status === 'fulfilled' && results[8].value
-          ? results[8].value
+        state.data.strategy = results[7].status === 'fulfilled' && results[7].value
+          ? results[7].value
           : (state.data.strategy || fallbackStrategySummary());
+        state.data.rpcUsage = results[8].status === 'fulfilled' && results[8].value ? results[8].value : state.data.rpcUsage;
 
         applyLanguagePreferenceFromSettings();
         hydrateFormFromSettings({ preserveChain: state.hasHydratedForm });
@@ -342,8 +342,8 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
           config.includeWallet ? fetchJson('/api/wallet').catch(function () { return null; }) : Promise.resolve(state.data.wallet),
           fetchJson('/api/settings'),
           fetchJson('/api/market-data/index-status').catch(function () { return null; }),
-          config.includeQuicknode ? fetchJson('/api/quicknode/usage').catch(function () { return null; }) : Promise.resolve(state.data.quicknodeUsage),
-          fetchJson('/api/strategy-markets').catch(function () { return null; })
+          fetchJson('/api/strategy-markets').catch(function () { return null; }),
+          config.includeWallet ? fetchJson('/api/rpc/usage').catch(function () { return null; }) : Promise.resolve(state.data.rpcUsage)
         ]);
         applyLoadedFoundationData(results);
       }
@@ -374,8 +374,8 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
           fetchJson('/api/wallet').then(function (payload) {
             state.data.wallet = payload;
           }).catch(function () {}),
-          fetchJson('/api/quicknode/usage').then(function (payload) {
-            state.data.quicknodeUsage = payload;
+          fetchJson('/api/rpc/usage').then(function (payload) {
+            state.data.rpcUsage = payload;
           }).catch(function () {})
         ]);
       }
@@ -392,18 +392,39 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
 
         await loadDashboardFoundationData({
           includeWallet: true,
-          includeQuicknode: true
+          includeQuicknode: false
         });
 
         await Promise.allSettled([morphoTask, eigenphiTask, leaderboardTask, latestLiquidationTask, flashloanTask]);
         await loadMarketDataIndexStatus();
       }
 
-      async function refreshQuicknodeUsage() {
-        try {
-          const payload = await fetchJson('/api/quicknode/usage');
-          state.data.quicknodeUsage = payload;
-          renderConsole();
-        } catch (_error) {}
-      }
-`;
+	      async function refreshRpcUsage() {
+	        try {
+	          const payload = await fetchJson('/api/rpc/usage');
+	          state.data.rpcUsage = payload;
+	          renderConsole();
+	        } catch (_error) {}
+	      }
+
+	      async function refreshWalletAssets() {
+	        if (state.loading.walletAssets) return;
+	        state.loading.walletAssets = true;
+	        renderConsole();
+	        try {
+	          const results = await Promise.allSettled([
+	            fetchJson('/api/wallet'),
+	            fetchJson('/api/rpc/usage')
+	          ]);
+	          if (results[0].status === 'fulfilled') {
+	            state.data.wallet = results[0].value;
+	          }
+	          if (results[1].status === 'fulfilled') {
+	            state.data.rpcUsage = results[1].value;
+	          }
+	        } finally {
+	          state.loading.walletAssets = false;
+	          renderConsole();
+	        }
+	      }
+	`;
