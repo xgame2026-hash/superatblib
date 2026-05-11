@@ -342,7 +342,9 @@ export async function handleDashboardAuthRoute(
 }
 
 function dashboardAuthPage(error: string): string {
-  const escapedError = error
+  const hasError = Boolean(error);
+  const statusMessage = translateAuthStatus(error);
+  const escapedStatusMessage = statusMessage
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
@@ -351,7 +353,7 @@ function dashboardAuthPage(error: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   return String.raw`<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -429,20 +431,29 @@ function dashboardAuthPage(error: string): string {
         line-height: 1.2;
         letter-spacing: 0;
       }
-      p {
-        margin: 0 0 22px;
-        color: var(--muted);
-        font-size: 14px;
-        line-height: 1.5;
-      }
       label {
         display: block;
         color: var(--muted);
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
         margin-bottom: 8px;
+      }
+      .auth-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 28px;
+        margin: 0 0 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .auth-status strong {
+        color: ${error ? "var(--red)" : "var(--muted)"};
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.35;
+        text-align: right;
       }
       input {
         width: 100%;
@@ -459,6 +470,24 @@ function dashboardAuthPage(error: string): string {
         border-color: rgba(138,125,255,0.75);
         box-shadow: 0 0 0 3px rgba(138,125,255,0.14);
       }
+      .remember-row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        user-select: none;
+      }
+      .remember-row input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        accent-color: var(--purple);
+        cursor: pointer;
+      }
       button {
         width: 100%;
         height: 48px;
@@ -473,12 +502,6 @@ function dashboardAuthPage(error: string): string {
       button:hover {
         border-color: rgba(105,240,174,0.55);
       }
-      .auth-error {
-        min-height: 20px;
-        margin-top: 12px;
-        color: var(--red);
-        font-size: 13px;
-      }
     </style>
   </head>
   <body>
@@ -487,14 +510,71 @@ function dashboardAuthPage(error: string): string {
         <img src="/img/supermini.png" alt="SuperARB" />
         <span class="auth-version">${version}</span>
       </div>
-      <h1>Authorization Required</h1>
-      <form method="post" action="/auth">
-        <label for="code">Authorization Code</label>
+      <h1>需要授权</h1>
+      <form id="authForm" method="post" action="/auth">
+        <div class="auth-status" id="authStatus" data-error="${hasError ? "1" : ""}">
+          <span>状态提示</span>
+          <strong>${escapedStatusMessage}</strong>
+        </div>
+        <label for="code">授权码</label>
         <input id="code" name="code" type="password" autocomplete="current-password" autofocus />
-        <button type="submit">Enter Console</button>
+        <label class="remember-row" for="rememberCode">
+          <input id="rememberCode" name="rememberCode" type="checkbox" />
+          <span>保存授权码</span>
+        </label>
+        <button type="submit">进入控制台</button>
       </form>
-      <div class="auth-error">${escapedError}</div>
     </main>
+    <script>
+      (() => {
+        const storageKey = "superarb-auth-code";
+        const form = document.getElementById("authForm");
+        const codeInput = document.getElementById("code");
+        const rememberInput = document.getElementById("rememberCode");
+        const status = document.getElementById("authStatus")?.querySelector("strong");
+        let savedCode = "";
+        try {
+          savedCode = localStorage.getItem(storageKey) || "";
+        } catch {
+          savedCode = "";
+        }
+        if (savedCode) {
+          codeInput.value = savedCode;
+          rememberInput.checked = true;
+          if (status && !document.getElementById("authStatus").dataset.error) {
+            status.textContent = "已加载保存的授权码";
+          }
+        }
+        form.addEventListener("submit", () => {
+          const code = codeInput.value.trim();
+          if (rememberInput.checked && code) {
+            try {
+              localStorage.setItem(storageKey, code);
+            } catch {}
+          } else {
+            try {
+              localStorage.removeItem(storageKey);
+            } catch {}
+          }
+          if (status) status.textContent = "正在验证授权码";
+        });
+      })();
+    </script>
   </body>
 </html>`;
+}
+
+function translateAuthStatus(error: string): string {
+  if (!error) return "请输入授权码";
+  const normalized = error.toLowerCase();
+  if (error === "Authorization required.") return "请输入授权码";
+  if (error === "Authorization code is required.") return "请输入授权码";
+  if (error === "Authorization code is invalid.") return "授权码无效";
+  if (error === "Authorization code is not active.") return "授权码未激活";
+  if (normalized.includes("not active")) return "授权码未激活";
+  if (normalized.includes("expired")) return "授权码已过期";
+  if (normalized.includes("invalid")) return "授权码无效";
+  if (normalized.includes("unavailable")) return "授权服务暂时不可用，请稍后重试";
+  if (normalized.includes("rejected")) return "授权服务拒绝了本次请求";
+  return error;
 }
