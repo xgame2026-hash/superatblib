@@ -65,6 +65,9 @@ function createDeps(): DashboardApiHandlerDeps {
     fetchMorphoBlueBaseDashboardSnapshot: async () => ({ ok: true, type: "morpho-base" }),
     fetchQuickNodeUsage: async () => ({ ok: true, type: "quicknode" }),
     fetchUserRpcUsage: async () => ({ ok: true, type: "user-rpc" }),
+    fetchPublicLiquidationFeed: async () => ({ ok: true, type: "public-feed", targets: [] }),
+    fetchLiquidationQueueStatus: async () => ({ ok: true, type: "liquidation-queue", eligible: true }),
+    reportLiquidationQueueEvent: async () => ({ ok: true, type: "liquidation-queue-event" }),
     fetchTxGraph: async () => ({ ok: true, type: "tx-graph" }),
     json: (res, statusCode, payload) => {
       res.statusCode = statusCode;
@@ -147,6 +150,34 @@ const lockedApiHandler = createDashboardApiHandler({
   assert.equal(res.statusCode, 200);
   const payload = JSON.parse(res.body ?? "{}") as Record<string, unknown>;
   assert.equal(payload.type, "index-status");
+}
+
+{
+  const req = createMockRequest("GET");
+  const res = createMockResponse();
+  await apiHandler(req, res, new URL("http://localhost/api/public-liquidation-feed?chain=arbitrum"));
+  assert.equal(res.statusCode, 200);
+  const payload = JSON.parse(res.body ?? "{}") as Record<string, unknown>;
+  assert.equal(payload.type, "public-feed");
+}
+
+{
+  const req = createMockRequest("GET");
+  const res = createMockResponse();
+  await apiHandler(req, res, new URL("http://localhost/api/liquidation-queue/status?chain=arbitrum&market=aave-v3-arbitrum"));
+  assert.equal(res.statusCode, 200);
+  const payload = JSON.parse(res.body ?? "{}") as Record<string, unknown>;
+  assert.equal(payload.type, "liquidation-queue");
+}
+
+{
+  const req = createMockRequest("POST");
+  const res = createMockResponse();
+  req.push = () => false;
+  await apiHandler(req, res, new URL("http://localhost/api/liquidation-queue/event"));
+  assert.equal(res.statusCode, 200);
+  const payload = JSON.parse(res.body ?? "{}") as Record<string, unknown>;
+  assert.equal(payload.type, "liquidation-queue-event");
 }
 
 {

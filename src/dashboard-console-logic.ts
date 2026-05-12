@@ -672,6 +672,52 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
           state.consoleLiveTargets = Array.from(map.values()).sort(compareTargetsByExecutionPriority);
         }
 
+        function publicFeedQueueStatusText() {
+          const queueStatus = state.data.liquidationQueue || null;
+          const queuePayload = queueStatus && queueStatus.queue ? queueStatus.queue : null;
+          if (queueStatus) {
+            if (queueStatus.eligible === false) {
+              return state.language === 'zh'
+                ? '队列已退出: ' + String(queueStatus.reason || '--')
+                : 'Queue excluded: ' + String(queueStatus.reason || '--');
+            }
+            const position = queuePayload && (queuePayload.position || queuePayload.queuePosition || queuePayload.currentPosition || '');
+            const size = queuePayload && (queuePayload.size || queuePayload.queueSize || queuePayload.total || '');
+            if (position && size) {
+              return state.language === 'zh'
+                ? '执行队列 ' + String(position) + ' / ' + String(size)
+                : 'Execution queue ' + String(position) + ' / ' + String(size);
+            }
+            if (queuePayload && queuePayload.status) {
+              return state.language === 'zh'
+                ? '执行队列: ' + String(queuePayload.status)
+                : 'Execution queue: ' + String(queuePayload.status);
+            }
+          }
+          const payload = state.data.publicLiquidationFeed || null;
+          const queue = payload && payload.queue ? payload.queue : null;
+          if (!payload) {
+            return state.language === 'zh' ? '公共池未加载' : 'Public pool not loaded';
+          }
+          if (payload.configured === false) {
+            return state.language === 'zh' ? '公共池未配置' : 'Public pool unconfigured';
+          }
+          if (payload.ok === false) {
+            return state.language === 'zh' ? '公共池连接异常' : 'Public pool error';
+          }
+          if (!queue || queue.enabled === false) {
+            return state.language === 'zh' ? '公共队列未启用' : 'Public queue disabled';
+          }
+          const position = queue.position || queue.queuePosition || queue.currentPosition || '';
+          const size = queue.size || queue.queueSize || queue.total || '';
+          if (position && size) {
+            return state.language === 'zh'
+              ? '公共队列 ' + String(position) + ' / ' + String(size)
+              : 'Public queue ' + String(position) + ' / ' + String(size);
+          }
+          return state.language === 'zh' ? '公共池已连接' : 'Public pool connected';
+        }
+
 ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
 
         function renderConsole() {
@@ -765,105 +811,7 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
             consoleResult.parsed.collateralSymbol
               ? String(consoleResult.parsed.debtSymbol) + ' <- ' + String(consoleResult.parsed.collateralSymbol)
               : '--');
-          const selectionVisible =
-            !!currentSelection &&
-            filteredTargets.some(function (target) {
-              return consoleTargetKey(target) === consoleTargetKey(currentSelection);
-            });
-          const displayedSelection =
-            selectionVisible
-              ? currentSelection
-              : (bestTarget
-                  ? {
-                      rank: bestTarget.rank,
-                      marketKey: bestTarget.marketKey,
-                      marketLabel: bestTarget.marketLabel,
-                      user: bestTarget.user,
-                      debtSymbol: bestTarget.debtSymbol,
-                      collateralSymbol: bestTarget.collateralSymbol,
-                      selectionMethod: bestTarget.selectionMethod,
-                      selectionScoreDisplay: bestTarget.selectionScoreDisplay || bestTarget.roughNetProfitDisplay,
-                      roughNetProfitDisplay: bestTarget.roughNetProfitDisplay,
-                      candidateCount: filteredTargets.length,
-                      source: bestTarget.source
-                    }
-                  : (priorityTarget
-                      ? {
-                          rank: priorityTarget.rank,
-                          marketKey: priorityTarget.marketKey,
-                          marketLabel: priorityTarget.marketLabel,
-                          user: priorityTarget.user,
-                          debtSymbol: priorityTarget.debtSymbol,
-                          collateralSymbol: priorityTarget.collateralSymbol,
-                          selectionMethod: priorityTarget.selectionMethod,
-                          selectionScoreDisplay: priorityTarget.selectionScoreDisplay || '--',
-                          roughNetProfitDisplay: priorityTarget.roughNetProfitDisplay,
-                          candidateCount: filteredTargets.length,
-                          source: priorityTarget.source
-                        }
-                      : null));
           renderWalletAssetsTable();
-          text('consoleDecisionLabel', state.language === 'zh' ? '本轮首选目标' : 'Current Priority');
-          text(
-            'consoleDecisionValue',
-            displayedSelection
-              ? String(displayedSelection.marketLabel || '--') +
-                ' / ' +
-                shortAddress(String(displayedSelection.user || '--'))
-              : '--'
-          );
-          text(
-            'consoleDecisionMeta',
-            displayedSelection
-              ? (
-                  displayedSelection.source === 'morpho-blue'
-                    ? String(displayedSelection.debtSymbol || '--') +
-                      ' / ' +
-                      String(displayedSelection.collateralSymbol || '--') +
-                      ' / ' +
-                      String(displayedSelection.selectionMethod || '--') +
-                      ' / ' +
-                      (
-                        state.language === 'zh'
-                          ? '借款 ' + String(displayedSelection.selectionScoreDisplay || '--')
-                          : 'borrow ' + String(displayedSelection.selectionScoreDisplay || '--')
-                      ) +
-                      ' / ' +
-                      (
-                        state.language === 'zh'
-                          ? '候选 ' + String(displayedSelection.candidateCount || 0) + ' 个'
-                          : String(displayedSelection.candidateCount || 0) + ' candidates'
-                      )
-                    : String(displayedSelection.debtSymbol || '--') +
-                      ' <- ' +
-                      String(displayedSelection.collateralSymbol || '--') +
-                      ' / ' +
-                      String(displayedSelection.selectionMethod || '--') +
-                      ' / score ' + String(displayedSelection.selectionScoreDisplay || '--') +
-                      ' / rough net ' +
-                      String(displayedSelection.roughNetProfitDisplay || '--') +
-                      ' / ' +
-                      (
-                        state.language === 'zh'
-                          ? '候选 ' + String(displayedSelection.candidateCount || 0) + ' 个'
-                          : String(displayedSelection.candidateCount || 0) + ' candidates'
-                      )
-                )
-              : (state.language === 'zh' ? '等待候选' : 'Awaiting candidates')
-          );
-          text(
-            'consoleDecisionGate',
-            morphoOnlyVisible
-              ? (
-                  state.language === 'zh'
-                    ? '执行闸门: 只读模式，不广播'
-                    : 'Gate: Read-only mode, no broadcast'
-                )
-              : (
-                  (state.language === 'zh' ? '执行闸门: ' : 'Gate: ') +
-                  String(latestExecutionGateText() || '--')
-                )
-          );
           text('consoleSummaryBestLabel', morphoOnlyVisible
             ? (state.language === 'zh' ? '最大风险借款' : 'Largest Borrow At Risk')
             : (state.language === 'zh' ? '最佳粗净利' : 'Best Rough Net'));
@@ -889,8 +837,10 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                     ' <- ' +
                     String(bestTarget.collateralSymbol || '--')
                   : '--')
-              
           );
+          if (!morphoOnlyVisible && !bestTarget) {
+            text('consoleSummaryBestMeta', publicFeedQueueStatusText());
+          }
           text('consoleSummaryRealizedValue', usdtBalanceValue);
           text(
             'consoleSummaryRealizedMeta',
@@ -1082,6 +1032,16 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
           syncFormFromInputs();
           state.consoleSourceFilter = 'all';
           if (!preserveSession) {
+            const queueStatus = await loadLiquidationQueueStatus();
+            if (queueStatus && queueStatus.eligible === false) {
+              state.terminal = '$ 队列检查未通过: ' + String(queueStatus.reason || '--') + '\n';
+              state.runStateMode = 'idle';
+              state.running = false;
+              renderConsole();
+              return;
+            }
+          }
+          if (!preserveSession) {
             state.autoExecuteRunSerial = 0;
           }
           const resumeCursor = state.runStateMode === 'paused' && state.autoExecuteResumeCursor
@@ -1107,7 +1067,7 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
             state.selectedTarget = null;
             state.lastResult = null;
             state.autoExecuteResumeCursor = null;
-            state.terminal = '$ 启动清算器...\n';
+            state.terminal = '$ 正在连接节点服务器...\n';
             state.consoleLiveTargets = [];
             appendTerminal('');
           }
@@ -1159,7 +1119,7 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                 const event = JSON.parse(line);
                 if (event.type === 'meta') {
                   appendTerminal(
-                    '$ auto-execute ' +
+                    '$ 清算市场 ' +
                     String(event.marketLabel || event.market || event.chain || '--') +
                     ' / round ' +
                     String(state.autoExecuteRunSerial) +
@@ -1204,6 +1164,18 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                   renderConsole();
                 } else if (event.type === 'execution') {
                   state.lastResult = event.data;
+                  const parsed = event.data && event.data.parsed ? event.data.parsed : null;
+                  const broadcastResult = parsed && parsed.broadcastResult ? parsed.broadcastResult : (event.data && event.data.broadcastResult ? event.data.broadcastResult : null);
+                  const txHash =
+                    (event.data && event.data.txHash) ||
+                    (parsed && parsed.txHash) ||
+                    (broadcastResult && broadcastResult.executeTxHash) ||
+                    (broadcastResult && broadcastResult.txHash) ||
+                    '';
+                  reportLiquidationQueueEvent(
+                    event.data && event.data.ok && txHash ? 'success' : (event.data && event.data.ok ? 'checked' : 'blocked'),
+                    event.data || null
+                  );
                   appendTerminal(
                     '$ armed execution ' +
                       String(event.data && event.data.ok ? 'completed' : 'blocked') +

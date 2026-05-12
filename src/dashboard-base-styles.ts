@@ -477,14 +477,14 @@ export const DASHBOARD_BASE_STYLES = String.raw`
         line-height: 1.45;
       }
 
-      .content-scroll {
-        overflow: auto;
-        min-height: 0;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        padding: 22px 18px 18px;
-      }
+	      .content-scroll {
+	        overflow: auto;
+	        min-height: 0;
+	        height: 100%;
+	        display: flex;
+	        flex-direction: column;
+	        padding: 22px 18px 82px;
+	      }
 
       .page {
         display: none;
@@ -2805,7 +2805,8 @@ ${DASHBOARD_TXGRAPH_STYLES}
         display: block;
       }
 
-      .settings-select-wrap::before {
+      .settings-select-wrap::before,
+      .settings-custom-select-button::before {
         content: '';
         position: absolute;
         top: 1px;
@@ -2816,7 +2817,8 @@ ${DASHBOARD_TXGRAPH_STYLES}
         pointer-events: none;
       }
 
-      .settings-select-wrap::after {
+      .settings-select-wrap::after,
+      .settings-custom-select-button::after {
         content: '';
         position: absolute;
         right: 18px;
@@ -2833,6 +2835,91 @@ ${DASHBOARD_TXGRAPH_STYLES}
         appearance: none;
         -webkit-appearance: none;
         padding-right: 64px;
+      }
+
+      .settings-select-wrap.custom-select-ready select {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .settings-select-wrap.custom-select-ready::before,
+      .settings-select-wrap.custom-select-ready::after {
+        display: none;
+      }
+
+      .settings-custom-select {
+        position: relative;
+        display: block;
+        width: 100%;
+      }
+
+      .settings-custom-select-button {
+        position: relative;
+        width: 100%;
+        min-height: 42px;
+        padding: 10px 64px 10px 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 5px;
+        background: rgba(255,255,255,0.03);
+        color: var(--text);
+        font-size: 13px;
+        line-height: 20px;
+        text-align: left;
+        cursor: pointer;
+        transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+      }
+
+      .settings-custom-select-button:hover,
+      .settings-custom-select.is-open .settings-custom-select-button {
+        border-color: rgba(138, 125, 255, 0.42);
+        background: rgba(255,255,255,0.055);
+      }
+
+      .settings-custom-select-button:focus-visible {
+        outline: 0;
+        box-shadow: 0 0 0 3px rgba(138, 125, 255, 0.25);
+      }
+
+      .settings-custom-select-menu {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        z-index: 90;
+        display: none;
+        max-height: 220px;
+        overflow: auto;
+        padding: 6px;
+        border: 1px solid rgba(138, 125, 255, 0.32);
+        border-radius: 6px;
+        background: #1a1d22;
+        box-shadow: 0 18px 42px rgba(0,0,0,0.42);
+      }
+
+      .settings-custom-select.is-open .settings-custom-select-menu {
+        display: grid;
+        gap: 4px;
+      }
+
+      .settings-custom-select-option {
+        width: 100%;
+        min-height: 34px;
+        padding: 7px 10px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--soft);
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .settings-custom-select-option:hover,
+      .settings-custom-select-option.is-selected {
+        background: rgba(138, 125, 255, 0.14);
+        color: #f2f3f7;
       }
 
 
@@ -2996,18 +3083,16 @@ ${DASHBOARD_TXGRAPH_STYLES}
         padding-top: 10px;
       }
 
-      .app-footer {
-        position: relative;
-        z-index: 18;
-        flex: 0 0 auto;
-        margin-top: auto;
-        margin-right: -18px;
-        margin-bottom: -18px;
-        margin-left: -18px;
-        padding: 18px 22px 16px;
-        border-top: 1px solid rgba(255,255,255,0.045);
-        border-left: 0;
-        border-right: 1px solid rgba(255,255,255,0.045);
+	      .app-footer {
+	        position: fixed;
+	        right: 0;
+	        bottom: 0;
+	        left: 64px;
+	        z-index: 18;
+	        padding: 18px 22px 16px;
+	        border-top: 1px solid rgba(255,255,255,0.045);
+	        border-left: 0;
+	        border-right: 1px solid rgba(255,255,255,0.045);
         border-bottom: 0;
         border-radius: 0;
         background: #15171b;
@@ -3150,6 +3235,53 @@ ${DASHBOARD_TXGRAPH_STYLES}
         display: flex;
       }
 
+      .saving-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 80;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(3, 7, 18, 0.56);
+        backdrop-filter: blur(10px);
+      }
+
+      .saving-overlay.open {
+        display: flex;
+      }
+
+      .saving-dialog {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        min-width: 180px;
+        min-height: 58px;
+        padding: 16px 20px;
+        border: 1px solid #333438;
+        border-radius: 12px;
+        background: #000000;
+        color: #cf9eff;
+        font-size: 14px;
+        box-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+      }
+
+      .saving-spinner {
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        border: 2px solid rgba(207, 158, 255, 0.24);
+        border-top-color: #cf9eff;
+        animation: saving-spinner-rotate 820ms linear infinite;
+      }
+
+      @keyframes saving-spinner-rotate {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
       .modal-card {
         width: min(980px, calc(100vw - 120px));
         max-height: calc(100vh - 80px);
@@ -3157,6 +3289,77 @@ ${DASHBOARD_TXGRAPH_STYLES}
 
       .modal-card.chart-modal {
         width: min(1460px, calc(100vw - 64px));
+      }
+
+      .modal-card.message-dialog {
+        width: min(328px, calc(100vw - 48px));
+        min-height: 160px;
+        overflow: hidden;
+        border-radius: 12px;
+        border: 1px solid #343537;
+        background: #000000;
+        box-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+      }
+
+      .modal-card.message-dialog .panel-inner {
+        padding: 0 !important;
+        background: transparent;
+      }
+
+      .modal-card.message-dialog .panel-head {
+        margin: 0 !important;
+        padding: 8px 9px 8px 18px;
+        background: #161618;
+      }
+
+      .modal-card.message-dialog .panel-title {
+        color: #808080;
+        font-size: 14px;
+      }
+
+      .modal-card.message-dialog .panel-sub {
+        display: none;
+      }
+
+      .modal-card.message-dialog .modal-close-button {
+        width: 26px;
+        height: 26px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #808080;
+      }
+
+      .modal-card.message-dialog .modal-body {
+        margin: 9px;
+        padding: 26px 26px 0;
+        color: #ffffff;
+        font-size: 14px;
+        line-height: 1.4;
+        text-align: center;
+      }
+
+      .message-dialog-body {
+        white-space: pre-wrap;
+      }
+
+      .message-dialog-actions {
+        display: grid;
+        grid-template-columns: repeat(1, minmax(0, 88px));
+        justify-content: center;
+        gap: 8px;
+        padding: 26px;
+      }
+
+      .message-dialog-actions button {
+        min-height: 38px;
+        border: 0;
+        border-radius: 12px;
+        color: #06101f;
+        font-size: 14px;
+        font-weight: 800;
+        background: linear-gradient(135deg, #9996a2, #7b6cff);
+        cursor: pointer;
       }
 
       .modal-close-button {
@@ -3301,9 +3504,9 @@ ${DASHBOARD_TXGRAPH_STYLES}
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        .content-scroll {
-          padding: 16px 14px 14px;
-        }
+	        .content-scroll {
+	          padding: 16px 14px 74px;
+	        }
 
         .page.active,
         .overview-grid,
@@ -3333,13 +3536,9 @@ ${DASHBOARD_TXGRAPH_STYLES}
           padding-right: 16px;
         }
 
-        .app-footer {
-          margin-top: 14px;
-          margin-right: -14px;
-          margin-bottom: -14px;
-          margin-left: -14px;
-          padding: 14px 16px 12px;
-        }
+	        .app-footer {
+	          padding: 14px 16px 12px;
+	        }
 
         .app-footer-main,
         .app-footer-bottom {

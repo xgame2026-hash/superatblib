@@ -67,6 +67,9 @@ export type DashboardApiHandlerDeps = {
   }) => Promise<unknown>;
   fetchQuickNodeUsage: () => Promise<unknown>;
   fetchUserRpcUsage: () => Promise<unknown>;
+  fetchPublicLiquidationFeed: (chain: string | null) => Promise<unknown>;
+  fetchLiquidationQueueStatus: (chain: string | null, market: string | null) => Promise<unknown>;
+  reportLiquidationQueueEvent: (payload: Record<string, unknown>) => Promise<unknown>;
   fetchTxGraph: (payload: {
     txHash: string | null;
     chain: string | null;
@@ -129,6 +132,9 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
     fetchMorphoBlueBaseDashboardSnapshot,
     fetchQuickNodeUsage,
     fetchUserRpcUsage,
+    fetchPublicLiquidationFeed,
+    fetchLiquidationQueueStatus,
+    reportLiquidationQueueEvent,
     fetchTxGraph,
     json,
     liveStatePatchForResult,
@@ -312,6 +318,63 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
 
     if (url.pathname === "/api/rpc/usage") {
       json(res, 200, await fetchUserRpcUsage());
+      return;
+    }
+
+    if (url.pathname === "/api/public-liquidation-feed") {
+      try {
+        json(res, 200, await fetchPublicLiquidationFeed(url.searchParams.get("chain")));
+      } catch (error) {
+        json(res, 502, {
+          ok: false,
+          source: "public-feed",
+          chain: parseOptionalString(url.searchParams.get("chain")) ?? "ethereum",
+          error: error instanceof Error ? error.message : String(error),
+          targets: [],
+          queue: {
+            enabled: false,
+            status: "error",
+          },
+        });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/liquidation-queue/status") {
+      try {
+        json(res, 200, await fetchLiquidationQueueStatus(
+          url.searchParams.get("chain"),
+          url.searchParams.get("market"),
+        ));
+      } catch (error) {
+        json(res, 502, {
+          ok: false,
+          source: "local",
+          chain: parseOptionalString(url.searchParams.get("chain")) ?? "ethereum",
+          market: parseOptionalString(url.searchParams.get("market")) ?? "",
+          eligible: false,
+          reason: error instanceof Error ? error.message : String(error),
+          queue: {
+            enabled: false,
+            status: "error",
+          },
+        });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/liquidation-queue/event" && req.method === "POST") {
+      try {
+        const body = await readBody(req);
+        const payload = body ? (JSON.parse(body) as Record<string, unknown>) : {};
+        json(res, 200, await reportLiquidationQueueEvent(payload));
+      } catch (error) {
+        json(res, 502, {
+          ok: false,
+          source: "local",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
 

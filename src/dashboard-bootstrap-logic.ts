@@ -59,6 +59,8 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
       }
 
       function renderFlashloanConsolePage() {
+        const page = document.getElementById('pageFlashloanConsole');
+        if (!page || !page.classList.contains('active')) return;
         renderFlashloanDeskPayload();
       }
 
@@ -94,7 +96,20 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
       }
 
       function applyFormToInputs() {
-        document.getElementById('marketSelect').value = state.form.market || 'aave-v3-ethereum';
+        const marketSelect = document.getElementById('marketSelect');
+        if (marketSelect) {
+          marketSelect.value = state.form.market || 'aave-v3-ethereum';
+          if (!marketSelect.value) {
+            marketSelect.value = Array.from(marketSelect.options).some(function (option) {
+              return option.value === 'aave-v3-ethereum';
+            }) ? 'aave-v3-ethereum' : (marketSelect.options[0] ? marketSelect.options[0].value : '');
+            state.form.market = marketSelect.value || 'aave-v3-ethereum';
+            state.form.chain = inferExecutionChainFromMarketSelection(state.form.market);
+          }
+          if (typeof syncCustomSelect === 'function') {
+            syncCustomSelect(marketSelect);
+          }
+        }
         const lookbackInput = document.getElementById('lookbackInput');
         const limitInput = document.getElementById('limitInput');
         const minNetProfitInput = document.getElementById('minNetProfitInput');
@@ -364,5 +379,9 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
         setInterval(function () {
           refreshRpcUsage();
         }, 60000);
+        setInterval(function () {
+          loadPublicLiquidationFeed();
+          loadLiquidationQueueStatus();
+        }, 10000);
       }
 `;

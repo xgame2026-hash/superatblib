@@ -155,7 +155,7 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         text('settingsSectionGeneral', settingsSections[0]);
         text('settingsSectionExchanges', settingsSections[1]);
         text('saveSettingsButtonLabel', t('saveSettingsCompact'));
-        text('toggleSettingsVisibilityLabel', state.settingsMasked ? t('settingsShowSecrets') : t('settingsHideSecrets'));
+        text('toggleSettingsVisibilityLabel', state.settingsMasked ? t('settingsHideSecrets') : t('settingsShowSecrets'));
 
         text('settingsPrivateKeyLabel', 'PRIVATE_KEY');
         text('settingsBitqueryApiKeyLabel', t('settingsBitqueryApiKeyLabel'));
@@ -165,7 +165,6 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         text('settingsExecutionRpcLabel', state.language === 'zh' ? '执行 RPC' : 'Execution RPC URL');
         text('settingsFlashbotsRelayLabel', state.language === 'zh' ? 'Flashbots Relay' : 'Flashbots Relay URL');
         text('settingsFlashbotsAuthLabel', state.language === 'zh' ? 'Flashbots 认证私钥' : 'Flashbots Auth Private Key');
-        text('settingsArbitrageVenuesLabel', state.language === 'zh' ? '套利交易所列表' : 'Arbitrage venues');
         text('settingsBroadcastTransportLabel', state.language === 'zh' ? '广播通道' : 'Broadcast transport');
         text('settingsFundingModeLabel', state.language === 'zh' ? '资金模式' : 'Funding mode');
         text('settingsEthereumRpcLabel', 'ETHEREUM_RPC_URL');

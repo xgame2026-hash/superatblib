@@ -97,4 +97,10 @@ export const DASHBOARD_MODAL_SHELL = String.raw`
         <div id="modalBody" class="modal-body"></div>
       </div>
     </div>
+    <div id="savingOverlay" class="saving-overlay" aria-hidden="true">
+      <div class="saving-dialog" role="status" aria-live="polite">
+        <span class="saving-spinner" aria-hidden="true"></span>
+        <span id="savingOverlayText">正在保存中</span>
+      </div>
+    </div>
 `;

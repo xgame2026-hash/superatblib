@@ -219,7 +219,7 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           settingsPanelTitles: ['通用设置', '交易所'],
           settingsPanelSubs: [
             '配置私钥、语言、资金模式与主链 RPC，保存到 .env。',
-            '配置套利交易所列表与 API 密钥。'
+            '配置交易所 API 密钥。'
           ],
           settingsBitqueryApiKeyLabel: 'Bitquery Access Token',
           settingsZeroExApiKeyLabel: '0x API Key',
@@ -235,6 +235,9 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           quicknodeUsageUnmatched: '当前 RPC 没匹配到 QuickNode endpoint',
           quicknodeUsageError: 'QuickNode 查询失败',
           targetDetail: '目标详情',
+          settingsSaveSuccessTitle: '提示',
+          settingsSaveSuccessBody: '已经保存！',
+          settingsSavingMessage: '正在保存中',
           settingsSaveFailed: '设置保存失败',
           terminalReady: '$ workstation ready',
           historyEmpty: '还没有真实广播记录。',
@@ -280,6 +283,7 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           modalCompleted: '命令完成',
           modalFailed: '命令失败',
           close: '关闭',
+          confirm: '确定',
           expand: '放大',
           clear: '清空'
         },
@@ -518,6 +522,9 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           quicknodeUsageUnmatched: 'Saved RPC did not match a QuickNode endpoint',
           quicknodeUsageError: 'QuickNode query failed',
           targetDetail: 'Target detail',
+          settingsSaveSuccessTitle: 'Notice',
+          settingsSaveSuccessBody: 'Saved.',
+          settingsSavingMessage: 'Saving...',
           settingsSaveFailed: 'Settings save failed',
           terminalReady: '$ workstation ready',
           historyEmpty: 'No real broadcast history yet.',
@@ -563,6 +570,7 @@ export const DASHBOARD_TRANSLATIONS_LOGIC = String.raw`
           modalCompleted: 'Command completed',
           modalFailed: 'Command failed',
           close: 'Close',
+          confirm: 'OK',
           expand: 'Expand',
           clear: 'Clear'
         }

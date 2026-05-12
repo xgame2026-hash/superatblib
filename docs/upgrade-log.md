@@ -1,5 +1,29 @@
 # 升级日志
 
+## 2026-05-12
+
+### 通用设置
+
+- 设置页“显示/隐藏”私钥和 RPC 后会在当前页面重绘期间保持状态；重新进入系统时默认隐藏。
+- 资金模式和语言下拉框改为自绘样式，避免使用系统原生下拉菜单。
+- 设置页每次进入默认隐藏敏感配置；右上角按钮改为显示当前状态，隐藏时显示“隐藏”，明文时显示“显示”。
+- 点击保存后立即显示全屏遮罩、转动圆圈和“正在保存中”，保存完成后弹出“已经保存！”。
+- 交易所设置页移除“套利交易所列表”输入，只保留交易所 API 公钥 / 私钥配置。
+- 页面底部版权栏改为固定在工作区底部，页面滚动时保持可见，并为内容区预留底部空间避免遮挡。
+- 清算控制台移除“本轮首选目标 / 等待候选 / 执行闸门”状态卡片。
+- 清算控制台钱包资产表的链图标调整为 19px，降低表格视觉占用同时保持可识别。
+- 修复清算控制台“执行市场”选择后几秒变空的问题：非闪电贷控制台页面不再同步闪电贷表单，执行市场回填和自绘下拉同步时都会校验当前值，确保选中哪个就显示哪个。
+- 清算控制台钱包资产表增加鼠标悬停底色，方便识别当前行。
+- 清算控制台启动真实清算前新增执行预检：先连接所选链 RPC 并读取最新区块，再校验当前链钱包 gas、广播模式和执行合约状态；终端文案区分“扫描清算机会”和“正在执行清算交易”。
+- 新增公共清算候选池接口 `/api/public-liquidation-feed`，支持 `PUBLIC_LIQUIDATION_FEED_URL` 以及按链拆分的 `PUBLIC_LIQUIDATION_FEED_ETHEREUM_URL`、`PUBLIC_LIQUIDATION_FEED_BNB_URL`、`PUBLIC_LIQUIDATION_FEED_ARBITRUM_URL`、`PUBLIC_LIQUIDATION_FEED_POLYGON_URL`。控制台定时读取服务器侧候选池并合并到右侧列表，用于后续由 ARB / BNB 等专业 RPC 服务器统一扫描，再按用户队列分配执行机会。
+- 新增清算执行队列桥接接口 `/api/liquidation-queue/status` 和 `/api/liquidation-queue/event`：客户端会根据当前链钱包 gas、SuperMT Node endpoint 状态与剩余请求数判断是否可入队；队列服务配置后会同步用户位置和执行结果，便于服务端按“成功后排到队尾、过期限额退出队列”的规则轮转 30 个用户。
+
+### RPC 用量
+
+- 已验证 `https://rpc.supermtnode.io/eth/rpc_6b1a4b25b8544660b8c0b362bf498ca3` 当前 `eth_blockNumber` 请求可用。
+- 当前 RPC 响应没有返回 rate-limit / remaining 相关 header；本地也未配置 SuperMT Node 管理后台凭证，无法读取后台 `request_count/request_limit`，需要配置 `SUPERMTNODE_ADMIN_TOKEN` 或账号密码后再查询准确限额。
+- 明确 RPC 配置规则：每个用户必须使用自己的 SuperMT Node endpoint，不能共用同一个 `ETHEREUM_RPC_URL`；否则后台按 endpoint slug 合并统计用量和限额，可能导致部分用户加载失败。
+
 ## 2026-05-11
 
 ### 授权页体验优化

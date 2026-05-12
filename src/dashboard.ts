@@ -182,7 +182,7 @@ type DashboardConsoleTarget = {
   roughNetProfitDisplay?: string;
   selectionScoreDisplay?: string;
   selectionMethod?: string;
-  source: "scan" | "analyze" | "morpho-blue";
+  source: "scan" | "analyze" | "morpho-blue" | "public-feed";
   buyExchange?: string;
   sellExchange?: string;
   buyPriceDisplay?: string;
@@ -276,6 +276,19 @@ type UserRpcUsagePayload = {
   source: "supermtnode";
   metrics: Record<DashboardWalletChainKey, UserRpcUsageMetric>;
   error?: string;
+};
+
+type LiquidationQueueStatusPayload = {
+  ok: boolean;
+  generatedAt: string;
+  source: "local" | "supermtnode";
+  chain: ChainPreset["key"];
+  market: string;
+  walletAddress: string | null;
+  endpointSlug?: string;
+  eligible: boolean;
+  reason?: string;
+  queue: Record<string, unknown>;
 };
 
 type ExecutionWalletSyncPayload = {
@@ -587,6 +600,24 @@ function parseDisplayNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+async function withDashboardTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 function parseNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -728,6 +759,168 @@ function graphDefaultRpcUrl(chain: TxGraphChainKey): string | undefined {
   return process.env[preset.defaultRpcEnv];
 }
 
+function dashboardChainLabel(chain: ChainPreset["key"]): string {
+  return chain === "ethereum"
+    ? "Ethereum"
+    : chain === "bnb"
+      ? "BNB Chain"
+      : chain === "arbitrum"
+        ? "Arbitrum"
+        : "Polygon";
+}
+
+function walletSnapshotForExecutionChain(
+  wallets: Record<string, unknown>[],
+  chain: ChainPreset["key"],
+): Record<string, unknown> {
+  return wallets.find((wallet) => wallet.chain === chain) ?? {};
+}
+
+function nativeGasDisplay(wallet: Record<string, unknown>): string {
+  const amount = typeof wallet.nativeBalanceDisplay === "string"
+    ? wallet.nativeBalanceDisplay
+    : "";
+  const symbol = typeof wallet.nativeSymbol === "string" ? wallet.nativeSymbol : "";
+  return amount && symbol ? `${amount} ${symbol}` : "--";
+}
+
+function assertExecutionWalletReady(
+  wallet: Record<string, unknown>,
+  chain: ChainPreset["key"],
+): void {
+  if (wallet.ready !== true) {
+    const reason = typeof wallet.reason === "string" && wallet.reason.trim()
+      ? wallet.reason.trim()
+      : "wallet snapshot is not ready";
+    throw new Error(`${dashboardChainLabel(chain)} execution wallet is not ready: ${reason}`);
+  }
+  const nativeBalance = parseDisplayNumber(wallet.nativeBalanceDisplay);
+  if (nativeBalance === null || nativeBalance <= 0) {
+    throw new Error(`${dashboardChainLabel(chain)} execution wallet has no gas balance.`);
+  }
+}
+
+function publicLiquidationFeedUrl(chain: ChainPreset["key"]): string | undefined {
+  const envKey =
+    chain === "ethereum"
+      ? "PUBLIC_LIQUIDATION_FEED_ETHEREUM_URL"
+      : chain === "bnb"
+        ? "PUBLIC_LIQUIDATION_FEED_BNB_URL"
+        : chain === "arbitrum"
+          ? "PUBLIC_LIQUIDATION_FEED_ARBITRUM_URL"
+          : "PUBLIC_LIQUIDATION_FEED_POLYGON_URL";
+  return parseOptionalString(process.env[envKey]) ??
+    parseOptionalString(process.env.PUBLIC_LIQUIDATION_FEED_URL);
+}
+
+function publicFeedDisplayString(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return undefined;
+}
+
+function publicFeedTargetFromRecord(
+  record: Record<string, unknown>,
+  chain: ChainPreset["key"],
+): DashboardConsoleTarget | null {
+  const user = parseOptionalString(record.user) ??
+    parseOptionalString(record.address) ??
+    parseOptionalString(record.borrower);
+  if (!user) return null;
+  const healthFactor = publicFeedDisplayString(record.healthFactor) ??
+    publicFeedDisplayString(record.hf) ??
+    "--";
+  const liquidatable = record.liquidatable === true ||
+    parseOptionalString(record.state)?.toLowerCase() === "liquidatable";
+  const marketKey = parseOptionalString(record.marketKey) ??
+    parseOptionalString(record.market) ??
+    `aave-v3-${chain}`;
+  const marketLabel = parseOptionalString(record.marketLabel) ??
+    parseOptionalString(record.protocol) ??
+    marketKey;
+  return {
+    rank: typeof record.rank === "number" ? record.rank : undefined,
+    marketKey,
+    marketLabel,
+    user,
+    healthFactor,
+    liquidatable,
+    state: parseOptionalString(record.state) ??
+      (liquidatable ? "可清算" : "待分析"),
+    debtSymbol: parseOptionalString(record.debtSymbol) ??
+      parseOptionalString(record.debtAsset) ??
+      "--",
+    collateralSymbol: parseOptionalString(record.collateralSymbol) ??
+      parseOptionalString(record.collateralAsset) ??
+      "--",
+    grossProfitDisplay: publicFeedDisplayString(record.grossProfitDisplay) ??
+      publicFeedDisplayString(record.grossProfit) ??
+      "--",
+    roughNetProfitDisplay: publicFeedDisplayString(record.roughNetProfitDisplay) ??
+      publicFeedDisplayString(record.netProfit) ??
+      "--",
+    selectionScoreDisplay: publicFeedDisplayString(record.selectionScoreDisplay) ?? "--",
+    selectionMethod: parseOptionalString(record.selectionMethod) ?? "public-feed",
+    source: "public-feed",
+  };
+}
+
+async function fetchPublicLiquidationFeed(chainInput: unknown): Promise<Record<string, unknown>> {
+  const chain = normalizeChainKey(chainInput);
+  const feedUrl = publicLiquidationFeedUrl(chain);
+  if (!feedUrl) {
+    return {
+      ok: true,
+      source: "public-feed",
+      configured: false,
+      chain,
+      generatedAt: new Date().toISOString(),
+      targets: [],
+      queue: {
+        enabled: false,
+        status: "unconfigured",
+      },
+    };
+  }
+  const url = new URL(feedUrl);
+  if (!url.searchParams.has("chain")) {
+    url.searchParams.set("chain", chain);
+  }
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/json",
+    },
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Public liquidation feed request failed (${response.status})`);
+  }
+  const payload = await response.json() as Record<string, unknown>;
+  const rawTargets = extractObjectArray(payload.targets ?? payload.data ?? payload);
+  const targets = rawTargets
+    .map((record) => publicFeedTargetFromRecord(record, chain))
+    .filter((target): target is DashboardConsoleTarget => Boolean(target));
+  return {
+    ok: true,
+    source: "public-feed",
+    configured: true,
+    chain,
+    generatedAt: new Date().toISOString(),
+    targets,
+    queue: isRecord(payload.queue) ? payload.queue : {
+      enabled: true,
+      status: "connected",
+    },
+  };
+}
+
 const TX_GRAPH_BNB_FALLBACK_RPCS = [
   "https://blissful-wiser-pool.bsc.quiknode.pro/d1a545871254b13042697bed9cefb1339dc65173/",
   "https://bsc-dataseed.bnbchain.org/",
@@ -827,6 +1020,29 @@ async function streamAutoExecutionLoop(
   if (!rpcUrl) {
     throw new Error(`Missing RPC URL for ${chain}.`);
   }
+  const selectedMarketLabel =
+    marketSelection === "auto-ethereum"
+      ? "Auto Rotation / Ethereum"
+      : (EXECUTION_MARKET_PRESETS[marketSelection]?.label ?? marketSelection);
+  const fundingMode = chain === "ethereum" ? "flash-loan" : "self-funded";
+  push({
+    type: "stdout",
+    data:
+      `$ 正在连接 ${dashboardChainLabel(chain)} 节点服务器...\n` +
+      `$ 执行市场: ${selectedMarketLabel}\n`,
+  });
+  const preflightClient = createPublicClient({
+    transport: http(rpcUrl),
+  });
+  const preflightBlock = await withDashboardTimeout(
+    preflightClient.getBlockNumber(),
+    12_000,
+    `${dashboardChainLabel(chain)} RPC preflight`,
+  );
+  push({
+    type: "stdout",
+    data: `$ 已连接节点服务器，最新区块 ${preflightBlock.toString()}\n`,
+  });
 
   const lookbackBlocks = BigInt(
     parsePositiveInteger(
@@ -892,6 +1108,22 @@ async function streamAutoExecutionLoop(
   const startupWallets = await Promise.all(
     supportedWalletChains().map((walletChain) => walletSnapshotForChain(walletChain)),
   );
+  const executionWallet = walletSnapshotForExecutionChain(startupWallets, chain);
+  assertExecutionWalletReady(executionWallet, chain);
+  const executionContract = resolveConfiguredLiquidatorContract(chain, undefined, tuningMarket);
+  const broadcastMode = truthy(payload.broadcast);
+  push({
+    type: "stdout",
+    data:
+      `$ 预检通过: 钱包 gas ${nativeGasDisplay(executionWallet)}\n` +
+      `$ 真实执行模式: ${broadcastMode ? "开启" : "关闭，仅扫描"} / ${fundingMode}\n` +
+      (
+        executionContract
+          ? `$ 执行合约: ${executionContract}\n`
+          : "$ 执行合约: 未配置，命中候选时将尝试自动部署\n"
+      ) +
+      "$ 正在扫描清算机会...\n",
+  });
   const [rpcUsage, walletSync] = await Promise.all([
     fetchUserRpcUsage(),
     syncExecutionWalletsToSuperMtNode(startupWallets),
@@ -1479,6 +1711,191 @@ async function fetchUserRpcUsage(): Promise<UserRpcUsagePayload> {
   };
   superMtNodeUsageCache = { cacheKey, expiresAt: Date.now() + 30_000, payload };
   return payload;
+}
+
+function liquidationQueueEndpoint(action: "status" | "event"): string | undefined {
+  const explicit =
+    action === "status"
+      ? parseOptionalString(process.env.LIQUIDATION_QUEUE_STATUS_URL)
+      : parseOptionalString(process.env.LIQUIDATION_QUEUE_EVENT_URL);
+  if (explicit) return explicit;
+
+  const base = parseOptionalString(process.env.LIQUIDATION_QUEUE_API_BASE_URL);
+  if (base) {
+    return `${base.replace(/\/+$/, "")}/${action}`;
+  }
+
+  const superMtQueueEnabled = parseOptionalString(process.env.SUPERMTNODE_LIQUIDATION_QUEUE_ENABLED);
+  if (superMtQueueEnabled === "1" || superMtQueueEnabled === "true") {
+    return `${superMtNodeApiBaseUrl()}/api/admin/liquidation-queue/${action}`;
+  }
+  return undefined;
+}
+
+function queueMetricEligibility(metric: UserRpcUsageMetric | undefined): { eligible: boolean; reason?: string } {
+  if (!metric) {
+    return { eligible: false, reason: "RPC usage metric is unavailable." };
+  }
+  if (!metric.rpcConfigured) {
+    return { eligible: false, reason: `${metric.rpcEnv} is not configured.` };
+  }
+  if (metric.status === "missing_rpc" || metric.status === "unmatched" || metric.status === "error") {
+    return { eligible: false, reason: metric.message ?? `RPC endpoint status is ${metric.status}.` };
+  }
+  if (metric.endpointStatus && !["active", "ok", "enabled"].includes(metric.endpointStatus.toLowerCase())) {
+    return { eligible: false, reason: `RPC endpoint is ${metric.endpointStatus}.` };
+  }
+  if (metric.remainingRequests !== null && metric.remainingRequests <= 0) {
+    return { eligible: false, reason: "RPC request limit is exhausted." };
+  }
+  return { eligible: true };
+}
+
+function queueWalletEligibility(wallet: Record<string, unknown>, chain: ChainPreset["key"]): { eligible: boolean; reason?: string } {
+  if (wallet.ready !== true) {
+    const reason = typeof wallet.reason === "string" && wallet.reason.trim()
+      ? wallet.reason.trim()
+      : `${dashboardChainLabel(chain)} wallet is not ready.`;
+    return { eligible: false, reason };
+  }
+  const nativeBalance = parseDisplayNumber(wallet.nativeBalanceDisplay);
+  if (nativeBalance === null || nativeBalance <= 0) {
+    return { eligible: false, reason: `${dashboardChainLabel(chain)} wallet has no gas.` };
+  }
+  return { eligible: true };
+}
+
+async function postLiquidationQueuePayload(
+  action: "status" | "event",
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  const endpoint = liquidationQueueEndpoint(action);
+  if (!endpoint) return null;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "application/json",
+  };
+  const token = await fetchSuperMtNodeAdminToken(superMtNodeApiBaseUrl());
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Liquidation queue ${action} request failed (${response.status})`);
+  }
+  const body = await response.json() as Record<string, unknown>;
+  return body;
+}
+
+async function fetchLiquidationQueueStatus(
+  chainInput: unknown,
+  marketInput: unknown,
+): Promise<LiquidationQueueStatusPayload> {
+  const generatedAt = new Date().toISOString();
+  const chain = normalizeChainKey(chainInput);
+  const market = parseOptionalString(marketInput) ?? `aave-v3-${chain}`;
+  const walletChain = walletChainForKey(chain);
+  const [wallet, rpcUsage] = await Promise.all([
+    walletChain ? walletSnapshotForChain(walletChain) : Promise.resolve({} as Record<string, unknown>),
+    fetchUserRpcUsage(),
+  ]);
+  const walletAddress = typeof wallet.address === "string" && isAddress(wallet.address)
+    ? getAddress(wallet.address)
+    : null;
+  const metric = rpcUsage.metrics[chain];
+  const walletEligibility = queueWalletEligibility(wallet, chain);
+  const metricEligibility = queueMetricEligibility(metric);
+  const eligible = walletEligibility.eligible && metricEligibility.eligible;
+  const reason = walletEligibility.reason ?? metricEligibility.reason;
+  const baseQueue = {
+    enabled: Boolean(liquidationQueueEndpoint("status")),
+    status: liquidationQueueEndpoint("status") ? "ready" : "unconfigured",
+    action: eligible ? "wait_turn" : "excluded",
+  };
+  const localPayload: LiquidationQueueStatusPayload = {
+    ok: true,
+    generatedAt,
+    source: "local",
+    chain,
+    market,
+    walletAddress,
+    endpointSlug: metric?.endpointSlug,
+    eligible,
+    reason,
+    queue: baseQueue,
+  };
+
+  if (!liquidationQueueEndpoint("status")) {
+    return localPayload;
+  }
+
+  try {
+    const remotePayload = await postLiquidationQueuePayload("status", {
+      source: "liquidation-dashboard",
+      version: packageVersion(),
+      generatedAt,
+      chain,
+      market,
+      walletAddress,
+      endpointSlug: metric?.endpointSlug,
+      rpcEnv: metric?.rpcEnv,
+      requestCount: metric?.requestCount,
+      requestLimit: metric?.requestLimit,
+      remainingRequests: metric?.remainingRequests,
+      eligible,
+      reason,
+    });
+    return {
+      ...localPayload,
+      source: "supermtnode",
+      queue: isRecord(remotePayload?.queue) ? remotePayload.queue : {
+        ...baseQueue,
+        status: "registered",
+      },
+    };
+  } catch (error) {
+    return {
+      ...localPayload,
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+      queue: {
+        ...baseQueue,
+        status: "sync_error",
+      },
+    };
+  }
+}
+
+async function reportLiquidationQueueEvent(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const chain = normalizeChainKey(payload.chain);
+  const market = parseOptionalString(payload.market) ?? `aave-v3-${chain}`;
+  const outcome = parseOptionalString(payload.outcome) ?? "unknown";
+  const endpoint = liquidationQueueEndpoint("event");
+  if (!endpoint) {
+    return {
+      ok: true,
+      source: "local",
+      skipped: true,
+      reason: "Liquidation queue event endpoint is not configured.",
+    };
+  }
+  const remotePayload = await postLiquidationQueuePayload("event", {
+    source: "liquidation-dashboard",
+    version: packageVersion(),
+    generatedAt: new Date().toISOString(),
+    chain,
+    market,
+    outcome,
+    user: parseOptionalString(payload.user),
+    txHash: parseOptionalString(payload.txHash),
+    result: isRecord(payload.result) ? payload.result : undefined,
+  });
+  return remotePayload ?? { ok: true, source: "supermtnode" };
 }
 
 function executionWalletChainPayload(wallet: Record<string, unknown>) {
@@ -4206,6 +4623,9 @@ const serveApi = createDashboardApiHandler({
   fetchMorphoBlueBaseDashboardSnapshot,
   fetchQuickNodeUsage,
   fetchUserRpcUsage,
+  fetchPublicLiquidationFeed,
+  fetchLiquidationQueueStatus,
+  reportLiquidationQueueEvent,
   fetchTxGraph,
   json,
   liveStatePatchForResult,

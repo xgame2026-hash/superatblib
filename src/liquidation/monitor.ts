@@ -478,8 +478,7 @@ export async function streamLiquidationMonitor(params: {
   const client = createPublicClient({
     transport: http(params.rpcUrl),
   });
-  handlers?.onStdout?.("$ 初始化执行器...\n");
-  handlers?.onStdout?.(`$ 连接 ${params.chain} RPC...\n`);
+  handlers?.onStdout?.("$ 清算监控已启动，等待链上候选...\n");
   handlers?.onMeta?.({
     action: "auto-execute",
     chain: params.chain,
@@ -975,7 +974,7 @@ export async function streamLiquidationMonitor(params: {
         }
         recentExecutionAttempts.set(executionKey, Date.now());
         handlers?.onStdout?.(
-          `$ armed candidate ${preferred.user} | ${preferred.debtSymbol} <- ${preferred.collateralSymbol} | rough net ${preferred.roughNetProfitDisplay ?? "--"}\n`,
+          `$ 正在执行清算交易 ${preferred.user} | ${preferred.debtSymbol} <- ${preferred.collateralSymbol} | rough net ${preferred.roughNetProfitDisplay ?? "--"}\n`,
         );
         try {
           const executionResult = await params.executeCandidate(

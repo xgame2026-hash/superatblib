@@ -94,11 +94,6 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
                   </div>
 
                   <div id="settingsExchangeFields" class="settings-form-grid" style="display:none;">
-                    <label class="field full">
-                      <span id="settingsArbitrageVenuesLabel" class="field-label">Arbitrage venues</span>
-                      <input id="settingsArbitrageVenues" class="settings-input" type="text" placeholder="binance,okx,bitget,mexc,gate" />
-                    </label>
-
                     <div class="field full">
                       <span id="settingsExchangeKeysLabel" class="field-label">Exchange API Keys</span>
                     </div>

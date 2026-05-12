@@ -29,6 +29,8 @@ export const DASHBOARD_SHELL_EVENTS_LOGIC = String.raw`
             state.form.contract = settings.chains[state.form.chain].liquidatorContract || '';
           }
           renderAll();
+          loadPublicLiquidationFeed().catch(function () {});
+          loadLiquidationQueueStatus().catch(function () {});
         });
 
         document.getElementById('txGraphHashSearchButton').addEventListener('click', loadTxGraphData);

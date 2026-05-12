@@ -17,6 +17,26 @@ export const DASHBOARD_UI_SHELL_LOGIC = String.raw`
         document.getElementById('modal').classList.add('open');
       }
 
+      function openMessageDialog(title, body) {
+        openModalHtml(
+          title,
+          '',
+          '<div class="message-dialog-body">' + escapeHtml(body) + '</div>' +
+            '<div class="message-dialog-actions"><button type="button" data-modal-confirm>' +
+            escapeHtml(t('confirm')) +
+            '</button></div>',
+          'message-dialog'
+        );
+      }
+
+      function setSavingOverlay(visible) {
+        const overlay = document.getElementById('savingOverlay');
+        if (!overlay) return;
+        text('savingOverlayText', t('settingsSavingMessage'));
+        overlay.classList.toggle('open', Boolean(visible));
+        overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      }
+
       function closeModal() {
         destroyChart('modalTrend');
         destroyChart('modalDistribution');

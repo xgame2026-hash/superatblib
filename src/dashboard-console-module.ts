@@ -414,14 +414,23 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         overflow-x: auto;
       }
 
-      .console-wallet-assets-table {
-        width: 100%;
-        min-width: 680px;
-        border-collapse: collapse;
-      }
+	      .console-wallet-assets-table {
+	        width: 100%;
+	        min-width: 680px;
+	        table-layout: fixed;
+	        border-collapse: collapse;
+	      }
 
-      .console-wallet-assets-table th,
-      .console-wallet-assets-table td {
+	      .console-wallet-assets-table tbody tr {
+	        transition: background-color 140ms ease;
+	      }
+
+	      .console-wallet-assets-table tbody tr:hover {
+	        background: rgba(124, 108, 255, 0.12);
+	      }
+
+	      .console-wallet-assets-table th,
+	      .console-wallet-assets-table td {
         padding: 8px 10px;
         border-top: 1px solid rgba(255,255,255,0.07);
         text-align: left;
@@ -447,16 +456,17 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         color: #8e94a4;
       }
 
-      .console-wallet-chain {
-        width: 58px;
-      }
+	      .console-wallet-chain {
+	        width: 100%;
+	        vertical-align: middle;
+	      }
 
-      .console-wallet-chain-icon {
-        width: 28px;
-        height: 28px;
-        display: block;
-        object-fit: contain;
-      }
+	      .console-wallet-chain-icon {
+	        width: 19px;
+	        height: 19px;
+	        display: block;
+	        object-fit: contain;
+	      }
 
       .console-decision-card {
         display: grid;
@@ -1096,6 +1106,13 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
                       </div>
                       <div class="console-wallet-assets-scroll">
                         <table class="console-wallet-assets-table">
+                          <colgroup>
+                            <col style="width: 4.5%;" />
+                            <col style="width: 25.5%;" />
+                            <col style="width: 22%;" />
+                            <col style="width: 29%;" />
+                            <col style="width: 19%;" />
+                          </colgroup>
                           <thead>
 	                            <tr>
 	                              <th id="consoleWalletChainHeader">Chain</th>
@@ -1111,19 +1128,13 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
                         </table>
                       </div>
                     </div>
-                    <div class="console-decision-card">
-                      <div id="consoleDecisionLabel" class="console-decision-label">Current Priority</div>
-                      <div id="consoleDecisionValue" class="console-decision-value">--</div>
-                      <div id="consoleDecisionMeta" class="console-decision-meta">Awaiting candidates</div>
-                      <div id="consoleDecisionGate" class="console-decision-gate">Gate: Awaiting candidates</div>
-                    </div>
-                    <div class="console-ops-grid">
+	                    <div class="console-ops-grid">
                       <div class="console-ops-left">
                         <div class="console-fields-two">
                           <label class="field">
                             <span id="labelChain" class="field-label">Market</span>
                             <span class="settings-select-wrap">
-                              <select id="marketSelect">
+	                              <select id="marketSelect" data-default-value="aave-v3-ethereum">
                                 <option value="auto-ethereum">Auto Rotation / Ethereum</option>
                                 <option value="aave-v3-ethereum">Aave V3 / Ethereum</option>
                                 <option value="spark-ethereum">SparkLend / Ethereum</option>

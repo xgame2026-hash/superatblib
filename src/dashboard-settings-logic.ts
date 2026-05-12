@@ -30,9 +30,9 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         });
         const icon = document.getElementById('toggleSettingsVisibilityIcon');
         if (icon) {
-          icon.setAttribute('src', state.settingsMasked ? '/img/eye-empty.svg' : '/img/eye-off.svg');
+          icon.setAttribute('src', state.settingsMasked ? '/img/eye-off.svg' : '/img/eye-empty.svg');
         }
-        text('toggleSettingsVisibilityLabel', state.settingsMasked ? t('settingsShowSecrets') : t('settingsHideSecrets'));
+        text('toggleSettingsVisibilityLabel', state.settingsMasked ? t('settingsHideSecrets') : t('settingsShowSecrets'));
       }
 
       function toggleSensitiveSettingsVisibility() {
@@ -51,7 +51,84 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
 
       function setInputValue(id, value) {
         const input = document.getElementById(id);
-        if (input) input.value = value || '';
+        if (input) {
+          input.value = value || '';
+          syncCustomSelect(input);
+        }
+      }
+
+	      function customSelectLabel(select) {
+	        if (!select || !select.selectedOptions || !select.selectedOptions[0]) return '';
+	        return select.selectedOptions[0].textContent || '';
+	      }
+
+	      function ensureValidSelectValue(select, fallbackValue) {
+	        if (!select || select.tagName !== 'SELECT') return '';
+	        const options = Array.from(select.options || []);
+	        if (!options.length) return '';
+	        const fallback = fallbackValue || select.getAttribute('data-default-value') || '';
+	        const nextValue = options.some(function (option) { return option.value === select.value; })
+	          ? select.value
+	          : (
+	              options.some(function (option) { return option.value === fallback; })
+	                ? fallback
+	                : options[0].value
+	            );
+	        if (select.value !== nextValue) {
+	          select.value = nextValue;
+	        }
+	        return nextValue;
+	      }
+
+	      function syncCustomSelect(select) {
+	        if (!select || select.tagName !== 'SELECT') return;
+	        ensureValidSelectValue(select, select.id === 'marketSelect' ? 'aave-v3-ethereum' : '');
+	        if (select.id === 'marketSelect' && select.value && state.form.market !== select.value) {
+	          state.form.market = select.value;
+	          state.form.chain = inferExecutionChainFromMarketSelection(state.form.market);
+	        }
+	        const wrap = select.closest('.settings-select-wrap');
+	        if (!wrap) return;
+	        const custom = wrap.querySelector('.settings-custom-select');
+	        if (!custom) return;
+        const button = custom.querySelector('.settings-custom-select-button');
+        const menu = custom.querySelector('.settings-custom-select-menu');
+        if (button) button.textContent = customSelectLabel(select);
+        if (!menu) return;
+        const nextMarkup = Array.from(select.options).map(function (option) {
+          const selected = option.value === select.value;
+          return '<button class="settings-custom-select-option' + (selected ? ' is-selected' : '') + '" type="button" role="option" aria-selected="' + (selected ? 'true' : 'false') + '" data-select-value="' + escapeHtml(option.value) + '">' + escapeHtml(option.textContent || '') + '</button>';
+        }).join('');
+        if (menu.innerHTML !== nextMarkup) {
+          menu.innerHTML = nextMarkup;
+        }
+      }
+
+      function closeCustomSelects(except) {
+        qsa('.settings-custom-select.is-open').forEach(function (node) {
+          if (except && node === except) return;
+          node.classList.remove('is-open');
+          const button = node.querySelector('.settings-custom-select-button');
+          if (button) button.setAttribute('aria-expanded', 'false');
+        });
+      }
+
+      function enhanceCustomSelects() {
+        qsa('.settings-select-wrap select').forEach(function (select) {
+          const wrap = select.closest('.settings-select-wrap');
+          if (!wrap) return;
+          wrap.classList.add('custom-select-ready');
+          let custom = wrap.querySelector('.settings-custom-select');
+          if (!custom) {
+            custom = document.createElement('span');
+            custom.className = 'settings-custom-select';
+            custom.innerHTML =
+              '<button class="settings-custom-select-button" type="button" aria-haspopup="listbox" aria-expanded="false"></button>' +
+              '<span class="settings-custom-select-menu" role="listbox"></span>';
+            wrap.appendChild(custom);
+          }
+          syncCustomSelect(select);
+        });
       }
 
       function parseArbitrageVenueSelection(value) {
@@ -127,10 +204,15 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         if (select.innerHTML !== nextMarkup) {
           select.innerHTML = nextMarkup;
         }
-        if (nextValue) {
-          select.value = nextValue;
-        }
-      }
+	        if (nextValue) {
+	          select.value = nextValue;
+	        }
+	        if (id === 'marketSelect') {
+	          state.form.market = select.value || nextValue || 'aave-v3-ethereum';
+	          state.form.chain = inferExecutionChainFromMarketSelection(state.form.market);
+	        }
+	        syncCustomSelect(select);
+	      }
 
       function syncExecutionMarketSelectOptions() {
         const options = executionMarketSelectOptions();
@@ -151,8 +233,12 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         const section = state.settingsSection === 'exchanges' ? 'exchanges' : 'general';
         let payload;
         if (section === 'exchanges') {
+          const currentSettingsWrapper = state.data.settings;
+          const currentSettings = currentSettingsWrapper && currentSettingsWrapper.settings
+            ? currentSettingsWrapper.settings
+            : {};
           payload = {
-            arbitrageVenues: readSensitiveSettingsValue('settingsArbitrageVenues'),
+            arbitrageVenues: currentSettings.arbitrageVenues || state.arbitrageForm.venues || 'binance,okx,bitget,mexc,gate',
             exchanges: {
               binance: {
                 apiKey: readSensitiveSettingsValue('settingsBinanceApiKey'),
@@ -200,7 +286,8 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
           };
         }
 
-        text('settingsSaveState', 'saving...');
+        text('settingsSaveState', '');
+        setSavingOverlay(true);
         try {
           await fetchJson('/api/settings', {
             method: 'POST',
@@ -212,10 +299,13 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
           }
           await loadData();
           renderAll();
-          text('settingsSaveState', 'saved');
+          text('settingsSaveState', '');
+          setSavingOverlay(false);
+          openMessageDialog(t('settingsSaveSuccessTitle'), t('settingsSaveSuccessBody'));
         } catch (error) {
-          text('settingsSaveState', 'failed');
-          openModal(t('settingsSaveFailed'), String(error));
+          text('settingsSaveState', '');
+          setSavingOverlay(false);
+          openMessageDialog(t('settingsSaveFailed'), String(error));
         }
       }
 
@@ -239,7 +329,6 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         state.settingsRawValues.settingsExecutionRpc = settings.executionRpcUrl || '';
         state.settingsRawValues.settingsFlashbotsRelay = settings.flashbotsRelayUrl || '';
         state.settingsRawValues.settingsFlashbotsAuth = settings.flashbotsAuthPrivateKey || '';
-        state.settingsRawValues.settingsArbitrageVenues = settings.arbitrageVenues || '';
         state.settingsRawValues.settingsEthereumRpc = settings.ethereumRpcUrl || '';
         state.settingsRawValues.settingsEthereumContract = settings.chains.ethereum.liquidatorContract || '';
         state.settingsRawValues.settingsSparkContract = settings.markets['spark-ethereum']
@@ -283,5 +372,6 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         if (exchangeButton) exchangeButton.classList.toggle('is-active', section === 'exchanges');
         if (generalFields) generalFields.style.display = section === 'general' ? 'grid' : 'none';
         if (exchangeFields) exchangeFields.style.display = section === 'exchanges' ? 'grid' : 'none';
+        enhanceCustomSelects();
       }
 `;

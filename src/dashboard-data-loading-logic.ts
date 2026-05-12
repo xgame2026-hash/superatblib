@@ -376,7 +376,9 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
           }).catch(function () {}),
           fetchJson('/api/rpc/usage').then(function (payload) {
             state.data.rpcUsage = payload;
-          }).catch(function () {})
+          }).catch(function () {}),
+          loadPublicLiquidationFeed(),
+          loadLiquidationQueueStatus()
         ]);
       }
 
@@ -399,15 +401,94 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
         await loadMarketDataIndexStatus();
       }
 
-	      async function refreshRpcUsage() {
-	        try {
-	          const payload = await fetchJson('/api/rpc/usage');
-	          state.data.rpcUsage = payload;
-	          renderConsole();
-	        } catch (_error) {}
-	      }
+      async function refreshRpcUsage() {
+        try {
+          const payload = await fetchJson('/api/rpc/usage');
+          state.data.rpcUsage = payload;
+          renderConsole();
+        } catch (_error) {}
+      }
 
-	      async function refreshWalletAssets() {
+      async function loadPublicLiquidationFeed() {
+        try {
+          const chain = state.form && state.form.chain ? state.form.chain : 'ethereum';
+          const payload = await fetchJson('/api/public-liquidation-feed?chain=' + encodeURIComponent(chain));
+          state.data.publicLiquidationFeed = payload;
+          state.consoleLiveTargets = state.consoleLiveTargets.filter(function (row) {
+            return !row || row.source !== 'public-feed';
+          });
+          if (payload && Array.isArray(payload.targets) && payload.targets.length > 0) {
+            mergeConsoleTargets(payload.targets);
+          }
+          renderConsole();
+          return payload;
+        } catch (error) {
+          state.data.publicLiquidationFeed = {
+            ok: false,
+            source: 'public-feed',
+            chain: state.form && state.form.chain ? state.form.chain : 'ethereum',
+            error: error instanceof Error ? error.message : String(error),
+            targets: [],
+            queue: { enabled: false, status: 'error' }
+          };
+          return null;
+        }
+      }
+
+      async function loadLiquidationQueueStatus() {
+        try {
+          const chain = state.form && state.form.chain ? state.form.chain : 'ethereum';
+          const market = state.form && state.form.market ? state.form.market : 'aave-v3-ethereum';
+          const query = new URLSearchParams();
+          query.set('chain', chain);
+          query.set('market', market);
+          const payload = await fetchJson('/api/liquidation-queue/status?' + query.toString());
+          state.data.liquidationQueue = payload;
+          renderConsole();
+          return payload;
+        } catch (error) {
+          state.data.liquidationQueue = {
+            ok: false,
+            source: 'local',
+            chain: state.form && state.form.chain ? state.form.chain : 'ethereum',
+            market: state.form && state.form.market ? state.form.market : '',
+            eligible: false,
+            reason: error instanceof Error ? error.message : String(error),
+            queue: { enabled: false, status: 'error' }
+          };
+          return null;
+        }
+      }
+
+      async function reportLiquidationQueueEvent(outcome, result) {
+        try {
+          const parsed = result && result.parsed ? result.parsed : null;
+          const broadcastResult = parsed && parsed.broadcastResult ? parsed.broadcastResult : (result && result.broadcastResult ? result.broadcastResult : null);
+          const txHash =
+            (result && result.txHash) ||
+            (parsed && parsed.txHash) ||
+            (broadcastResult && broadcastResult.executeTxHash) ||
+            (broadcastResult && broadcastResult.txHash) ||
+            undefined;
+          const payload = {
+            chain: state.form && state.form.chain ? state.form.chain : 'ethereum',
+            market: state.form && state.form.market ? state.form.market : 'aave-v3-ethereum',
+            outcome: outcome,
+            user: state.autoExecuteSelection && state.autoExecuteSelection.user ? state.autoExecuteSelection.user : undefined,
+            txHash: txHash,
+            result: result || null
+          };
+          return await fetchJson('/api/liquidation-queue/event', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      async function refreshWalletAssets() {
 	        if (state.loading.walletAssets) return;
 	        state.loading.walletAssets = true;
 	        renderConsole();

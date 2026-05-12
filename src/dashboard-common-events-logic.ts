@@ -101,6 +101,44 @@ export const DASHBOARD_COMMON_EVENTS_LOGIC = String.raw`
         document.getElementById('saveSettingsButton').addEventListener('click', saveSettings);
         document.getElementById('toggleSettingsVisibilityButton').addEventListener('click', toggleSensitiveSettingsVisibility);
 
+        document.addEventListener('click', function (event) {
+          const customSelect = event.target instanceof Element ? event.target.closest('.settings-custom-select') : null;
+          if (!customSelect) {
+            closeCustomSelects();
+            return;
+          }
+          const wrap = customSelect.closest('.settings-select-wrap');
+          const select = wrap ? wrap.querySelector('select') : null;
+          const option = event.target instanceof Element ? event.target.closest('.settings-custom-select-option') : null;
+          const button = event.target instanceof Element ? event.target.closest('.settings-custom-select-button') : null;
+          if (!select) return;
+          if (option) {
+            event.preventDefault();
+            select.value = option.getAttribute('data-select-value') || '';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            syncCustomSelect(select);
+            closeCustomSelects();
+            return;
+          }
+          if (button) {
+            event.preventDefault();
+            const isOpen = customSelect.classList.contains('is-open');
+            closeCustomSelects(customSelect);
+            customSelect.classList.toggle('is-open', !isOpen);
+            button.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+          }
+        });
+
+        document.addEventListener('keydown', function (event) {
+          const customSelect = event.target instanceof Element ? event.target.closest('.settings-custom-select') : null;
+          if (!customSelect) return;
+          if (event.key === 'Escape') {
+            closeCustomSelects();
+            const button = customSelect.querySelector('.settings-custom-select-button');
+            if (button) button.focus();
+          }
+        });
+
         const settingsSectionGeneral = document.getElementById('settingsSectionGeneral');
         if (settingsSectionGeneral) {
           settingsSectionGeneral.addEventListener('click', function () {
@@ -124,6 +162,12 @@ export const DASHBOARD_COMMON_EVENTS_LOGIC = String.raw`
           if (event.target === document.getElementById('modal')) {
             closeModal();
           }
+        });
+        document.getElementById('modal').addEventListener('click', function (event) {
+          const target = event.target instanceof Element ? event.target.closest('[data-modal-confirm]') : null;
+          if (!target) return;
+          event.preventDefault();
+          closeModal();
         });
       }
 `;

@@ -85,6 +85,11 @@ npm run dashboard
 ETHEREUM_RPC_URL=
 ```
 
+每个用户必须使用自己的 SuperMT Node RPC endpoint，不要让多个用户共用同一个
+`ETHEREUM_RPC_URL`。SuperMT Node 的 `request_count/request_limit` 按 endpoint
+slug 统计；如果 30 个用户共用同一个 `rpc_xxx`，限额会合并计算，部分用户可能会因为
+这个共享 endpoint 达到限制而打不开或加载失败。
+
 如需使用其它链，可继续配置：
 
 ```env
@@ -92,6 +97,23 @@ BNB_RPC_URL=
 ARBITRUM_RPC_URL=
 BASE_RPC_URL=
 POLYGON_RPC_URL=
+```
+
+清算控制台右侧候选列表可以接入服务器侧公共候选池。公共候选池由链服务器扫描并推送，
+客户端只读取结果，不消耗用户自己的 RPC credit：
+
+```env
+PUBLIC_LIQUIDATION_FEED_URL=
+PUBLIC_LIQUIDATION_FEED_BNB_URL=
+PUBLIC_LIQUIDATION_FEED_ARBITRUM_URL=
+```
+
+如果要让 30 个用户按顺序轮转执行，配置队列服务地址。客户端会先检查本用户钱包和
+SuperMT Node endpoint 限额，到期或限额耗尽会退出队列；执行结果会回传给队列服务，
+由服务端决定是否把成功用户移动到队尾：
+
+```env
+LIQUIDATION_QUEUE_API_BASE_URL=
 ```
 
 如果只查看数据，可以不配置私钥。如果需要使用执行相关功能，需要配置：
