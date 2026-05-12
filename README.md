@@ -139,6 +139,9 @@ npm install
 npm run dashboard
 ```
 
+绿色版如果不是 git 工作区，不能只依赖版本提示，需要重新下载或替换最新代码包；
+否则本地文件不会自动拉取 GitHub 最新提交。
+
 详细变更记录见 [升级日志](docs/upgrade-log.md)。
 
 ## 安全建议
