@@ -57,6 +57,10 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         }
       }
 
+      function isSettingsDraftActive() {
+        return state.page === 'settings' && (state.settingsDirty || state.settingsEditing);
+      }
+
 	      function customSelectLabel(select) {
 	        if (!select || !select.selectedOptions || !select.selectedOptions[0]) return '';
 	        return select.selectedOptions[0].textContent || '';
@@ -294,6 +298,8 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(payload)
           });
+          state.settingsDirty = false;
+          state.settingsEditing = false;
           if (payload.language) {
             setLanguage(payload.language);
           }
@@ -313,6 +319,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         const settingsWrapper = state.data.settings;
         const settings = settingsWrapper && settingsWrapper.settings ? settingsWrapper.settings : null;
         if (!settings) return;
+        const preserveDraft = isSettingsDraftActive();
         const exchangeSettings = settings.exchanges || {
           binance: { apiKey: '', secretKey: '' },
           okx: { apiKey: '', secretKey: '' },
@@ -321,42 +328,44 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
           gate: { apiKey: '', secretKey: '' }
         };
 
-        state.settingsRawValues.settingsPrivateKey = settings.privateKey || '';
-        state.settingsRawValues.settingsBitqueryApiKey = settings.bitqueryApiKey || '';
-        state.settingsRawValues.settingsZeroExApiKey = settings.zeroExApiKey || '';
-        state.settingsRawValues.settingsQuickNodeApiKey = settings.quicknodeAdminApiKey || '';
-        state.settingsRawValues.settingsControlRpc = settings.controlRpcUrl || '';
-        state.settingsRawValues.settingsExecutionRpc = settings.executionRpcUrl || '';
-        state.settingsRawValues.settingsFlashbotsRelay = settings.flashbotsRelayUrl || '';
-        state.settingsRawValues.settingsFlashbotsAuth = settings.flashbotsAuthPrivateKey || '';
-        state.settingsRawValues.settingsEthereumRpc = settings.ethereumRpcUrl || '';
-        state.settingsRawValues.settingsEthereumContract = settings.chains.ethereum.liquidatorContract || '';
-        state.settingsRawValues.settingsSparkContract = settings.markets['spark-ethereum']
-          ? (settings.markets['spark-ethereum'].liquidatorContract || '')
-          : '';
-        state.settingsRawValues.settingsPolygonRpc = settings.chains.polygon.rpcUrl || '';
-        state.settingsRawValues.settingsPolygonContract = settings.chains.polygon.liquidatorContract || '';
-        state.settingsRawValues.settingsArbitrumRpc = settings.chains.arbitrum.rpcUrl || '';
-        state.settingsRawValues.settingsArbitrumContract = settings.chains.arbitrum.liquidatorContract || '';
-        state.settingsRawValues.settingsBnbRpc = settings.chains.bnb.rpcUrl || '';
-        state.settingsRawValues.settingsBnbContract = settings.chains.bnb.liquidatorContract || '';
-        state.settingsRawValues.settingsBinanceApiKey = exchangeSettings.binance.apiKey || '';
-        state.settingsRawValues.settingsBinanceSecretKey = exchangeSettings.binance.secretKey || '';
-        state.settingsRawValues.settingsOkxApiKey = exchangeSettings.okx.apiKey || '';
-        state.settingsRawValues.settingsOkxSecretKey = exchangeSettings.okx.secretKey || '';
-        state.settingsRawValues.settingsBitgetApiKey = exchangeSettings.bitget.apiKey || '';
-        state.settingsRawValues.settingsBitgetSecretKey = exchangeSettings.bitget.secretKey || '';
-        state.settingsRawValues.settingsMexcApiKey = exchangeSettings.mexc.apiKey || '';
-        state.settingsRawValues.settingsMexcSecretKey = exchangeSettings.mexc.secretKey || '';
-        state.settingsRawValues.settingsGateApiKey = exchangeSettings.gate.apiKey || '';
-        state.settingsRawValues.settingsGateSecretKey = exchangeSettings.gate.secretKey || '';
-        state.settingsRawValues.settingsBaseRpc = settings.baseRpcUrl || '';
-        applySensitiveSettingsVisibility();
-        setInputValue('settingsDefaultMarket', settings.market || 'aave-v3-ethereum');
-        setInputValue('settingsBroadcastTransport', settings.broadcastTransport || 'flashbots_bundle');
-        setInputValue('settingsFundingMode', settings.fundingMode || 'flash_loan');
-        setInputValue('settingsLanguage', settings.language || state.language);
-        setInputValue('settingsExecutionLimit', settings.limit || state.form.limit || '50');
+        if (!preserveDraft) {
+          state.settingsRawValues.settingsPrivateKey = settings.privateKey || '';
+          state.settingsRawValues.settingsBitqueryApiKey = settings.bitqueryApiKey || '';
+          state.settingsRawValues.settingsZeroExApiKey = settings.zeroExApiKey || '';
+          state.settingsRawValues.settingsQuickNodeApiKey = settings.quicknodeAdminApiKey || '';
+          state.settingsRawValues.settingsControlRpc = settings.controlRpcUrl || '';
+          state.settingsRawValues.settingsExecutionRpc = settings.executionRpcUrl || '';
+          state.settingsRawValues.settingsFlashbotsRelay = settings.flashbotsRelayUrl || '';
+          state.settingsRawValues.settingsFlashbotsAuth = settings.flashbotsAuthPrivateKey || '';
+          state.settingsRawValues.settingsEthereumRpc = settings.ethereumRpcUrl || '';
+          state.settingsRawValues.settingsEthereumContract = settings.chains.ethereum.liquidatorContract || '';
+          state.settingsRawValues.settingsSparkContract = settings.markets['spark-ethereum']
+            ? (settings.markets['spark-ethereum'].liquidatorContract || '')
+            : '';
+          state.settingsRawValues.settingsPolygonRpc = settings.chains.polygon.rpcUrl || '';
+          state.settingsRawValues.settingsPolygonContract = settings.chains.polygon.liquidatorContract || '';
+          state.settingsRawValues.settingsArbitrumRpc = settings.chains.arbitrum.rpcUrl || '';
+          state.settingsRawValues.settingsArbitrumContract = settings.chains.arbitrum.liquidatorContract || '';
+          state.settingsRawValues.settingsBnbRpc = settings.chains.bnb.rpcUrl || '';
+          state.settingsRawValues.settingsBnbContract = settings.chains.bnb.liquidatorContract || '';
+          state.settingsRawValues.settingsBinanceApiKey = exchangeSettings.binance.apiKey || '';
+          state.settingsRawValues.settingsBinanceSecretKey = exchangeSettings.binance.secretKey || '';
+          state.settingsRawValues.settingsOkxApiKey = exchangeSettings.okx.apiKey || '';
+          state.settingsRawValues.settingsOkxSecretKey = exchangeSettings.okx.secretKey || '';
+          state.settingsRawValues.settingsBitgetApiKey = exchangeSettings.bitget.apiKey || '';
+          state.settingsRawValues.settingsBitgetSecretKey = exchangeSettings.bitget.secretKey || '';
+          state.settingsRawValues.settingsMexcApiKey = exchangeSettings.mexc.apiKey || '';
+          state.settingsRawValues.settingsMexcSecretKey = exchangeSettings.mexc.secretKey || '';
+          state.settingsRawValues.settingsGateApiKey = exchangeSettings.gate.apiKey || '';
+          state.settingsRawValues.settingsGateSecretKey = exchangeSettings.gate.secretKey || '';
+          state.settingsRawValues.settingsBaseRpc = settings.baseRpcUrl || '';
+          applySensitiveSettingsVisibility();
+          setInputValue('settingsDefaultMarket', settings.market || 'aave-v3-ethereum');
+          setInputValue('settingsBroadcastTransport', settings.broadcastTransport || 'flashbots_bundle');
+          setInputValue('settingsFundingMode', settings.fundingMode || 'flash_loan');
+          setInputValue('settingsLanguage', settings.language || state.language);
+          setInputValue('settingsExecutionLimit', settings.limit || state.form.limit || '50');
+        }
         text('settingsFileHint', settingsWrapper.file || '.env');
 
         const section = state.settingsSection === 'exchanges' ? 'exchanges' : 'general';

@@ -188,6 +188,35 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRpcRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /rps limit exceeded|rate limit|too many requests|429/i.test(message);
+}
+
+async function withRpcRetry<T>(
+  operation: () => Promise<T>,
+  label: string,
+  attempts = 5,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRpcRateLimitError(error) || attempt >= attempts - 1) {
+        break;
+      }
+      await sleep(900 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`${label} failed.`);
+}
+
 function estimatePair(
   healthFactor: bigint,
   collateral: UserReservePosition,
@@ -286,70 +315,61 @@ export async function loadReserveMetadata(
   baseCurrencyUnit: bigint;
   reserves: ReserveMetadata[];
 }> {
-  const [dataProvider, oracle] = await Promise.all([
-    client.readContract({
+  const dataProvider = await withRpcRetry(() => client.readContract({
       address: poolAddressesProvider,
       abi: addressProviderAbi,
       functionName: "getPoolDataProvider",
-    }),
-    client.readContract({
+    }), "getPoolDataProvider");
+  const oracle = await withRpcRetry(() => client.readContract({
       address: poolAddressesProvider,
       abi: addressProviderAbi,
       functionName: "getPriceOracle",
-    }),
-  ]);
+    }), "getPriceOracle");
 
-  const [baseCurrency, baseCurrencyUnit, tokens] = await Promise.all([
-    client.readContract({
+  const baseCurrency = await withRpcRetry(() => client.readContract({
       address: oracle,
       abi: oracleAbi,
       functionName: "BASE_CURRENCY",
-    }),
-    client.readContract({
+    }), "BASE_CURRENCY");
+  const baseCurrencyUnit = await withRpcRetry(() => client.readContract({
       address: oracle,
       abi: oracleAbi,
       functionName: "BASE_CURRENCY_UNIT",
-    }),
-    client.readContract({
+    }), "BASE_CURRENCY_UNIT");
+  const tokens = await withRpcRetry(() => client.readContract({
       address: dataProvider,
       abi: poolDataProviderAbi,
       functionName: "getAllReservesTokens",
-    }),
-  ]);
+    }), "getAllReservesTokens");
 
-  const reserves = await mapWithConcurrency(tokens, 3, async (token) => {
+  const reserves = await mapWithConcurrency(tokens, 1, async (token) => {
       const asset = getAddress(token.tokenAddress);
-      const [configuration, eModeCategory, liquidationProtocolFee, price] =
-        await Promise.all([
-          client.readContract({
+      const configuration = await withRpcRetry(() => client.readContract({
             address: dataProvider,
             abi: poolDataProviderAbi,
             functionName: "getReserveConfigurationData",
             args: [asset],
-          }),
-          client
-            .readContract({
+          }), `getReserveConfigurationData ${token.symbol}`);
+      const eModeCategory = await withRpcRetry(() => client.readContract({
               address: dataProvider,
               abi: poolDataProviderAbi,
               functionName: "getReserveEModeCategory",
               args: [asset],
-            })
-            .catch(() => 0n),
-          client
-            .readContract({
+            }), `getReserveEModeCategory ${token.symbol}`)
+            .catch(() => 0n);
+      const liquidationProtocolFee = await withRpcRetry(() => client.readContract({
               address: dataProvider,
               abi: poolDataProviderAbi,
               functionName: "getLiquidationProtocolFee",
               args: [asset],
-            })
-            .catch(() => 0n),
-          client.readContract({
+            }), `getLiquidationProtocolFee ${token.symbol}`)
+            .catch(() => 0n);
+      const price = await withRpcRetry(() => client.readContract({
             address: oracle,
             abi: oracleAbi,
             functionName: "getAssetPrice",
             args: [asset],
-          }),
-        ]);
+          }), `getAssetPrice ${token.symbol}`);
 
       return {
         asset,
@@ -380,32 +400,32 @@ export async function analyzeDetailedUser(
   reserves: ReserveMetadata[],
   snapshot: Awaited<ReturnType<typeof loadAccountSnapshots>>[number],
 ): Promise<DetailedUserAnalysis> {
-  const userEMode = await client.readContract({
+  const userEMode = await withRpcRetry(() => client.readContract({
     address: pool,
     abi: poolAbi,
     functionName: "getUserEMode",
     args: [snapshot.user],
-  });
+  }), `getUserEMode ${snapshot.user}`);
 
   const eModeBonuses = new Map<bigint, bigint>();
   if (userEMode !== 0n) {
-    const eModeData = await client.readContract({
+    const eModeData = await withRpcRetry(() => client.readContract({
       address: pool,
       abi: poolAbi,
       functionName: "getEModeCategoryData",
       args: [Number(userEMode)],
-    });
+    }), `getEModeCategoryData ${snapshot.user}`);
     eModeBonuses.set(userEMode, BigInt(eModeData.liquidationBonus));
   }
 
   const userReserves = (
-    await mapWithConcurrency(reserves, 4, async (reserve): Promise<UserReservePosition | undefined> => {
-        const position = await client.readContract({
+    await mapWithConcurrency(reserves, 1, async (reserve): Promise<UserReservePosition | undefined> => {
+        const position = await withRpcRetry(() => client.readContract({
           address: dataProvider,
           abi: poolDataProviderAbi,
           functionName: "getUserReserveData",
           args: [reserve.asset, snapshot.user],
-        });
+        }), `getUserReserveData ${reserve.symbol} ${snapshot.user}`);
 
         const totalDebt = position[1] + position[2];
         const collateralValueBase =

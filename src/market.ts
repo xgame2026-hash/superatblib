@@ -44,6 +44,35 @@ export const HEALTH_FACTOR_DECIMALS = 18;
 export const LIQUIDATABLE_HEALTH_FACTOR = 1n * 10n ** 18n;
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11" as const;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRpcRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /rps limit exceeded|rate limit|too many requests|429/i.test(message);
+}
+
+async function withRpcRetry<T>(
+  operation: () => Promise<T>,
+  label: string,
+  attempts = 5,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRpcRateLimitError(error) || attempt >= attempts - 1) {
+        break;
+      }
+      await sleep(900 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`${label} failed.`);
+}
+
 function minBigInt(left: bigint, right: bigint): bigint {
   return left < right ? left : right;
 }
@@ -320,7 +349,7 @@ export async function loadAccountSnapshots(
 
     try {
       // A single multicall batch is materially cheaper than one RPC call per user.
-      batchResults = (await client.multicall({
+      batchResults = (await withRpcRetry(() => client.multicall({
         allowFailure: true,
         multicallAddress: MULTICALL3_ADDRESS,
         contracts: batch.map((user) => ({
@@ -329,7 +358,7 @@ export async function loadAccountSnapshots(
           functionName: "getUserAccountData",
           args: [user],
         })),
-      })) as Array<
+      }), `multicall getUserAccountData ${index + 1}`)) as Array<
         | {
             status: "success";
             result: readonly [bigint, bigint, bigint, bigint, bigint, bigint];
@@ -344,26 +373,25 @@ export async function loadAccountSnapshots(
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      batchResults = await Promise.all(
-        batch.map(async (user) => {
+      batchResults = [];
+      for (const user of batch) {
           try {
-            const result = await client.readContract({
+            const result = await withRpcRetry(() => client.readContract({
               address: pool,
               abi: poolAbi,
               functionName: "getUserAccountData",
               args: [user],
-            });
-            return {
+            }), `getUserAccountData ${user}`);
+            batchResults.push({
               status: "success" as const,
               result,
-            };
+            });
           } catch {
-            return {
+            batchResults.push({
               status: "failure" as const,
-            };
+            });
           }
-        }),
-      );
+      }
     }
 
     for (const [resultIndex, result] of batchResults.entries()) {

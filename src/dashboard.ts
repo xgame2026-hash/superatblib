@@ -342,30 +342,36 @@ type BitqueryTxGraphRequest = {
   apiKey: string;
 };
 
+type TokenBalanceOverride = {
+  asset: `0x${string}`;
+  decimals: number;
+  symbol?: string;
+};
+
 const TOKEN_BALANCE_OVERRIDES: Partial<
-  Record<string, Partial<Record<"USDC" | "USDT", readonly `0x${string}`[]>>>
+  Record<string, Partial<Record<"USDC" | "USDT", readonly TokenBalanceOverride[]>>>
 > = {
   ethereum: {
-    USDC: ["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"],
-    USDT: ["0xdAC17F958D2ee523a2206206994597C13D831ec7"],
+    USDC: [{ asset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 }],
+    USDT: [{ asset: "0xdAC17F958D2ee523a2206206994597C13D831ec7", decimals: 6 }],
   },
   bnb: {
-    USDC: ["0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"],
-    USDT: ["0x55d398326f99059fF775485246999027B3197955"],
+    USDC: [{ asset: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", decimals: 18 }],
+    USDT: [{ asset: "0x55d398326f99059fF775485246999027B3197955", decimals: 18 }],
   },
   arbitrum: {
     USDC: [
-      "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-      "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
+      { asset: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", decimals: 6 },
+      { asset: "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", decimals: 6 },
     ],
-    USDT: ["0xFd086bC7CD5C481DCC9C85eE9C782A1C0b69FCbb"],
+    USDT: [{ asset: "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", decimals: 6 }],
   },
   polygon: {
     USDC: [
-      "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-      "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+      { asset: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", decimals: 6 },
+      { asset: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 },
     ],
-    USDT: ["0xc2132D05D31c914a87C6611C10748AEb04B58e8F"],
+    USDT: [{ asset: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", decimals: 6 }],
   },
 };
 
@@ -4360,24 +4366,10 @@ async function fetchUncachedWalletSnapshotForChain(
   try {
     const account = privateKeyToAccount(privateKey);
     const client = createPublicClient({ transport: http(rpcUrl) });
-    const shouldReadReserveMetadata = process.env.DASHBOARD_WALLET_USE_AAVE_RESERVES === "1";
-    const market = shouldReadReserveMetadata && chain.preset
-      ? await withRpcRetry(
-          () => resolveMarket(client, chain.preset as ChainPreset, undefined, undefined),
-          `${chain.name} Aave market metadata`,
-        )
-      : undefined;
     const nativeBalance = await withRpcRetry(
       () => client.getBalance({ address: account.address }),
       `${chain.name} native balance`,
     );
-    const reserveState =
-      shouldReadReserveMetadata && chain.preset && market
-        ? await withRpcRetry(
-            () => loadReserveMetadata(client, market.poolAddressesProvider),
-            `${chain.name} reserve metadata`,
-          )
-        : undefined;
 
     const buildTokenCandidates = (
       tokenSymbol: "USDC" | "USDT",
@@ -4391,34 +4383,12 @@ async function fetchUncachedWalletSnapshotForChain(
         candidates.set(fixedToken.asset.toLowerCase(), fixedToken);
       }
 
-      const matchedReserve =
-        reserveState?.reserves.find((reserve) => reserve.symbol === tokenSymbol) ??
-        reserveState?.reserves.find((reserve) =>
-          String(reserve.symbol).toUpperCase().includes(tokenSymbol),
-        );
-      if (matchedReserve) {
-        candidates.set(matchedReserve.asset.toLowerCase(), {
-          asset: matchedReserve.asset,
-          decimals: Number(matchedReserve.decimals),
-          symbol: matchedReserve.symbol,
+      for (const token of TOKEN_BALANCE_OVERRIDES[chain.key]?.[tokenSymbol] ?? []) {
+        candidates.set(token.asset.toLowerCase(), {
+          asset: token.asset,
+          decimals: token.decimals,
+          symbol: token.symbol ?? tokenSymbol,
         });
-      }
-      for (const reserve of reserveState?.reserves ?? []) {
-        if (!String(reserve.symbol).toUpperCase().includes(tokenSymbol)) continue;
-        candidates.set(reserve.asset.toLowerCase(), {
-          asset: reserve.asset,
-          decimals: Number(reserve.decimals),
-          symbol: reserve.symbol,
-        });
-      }
-      for (const asset of TOKEN_BALANCE_OVERRIDES[chain.key]?.[tokenSymbol] ?? []) {
-        if (!candidates.has(asset.toLowerCase())) {
-          candidates.set(asset.toLowerCase(), {
-            asset,
-            decimals: 6,
-            symbol: tokenSymbol,
-          });
-        }
       }
       return candidates;
     };

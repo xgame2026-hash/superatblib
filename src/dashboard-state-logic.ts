@@ -134,6 +134,8 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
           modalDistribution: null
         },
         settingsMasked: true,
+        settingsDirty: false,
+        settingsEditing: false,
         settingsRawValues: {},
         txGraph: {
           hash: '',

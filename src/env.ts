@@ -23,5 +23,6 @@ function loadEnvFile(filePath: string): void {
 
 const cwd = process.cwd();
 
+// Load .env last so it is the authoritative runtime configuration file.
 loadEnvFile(path.resolve(cwd, ".env.local"));
 loadEnvFile(path.resolve(cwd, ".env"));

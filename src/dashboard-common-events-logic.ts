@@ -101,6 +101,26 @@ export const DASHBOARD_COMMON_EVENTS_LOGIC = String.raw`
         document.getElementById('saveSettingsButton').addEventListener('click', saveSettings);
         document.getElementById('toggleSettingsVisibilityButton').addEventListener('click', toggleSensitiveSettingsVisibility);
 
+        function markSettingsDirty(event) {
+          const target = event.target instanceof Element ? event.target : null;
+          if (!target || !target.closest('#pageSettings')) return;
+          if (!target.matches('input, select, textarea')) return;
+          state.settingsEditing = true;
+          state.settingsDirty = true;
+        }
+
+        function markSettingsEditing(event) {
+          const target = event.target instanceof Element ? event.target : null;
+          if (!target || !target.closest('#pageSettings')) return;
+          if (!target.matches('input, select, textarea, button')) return;
+          state.settingsEditing = true;
+        }
+
+        document.addEventListener('focusin', markSettingsEditing);
+        document.addEventListener('pointerdown', markSettingsEditing);
+        document.addEventListener('input', markSettingsDirty);
+        document.addEventListener('change', markSettingsDirty);
+
         document.addEventListener('click', function (event) {
           const customSelect = event.target instanceof Element ? event.target.closest('.settings-custom-select') : null;
           if (!customSelect) {

@@ -166,7 +166,7 @@ type DashboardSettingsPatch = Partial<{
   >;
 }>;
 
-function envLocalPath(): string {
+function envFilePath(): string {
   return path.resolve(process.cwd(), ".env");
 }
 
@@ -486,7 +486,7 @@ function serializeManagedEnv(env: Record<ManagedKey, string>): string {
 export function saveDashboardSettings(
   patch: DashboardSettingsPatch,
 ): DashboardSettings {
-  const filePath = envLocalPath();
+  const filePath = envFilePath();
   ensureDirectory(filePath);
 
   const current = managedEnvSnapshot();
@@ -643,5 +643,5 @@ export function saveDashboardSettings(
 }
 
 export function dashboardSettingsFilePath(): string {
-  return envLocalPath();
+  return envFilePath();
 }

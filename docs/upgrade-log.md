@@ -7,6 +7,9 @@
 - 版本号升级到 `1.0.14`，用于让绿色版和 Windows 用户明确识别 GitHub 上的新版本。
 - 补充绿色版更新说明：如果本地不是 git 工作区，必须重新下载或替换最新代码包，不能只依赖页面版本提示。
 - 版本号升级到 `1.0.15`，修复低 RPS ETH RPC endpoint 在读取钱包资产时容易触发 `RPS limit exceeded` 的问题。
+- 版本号升级到 `1.0.16`，继续修复清算扫描阶段读取 Aave reserve 配置和用户数据时触发低 RPS endpoint 限速的问题。
+- 通用设置进入输入框或下拉控件后会立即进入草稿保护状态，后台定时刷新不再覆盖用户尚未保存的输入内容。
+- 明确 `.env` 为权威配置文件：启动时 `.env` 最后加载，同名配置以 `.env` 为准，设置页也只保存到 `.env`。
 
 ### 通用设置
 
@@ -24,6 +27,10 @@
 - 新增公共清算候选池接口 `/api/public-liquidation-feed`，支持 `PUBLIC_LIQUIDATION_FEED_URL` 以及按链拆分的 `PUBLIC_LIQUIDATION_FEED_ETHEREUM_URL`、`PUBLIC_LIQUIDATION_FEED_BNB_URL`、`PUBLIC_LIQUIDATION_FEED_ARBITRUM_URL`、`PUBLIC_LIQUIDATION_FEED_POLYGON_URL`。控制台定时读取服务器侧候选池并合并到右侧列表，用于后续由 ARB / BNB 等专业 RPC 服务器统一扫描，再按用户队列分配执行机会。
 - 新增清算执行队列桥接接口 `/api/liquidation-queue/status` 和 `/api/liquidation-queue/event`：客户端会根据当前链钱包 gas、SuperMT Node endpoint 状态与剩余请求数判断是否可入队；队列服务配置后会同步用户位置和执行结果，便于服务端按“成功后排到队尾、过期限额退出队列”的规则轮转 30 个用户。
 - 钱包资产读取默认改为静态 USDC / USDT 合约地址，不再为了显示余额先读取 Aave `getPoolDataProvider()` 和 reserve metadata；同时对 RPC RPS 超限增加延迟重试，降低个别低限额 ETH endpoint 显示 `--` 的概率。
+- 清算控制台的钱包资产读取固定为快速路径：只读原生 gas、USDC `balanceOf`、USDT `balanceOf`，不再使用 Aave reserve metadata，也不再受 `DASHBOARD_WALLET_USE_AAVE_RESERVES` 影响。
+- 清算扫描的 Aave `getReserveConfigurationData`、`getAssetPrice`、`getUserReserveData`、`getUserAccountData` 等合约读取改为更保守的顺序/低并发读取，并对 `RPS limit exceeded`、`429`、rate limit 错误自动等待重试。
+- 修正 BNB Chain 的 USDC / USDT 余额小数位配置为 18 位，并确保静态 token 配置覆盖 Aave reserve metadata，避免显示成异常大的稳定币金额；Arbitrum / Ethereum / Polygon 继续按 6 位稳定币小数位读取。
+- 修正 Arbitrum USDT 静态合约地址，避免 `viem` 因地址不合法拒绝读取后显示 `--`。
 
 ### RPC 用量
 
