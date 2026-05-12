@@ -6,6 +6,7 @@
 
 - 版本号升级到 `1.0.14`，用于让绿色版和 Windows 用户明确识别 GitHub 上的新版本。
 - 补充绿色版更新说明：如果本地不是 git 工作区，必须重新下载或替换最新代码包，不能只依赖页面版本提示。
+- 版本号升级到 `1.0.15`，修复低 RPS ETH RPC endpoint 在读取钱包资产时容易触发 `RPS limit exceeded` 的问题。
 
 ### 通用设置
 
@@ -22,6 +23,7 @@
 - 清算控制台启动真实清算前新增执行预检：先连接所选链 RPC 并读取最新区块，再校验当前链钱包 gas、广播模式和执行合约状态；终端文案区分“扫描清算机会”和“正在执行清算交易”。
 - 新增公共清算候选池接口 `/api/public-liquidation-feed`，支持 `PUBLIC_LIQUIDATION_FEED_URL` 以及按链拆分的 `PUBLIC_LIQUIDATION_FEED_ETHEREUM_URL`、`PUBLIC_LIQUIDATION_FEED_BNB_URL`、`PUBLIC_LIQUIDATION_FEED_ARBITRUM_URL`、`PUBLIC_LIQUIDATION_FEED_POLYGON_URL`。控制台定时读取服务器侧候选池并合并到右侧列表，用于后续由 ARB / BNB 等专业 RPC 服务器统一扫描，再按用户队列分配执行机会。
 - 新增清算执行队列桥接接口 `/api/liquidation-queue/status` 和 `/api/liquidation-queue/event`：客户端会根据当前链钱包 gas、SuperMT Node endpoint 状态与剩余请求数判断是否可入队；队列服务配置后会同步用户位置和执行结果，便于服务端按“成功后排到队尾、过期限额退出队列”的规则轮转 30 个用户。
+- 钱包资产读取默认改为静态 USDC / USDT 合约地址，不再为了显示余额先读取 Aave `getPoolDataProvider()` 和 reserve metadata；同时对 RPC RPS 超限增加延迟重试，降低个别低限额 ETH endpoint 显示 `--` 的概率。
 
 ### RPC 用量
 

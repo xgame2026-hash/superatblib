@@ -346,13 +346,26 @@ const TOKEN_BALANCE_OVERRIDES: Partial<
   Record<string, Partial<Record<"USDC" | "USDT", readonly `0x${string}`[]>>>
 > = {
   ethereum: {
+    USDC: ["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"],
     USDT: ["0xdAC17F958D2ee523a2206206994597C13D831ec7"],
+  },
+  bnb: {
+    USDC: ["0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"],
+    USDT: ["0x55d398326f99059fF775485246999027B3197955"],
+  },
+  arbitrum: {
+    USDC: [
+      "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+      "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
+    ],
+    USDT: ["0xFd086bC7CD5C481DCC9C85eE9C782A1C0b69FCbb"],
   },
   polygon: {
     USDC: [
       "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
       "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
     ],
+    USDT: ["0xc2132D05D31c914a87C6611C10748AEb04B58e8F"],
   },
 };
 
@@ -598,6 +611,35 @@ function parseDisplayNumber(value: unknown): number | null {
   }
   const parsed = Number(match[0]);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRpcRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /rps limit exceeded|rate limit|too many requests|429/i.test(message);
+}
+
+async function withRpcRetry<T>(
+  operation: () => Promise<T>,
+  label: string,
+  attempts = 4,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRpcRateLimitError(error) || attempt >= attempts - 1) {
+        break;
+      }
+      await sleep(700 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`${label} failed.`);
 }
 
 async function withDashboardTimeout<T>(
@@ -4318,11 +4360,23 @@ async function fetchUncachedWalletSnapshotForChain(
   try {
     const account = privateKeyToAccount(privateKey);
     const client = createPublicClient({ transport: http(rpcUrl) });
-    const market = chain.preset ? await resolveMarket(client, chain.preset, undefined, undefined) : undefined;
-    const nativeBalance = await client.getBalance({ address: account.address });
+    const shouldReadReserveMetadata = process.env.DASHBOARD_WALLET_USE_AAVE_RESERVES === "1";
+    const market = shouldReadReserveMetadata && chain.preset
+      ? await withRpcRetry(
+          () => resolveMarket(client, chain.preset as ChainPreset, undefined, undefined),
+          `${chain.name} Aave market metadata`,
+        )
+      : undefined;
+    const nativeBalance = await withRpcRetry(
+      () => client.getBalance({ address: account.address }),
+      `${chain.name} native balance`,
+    );
     const reserveState =
-      chain.preset && market
-        ? await loadReserveMetadata(client, market.poolAddressesProvider)
+      shouldReadReserveMetadata && chain.preset && market
+        ? await withRpcRetry(
+            () => loadReserveMetadata(client, market.poolAddressesProvider),
+            `${chain.name} reserve metadata`,
+          )
         : undefined;
 
     const buildTokenCandidates = (
@@ -4378,12 +4432,15 @@ async function fetchUncachedWalletSnapshotForChain(
 
       for (const candidate of candidates.values()) {
         try {
-          const balance = await client.readContract({
-            address: candidate.asset,
-            abi: erc20BalanceAbi,
-            functionName: "balanceOf",
-            args: [account.address],
-          });
+          const balance = await withRpcRetry(
+            () => client.readContract({
+              address: candidate.asset,
+              abi: erc20BalanceAbi,
+              functionName: "balanceOf",
+              args: [account.address],
+            }),
+            `${chain.name} ${tokenSymbol} balance`,
+          );
           if (bestBalance === undefined || balance > bestBalance) {
             bestBalance = balance;
             bestAsset = candidate.asset;
@@ -4403,10 +4460,8 @@ async function fetchUncachedWalletSnapshotForChain(
       };
     };
 
-    const [usdcToken, usdtToken] = await Promise.all([
-      resolveBestTokenBalance("USDC"),
-      resolveBestTokenBalance("USDT"),
-    ]);
+    const usdcToken = await resolveBestTokenBalance("USDC");
+    const usdtToken = await resolveBestTokenBalance("USDT");
 
     const nativeSymbol = chain.nativeSymbol;
     const watchedBalances = [
