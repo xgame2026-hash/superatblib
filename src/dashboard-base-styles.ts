@@ -581,36 +581,6 @@ export const DASHBOARD_BASE_STYLES = String.raw`
         padding: 0;
       }
 
-      .market-data-index-card {
-        margin-bottom: 16px;
-      }
-
-      .market-data-index-inner {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
-      }
-
-      .market-data-index-metrics {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(96px, 1fr));
-        gap: 12px;
-        min-width: min(520px, 100%);
-      }
-
-      .market-data-index-metric {
-        border-left: 1px solid var(--border);
-        padding-left: 12px;
-      }
-
-      .market-data-index-value {
-        font-size: 13px;
-        font-weight: 700;
-        margin-top: 5px;
-        overflow-wrap: anywhere;
-      }
-
       .summary-card .panel-inner {
         padding: 0;
       }
@@ -1690,23 +1660,23 @@ export const DASHBOARD_BASE_STYLES = String.raw`
       }
 
       .protocol-summary-table col.strategy-col-market {
-        width: 21%;
+        width: 22%;
       }
 
       .protocol-summary-table col.strategy-col-segment {
-        width: 6.5%;
+        width: 14%;
       }
 
       .protocol-summary-table col.strategy-col-priority {
-        width: 5%;
-      }
-
-      .protocol-summary-table col.strategy-col-status {
         width: 8.5%;
       }
 
+      .protocol-summary-table col.strategy-col-status {
+        width: 9%;
+      }
+
       .protocol-summary-table col.strategy-col-competition {
-        width: 7%;
+        width: 7.5%;
       }
 
       .protocol-summary-table col.strategy-col-next {
@@ -1715,43 +1685,44 @@ export const DASHBOARD_BASE_STYLES = String.raw`
 
       th#smMarket,
       #strategyMarketRows td:nth-child(1) {
-        width: 21%;
+        width: 22%;
         min-width: 190px;
         text-align: left;
       }
 
       th#smSegment,
       #strategyMarketRows td:nth-child(2) {
-        width: 6.5%;
-        min-width: 58px;
+        width: 14%;
+        min-width: 150px;
         white-space: nowrap;
       }
 
       th#smPriority,
       #strategyMarketRows td:nth-child(3) {
-        width: 5%;
-        min-width: 48px;
+        width: 8.5%;
+        min-width: 104px;
         white-space: nowrap;
       }
 
       th#smStatus,
       #strategyMarketRows td:nth-child(4) {
-        width: 8.5%;
+        width: 9%;
         min-width: 82px;
         white-space: nowrap;
       }
 
       th#smCompetition,
       #strategyMarketRows td:nth-child(5) {
-        width: 7%;
+        width: 7.5%;
         min-width: 66px;
         white-space: nowrap;
       }
 
       th#smNext,
       #strategyMarketRows td:last-child {
-        width: 52%;
+        width: 39%;
         text-align: left;
+        vertical-align: middle;
       }
 
       .protocol-table.leaderboard-table th:not(.is-numeric),
@@ -1802,6 +1773,8 @@ export const DASHBOARD_BASE_STYLES = String.raw`
         grid-template-rows: auto minmax(42px, auto) auto;
         gap: 8px;
         align-items: start;
+        justify-content: stretch;
+        align-content: center;
         min-width: 0;
       }
 
@@ -3044,6 +3017,19 @@ ${DASHBOARD_TXGRAPH_STYLES}
         grid-column: 1 / -1;
       }
 
+      .settings-chain-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .settings-chain-icon {
+        width: 18px;
+        height: 18px;
+        object-fit: contain;
+        flex: 0 0 auto;
+      }
+
       .settings-field-hidden {
         display: none !important;
       }
@@ -3499,6 +3485,63 @@ ${DASHBOARD_TXGRAPH_STYLES}
         font-size: 14px;
       }
 
+      .overview-news-list {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .overview-news-item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 12px;
+        min-height: 112px;
+        padding: 16px;
+        border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.025);
+      }
+
+      .overview-news-tag {
+        align-self: start;
+        min-width: 54px;
+        padding: 6px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(108,240,232,0.35);
+        background: rgba(108,240,232,0.08);
+        color: #77eadc;
+        font-size: 11px;
+        line-height: 1;
+        font-weight: 800;
+        text-align: center;
+      }
+
+      .overview-news-copy {
+        min-width: 0;
+      }
+
+      .overview-news-title {
+        color: rgba(255,255,255,0.95);
+        font-size: 14px;
+        line-height: 1.3;
+        font-weight: 800;
+      }
+
+      .overview-news-time {
+        margin-top: 5px;
+        color: #77eadc;
+        font-size: 11px;
+        line-height: 1.2;
+        font-weight: 700;
+      }
+
+      .overview-news-body {
+        margin-top: 8px;
+        color: #9ca5b3;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
       @media (max-width: 1600px) {
         .morpho-market-strip {
           grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3573,7 +3616,8 @@ ${DASHBOARD_TXGRAPH_STYLES}
       }
 
       @media (max-width: 1440px) {
-        .overview-surface-grid {
+        .overview-surface-grid,
+        .overview-news-list {
           grid-template-columns: minmax(0, 1fr);
         }
 
@@ -3606,16 +3650,6 @@ ${DASHBOARD_TXGRAPH_STYLES}
       }
 
       @media (max-width: 960px) {
-        .market-data-index-inner {
-          align-items: stretch;
-          flex-direction: column;
-        }
-
-        .market-data-index-metrics {
-          grid-template-columns: minmax(0, 1fr);
-          min-width: 0;
-        }
-
         .txgraph-filter-row {
           grid-template-columns: minmax(0, 1fr);
         }

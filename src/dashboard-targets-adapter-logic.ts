@@ -30,10 +30,10 @@ export const DASHBOARD_TARGETS_ADAPTER_LOGIC = String.raw`
         scanParsed.topRiskyUsers.forEach(function (row, index) {
           const nextRow = {
             rank: index + 1,
-            marketKey: scanParsed.marketId ? String(scanParsed.marketId) : (state.form.market || 'aave-v3-ethereum'),
+            marketKey: scanParsed.marketId ? String(scanParsed.marketId) : (state.form.market || 'aave-v3-bnb'),
             marketLabel: scanParsed.protocol && scanParsed.chainName
               ? String(scanParsed.protocol.label || '--') + ' / ' + String(scanParsed.chainName || '--')
-              : deriveTargetMarketLabel(state.form.market || 'aave-v3-ethereum', 'Aave V3 / Ethereum'),
+              : deriveTargetMarketLabel(state.form.market || 'aave-v3-bnb', 'Aave V3 / BNB Chain'),
             user: row.user,
             healthFactor: row.healthFactor,
             liquidatable: toNumber(row.healthFactor) !== null ? toNumber(row.healthFactor) < 1 : false,
@@ -54,7 +54,7 @@ export const DASHBOARD_TARGETS_ADAPTER_LOGIC = String.raw`
       function appendAnalyzeTargets(targetMap, analyzeParsed) {
         if (!analyzeParsed || !Array.isArray(analyzeParsed.users)) return;
         analyzeParsed.users.forEach(function (row, index) {
-          const nextMarketKey = analyzeParsed.marketId ? String(analyzeParsed.marketId) : (state.form.market || 'aave-v3-ethereum');
+          const nextMarketKey = analyzeParsed.marketId ? String(analyzeParsed.marketId) : (state.form.market || 'aave-v3-bnb');
           const key = String(nextMarketKey).toLowerCase() + '::' + String(row.user).toLowerCase();
           const existing = targetMap.get(key) || {};
           targetMap.set(key, {
@@ -62,7 +62,7 @@ export const DASHBOARD_TARGETS_ADAPTER_LOGIC = String.raw`
             marketKey: existing.marketKey || nextMarketKey,
             marketLabel: existing.marketLabel || (analyzeParsed.protocol && analyzeParsed.chainName
               ? String(analyzeParsed.protocol.label || '--') + ' / ' + String(analyzeParsed.chainName || '--')
-              : deriveTargetMarketLabel(nextMarketKey, 'Aave V3 / Ethereum')),
+              : deriveTargetMarketLabel(nextMarketKey, 'Aave V3 / BNB Chain')),
             user: row.user,
             healthFactor: row.healthFactor || existing.healthFactor,
             liquidatable: typeof row.liquidatable === 'boolean' ? row.liquidatable : existing.liquidatable,

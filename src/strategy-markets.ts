@@ -7,7 +7,10 @@ import {
 } from "./morpho-operational-config.js";
 
 export type StrategySegment = "lending" | "perps";
+export type StrategyCategory = "liquidation" | "flashloan" | "perps";
 export type StrategyReadiness = "live" | "next" | "research" | "advanced";
+export type StrategyOperationalStage = "observe" | "simulate" | "canary" | "paused";
+export type StrategyServerStatus = "operating" | "testing" | "disabled";
 export type StrategyStatusTone =
   | "status-good"
   | "status-blue"
@@ -20,17 +23,20 @@ export type StrategyMarket = {
   protocol: string;
   chain: string;
   segment: StrategySegment;
+  category: StrategyCategory;
   readiness: StrategyReadiness;
   currentEngine: boolean;
   executionAdapter: "aave-v3-like" | "skeleton" | "planned" | "external-api";
   priority: number;
   competition: "high" | "medium" | "medium-low" | "low";
+  operationalStage: StrategyOperationalStage;
   whyNow: string;
   nextStep: string;
   statusLabel?: string;
   statusLabelZh?: string;
   nextStepZh?: string;
   statusTone?: StrategyStatusTone;
+  serverExecutionReady?: boolean;
   insightBadges?: Array<{
     label: string;
     labelZh?: string;
@@ -38,6 +44,18 @@ export type StrategyMarket = {
   }>;
   docsUrl: string;
   tags: string[];
+};
+
+export type StrategyNodeServer = {
+  key: "eth" | "arb" | "bnb";
+  label: string;
+  chain: "ethereum" | "arbitrum" | "bnb";
+  status: StrategyServerStatus;
+  strategies: Array<{
+    category: StrategyCategory;
+    status: StrategyServerStatus;
+    deployedMarkets: string[];
+  }>;
 };
 
 type MorphoSimulationSnapshot = {
@@ -60,15 +78,17 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Aave V3",
     chain: "Ethereum",
     segment: "lending",
+    category: "liquidation",
     readiness: "live",
-    currentEngine: true,
+    currentEngine: false,
     executionAdapter: "aave-v3-like",
-    priority: 1,
+    priority: 90,
     competition: "high",
+    operationalStage: "observe",
     whyNow:
-      "Current production execution path. Flashbots + flash-loan stack is already wired here.",
+      "Mainnet Aave is a red-ocean liquidation venue dominated by professional searcher teams; keep it monitored but do not use it as the primary execution target.",
     nextStep:
-      "Keep as the main execution battlefield, but do not let it monopolize market discovery.",
+      "Keep Ethereum mainnet in observation mode and route practical execution effort to deployed long-tail venues.",
     docsUrl: "https://aave.com/docs/developers/aave-v3/overview",
     tags: ["flashbots", "mainnet", "production"],
   },
@@ -78,11 +98,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Spark",
     chain: "Ethereum",
     segment: "lending",
+    category: "liquidation",
     readiness: "live",
     currentEngine: false,
     executionAdapter: "aave-v3-like",
-    priority: 2,
+    priority: 8,
     competition: "medium-low",
+    operationalStage: "observe",
     whyNow:
       "Ethereum-native lending market with Aave-like mechanics that is already wired into the live V3-compatible execution path.",
     nextStep:
@@ -96,11 +118,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Aave V3",
     chain: "Arbitrum",
     segment: "lending",
+    category: "liquidation",
     readiness: "live",
     currentEngine: false,
     executionAdapter: "aave-v3-like",
-    priority: 3,
+    priority: 2,
     competition: "medium",
+    operationalStage: "canary",
     whyNow:
       "Same liquidation semantics as Ethereum Aave, but with cheaper gas and a different orderflow landscape.",
     nextStep:
@@ -114,11 +138,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Aave V3",
     chain: "Polygon",
     segment: "lending",
-    readiness: "live",
+    category: "liquidation",
+    readiness: "research",
     currentEngine: false,
     executionAdapter: "aave-v3-like",
-    priority: 4,
+    priority: 95,
     competition: "medium-low",
+    operationalStage: "paused",
     whyNow:
       "Cheaper blockspace expands the viable liquidation set beyond mainnet-sized opportunities.",
     nextStep:
@@ -132,15 +158,17 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Aave V3",
     chain: "BNB Chain",
     segment: "lending",
+    category: "liquidation",
     readiness: "live",
-    currentEngine: false,
+    currentEngine: true,
     executionAdapter: "aave-v3-like",
-    priority: 5,
+    priority: 1,
     competition: "medium-low",
+    operationalStage: "canary",
     whyNow:
-      "A separate chain and bot landscape gives the engine another executable venue without a brand-new adapter.",
+      "BNB Chain is the current practical execution lane: deployed node server, lower mainnet competition, and more useful long-tail liquidation flow.",
     nextStep:
-      "Harden RPC quality checks and venue-specific routing before promoting it to always-on rotation.",
+      "Keep BNB Chain as the default execution market while hardening RPC quality checks and venue-specific routing.",
     docsUrl: "https://aave.com/docs/developers/aave-v3/overview",
     tags: ["live", "bnb", "aave-compatible"],
   },
@@ -150,11 +178,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Morpho Blue",
     chain: "Ethereum",
     segment: "lending",
+    category: "liquidation",
     readiness: "next",
     currentEngine: false,
     executionAdapter: "skeleton",
-    priority: 6,
+    priority: 3,
     competition: "medium",
+    operationalStage: "simulate",
     whyNow:
       "Modular isolated markets and lower liquidation bot crowding make it a prime expansion target.",
     nextStep:
@@ -170,11 +200,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Morpho Blue",
     chain: "Base",
     segment: "lending",
+    category: "liquidation",
     readiness: "next",
     currentEngine: false,
     executionAdapter: "skeleton",
-    priority: 7,
+    priority: 4,
     competition: "medium",
+    operationalStage: "simulate",
     whyNow:
       "Same Morpho design with a cheaper chain profile, and Base has already advanced past read-only into unwind quote and relay-candidate drafts.",
     nextStep:
@@ -188,11 +220,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Compound V3",
     chain: "Arbitrum",
     segment: "lending",
+    category: "liquidation",
     readiness: "research",
     currentEngine: false,
     executionAdapter: "planned",
-    priority: 8,
+    priority: 5,
     competition: "medium",
+    operationalStage: "simulate",
     whyNow:
       "A strong entry market for a second lending adapter: clear liquidate path and cheaper chain costs.",
     nextStep:
@@ -206,11 +240,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Euler V2",
     chain: "Ethereum",
     segment: "lending",
+    category: "liquidation",
     readiness: "research",
     currentEngine: false,
     executionAdapter: "planned",
     priority: 9,
     competition: "low",
+    operationalStage: "observe",
     whyNow:
       "Lower competition and modular vault design make it strategically interesting once the lending adapter framework is stable.",
     nextStep:
@@ -224,11 +260,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Curve",
     chain: "Ethereum",
     segment: "lending",
+    category: "liquidation",
     readiness: "research",
     currentEngine: false,
     executionAdapter: "planned",
-    priority: 10,
+    priority: 6,
     competition: "medium-low",
+    operationalStage: "observe",
     whyNow:
       "Curve 的 crvUSD/LLAMMA 体系提供了不同于 Aave 的清算语义，适合作为下一条借贷研究线。",
     nextStep:
@@ -239,16 +277,40 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     tags: ["curve", "llamma", "soft-liquidation"],
   },
   {
+    key: "liquity-v2-ethereum",
+    label: "Liquity V2 / Stability Pool",
+    protocol: "Liquity V2",
+    chain: "Ethereum",
+    segment: "lending",
+    category: "liquidation",
+    readiness: "research",
+    currentEngine: false,
+    executionAdapter: "planned",
+    priority: 7,
+    competition: "medium-low",
+    operationalStage: "observe",
+    whyNow:
+      "Stability Pool liquidations are passive and do not require winning a mempool race, making them a useful capital allocation track.",
+    nextStep:
+      "Track BOLD risk, liquidation frequency, and expected collateral gains before allocating capital.",
+    nextStepZh:
+      "先监控 BOLD 风险、清算频率和抵押品收益，再决定是否投入资金。",
+    docsUrl: "https://docs.liquity.org/",
+    tags: ["stability-pool", "passive-liquidation", "bold"],
+  },
+  {
     key: "balancer-ethereum",
     label: "Balancer / Ethereum",
     protocol: "Balancer",
     chain: "Ethereum",
     segment: "lending",
+    category: "flashloan",
     readiness: "research",
     currentEngine: false,
     executionAdapter: "planned",
-    priority: 11,
+    priority: 20,
     competition: "medium-low",
+    operationalStage: "observe",
     whyNow:
       "Balancer 更适合被当作 flashloan/unwind 基础设施位，而不是借贷执行位本身，但值得单独跟踪。",
     nextStep:
@@ -264,11 +326,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "GMX V2",
     chain: "Arbitrum",
     segment: "perps",
+    category: "liquidation",
     readiness: "advanced",
     currentEngine: false,
     executionAdapter: "external-api",
-    priority: 12,
+    priority: 8,
     competition: "medium",
+    operationalStage: "observe",
     whyNow:
       "Perps liquidations open a second profit surface that is not tied to lending market health factors.",
     nextStep:
@@ -282,11 +346,13 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "dYdX",
     chain: "dYdX Chain",
     segment: "perps",
+    category: "perps",
     readiness: "advanced",
     currentEngine: false,
     executionAdapter: "external-api",
-    priority: 13,
+    priority: 30,
     competition: "medium",
+    operationalStage: "paused",
     whyNow:
       "dYdX 的永续清算面足够独立，值得作为第二条永续执行线跟踪，而不是挂在借贷引擎下面。",
     nextStep:
@@ -302,17 +368,66 @@ const STRATEGY_MARKETS: StrategyMarket[] = [
     protocol: "Hyperliquid",
     chain: "Hyperliquid",
     segment: "perps",
+    category: "perps",
     readiness: "advanced",
     currentEngine: false,
     executionAdapter: "external-api",
-    priority: 14,
+    priority: 31,
     competition: "high",
+    operationalStage: "paused",
     whyNow:
       "Large perpetuals liquidation surface, but it needs a separate infra stack from onchain lending bots.",
     nextStep:
       "Build as an independent execution system with venue-native APIs and risk controls.",
     docsUrl: "https://hyperliquid.gitbook.io/hyperliquid-docs",
     tags: ["perps", "api-native", "separate-stack"],
+  },
+];
+
+const STRATEGY_NODE_SERVERS: StrategyNodeServer[] = [
+  {
+    key: "eth",
+    label: "ETH RPC 节点服务器",
+    chain: "ethereum",
+    status: "operating",
+    strategies: [
+      {
+        category: "liquidation",
+        status: "operating",
+        deployedMarkets: ["aave-v3-ethereum"],
+      },
+      {
+        category: "flashloan",
+        status: "operating",
+        deployedMarkets: ["balancer-ethereum"],
+      },
+    ],
+  },
+  {
+    key: "arb",
+    label: "ARB RPC 节点服务器",
+    chain: "arbitrum",
+    status: "operating",
+    strategies: [
+      {
+        category: "liquidation",
+        status: "operating",
+        deployedMarkets: ["aave-v3-arbitrum"],
+      },
+    ],
+  },
+  {
+    key: "bnb",
+    label: "BNB RPC 节点服务器",
+    chain: "bnb",
+    status: "operating",
+    strategies: [
+      {
+        category: "liquidation",
+        status: "operating",
+        deployedMarkets: ["aave-v3-bnb"],
+      },
+    ],
   },
 ];
 
@@ -516,7 +631,7 @@ export function strategyMarkets(): StrategyMarket[] {
           morphoBaseSimulation.liveSubmissionReady === true;
         const baseCanaryReadyStepZh =
           morphoBaseCanaryReady && morphoBaseSimulation
-            ? `Morpho Base 当前已有可试播候选${morphoBaseSimulation.selectedMarketLabel ? `（${morphoBaseSimulation.selectedMarketLabel}）` : ""}；借款 ${formatUsdCompact(morphoBaseSimulation.borrowAssetsUsd)} / 抵押 ${formatUsdCompact(morphoBaseSimulation.collateralUsd)}。${morphoBaseSimulation.broadcastGateSummary}`
+            ? `Morpho Base 当前已有可试播候选${morphoBaseSimulation.selectedMarketLabel ? `（${morphoBaseSimulation.selectedMarketLabel}）` : ""}；`
             : morphoBaseState.nextStepZh;
         return {
           ...market,
@@ -568,13 +683,51 @@ export function strategyMarkets(): StrategyMarket[] {
     .sort((left, right) => left.priority - right.priority);
 }
 
+export function isServerReadyExecutionMarket(market: StrategyMarket): boolean {
+  return new Set(serverReadyExecutionMarketKeys()).has(market.key);
+}
+
+export function serverReadyExecutionMarketKeys(): string[] {
+  return STRATEGY_NODE_SERVERS
+    .filter((server) => server.status === "operating")
+    .flatMap((server) =>
+      server.strategies
+        .filter(
+          (strategy) =>
+            strategy.category === "liquidation" &&
+            strategy.status === "operating",
+        )
+        .flatMap((strategy) => strategy.deployedMarkets),
+    );
+}
+
+export function strategyNodeServersSummary(): StrategyNodeServer[] {
+  return STRATEGY_NODE_SERVERS.map((server) => ({
+    ...server,
+    strategies: server.strategies.map((strategy) => ({
+      ...strategy,
+      deployedMarkets: strategy.deployedMarkets.slice(),
+    })),
+  }));
+}
+
 export function strategyMarketsSummary(): {
   currentExecutionLabel: string;
   nextBuildLabel: string;
   advancedTrackLabel: string;
   markets: StrategyMarket[];
 } {
-  const markets = strategyMarkets();
+  const readyExecutionKeys = new Set(serverReadyExecutionMarketKeys());
+  const markets = strategyMarkets()
+    .filter(
+      (market) =>
+        market.category === "liquidation" &&
+        market.operationalStage !== "paused",
+    )
+    .map((market) => ({
+      ...market,
+      serverExecutionReady: readyExecutionKeys.has(market.key),
+    }));
   return {
     currentExecutionLabel:
       markets.find((market) => market.currentEngine)?.label ?? markets[0]?.label ?? "--",

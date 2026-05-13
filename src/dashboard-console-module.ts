@@ -143,12 +143,9 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
 
       .console-machine-grid {
         position: relative;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        min-height: 106px;
-        padding: 12px 24px;
+        display: grid;
+        min-height: 132px;
+        padding: 12px 14px;
         border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.08);
         background-color: #1b1f26;
@@ -225,10 +222,8 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 3px;
-        min-height: 34px;
         width: 100%;
-        text-align: center;
+        min-height: 100%;
         opacity: 0;
         transform: translateY(4px);
         transition: opacity 220ms ease, transform 220ms ease;
@@ -241,20 +236,42 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
 
       .console-machine-text {
         font-family: 'DottedSongtiCircle', 'SF Mono', 'Menlo', monospace;
-        font-size: clamp(12px, 0.92vw, 18px);
-        line-height: 1.04;
+        font-size: 18px;
+        line-height: 1.2;
         letter-spacing: 0.01em;
         color: #37ff67;
         text-shadow:
           0 0 6px rgba(55,255,103,0.14),
           0 0 12px rgba(55,255,103,0.08);
         word-break: break-word;
-        max-width: 88%;
+      }
+
+      .console-machine-item {
+        min-width: 0;
+        width: 100%;
+        padding: 0 22px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+
+      .console-machine-label {
+        display: none;
+      }
+
+      .console-machine-value {
+        display: inline-block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
       }
 
       .console-machine-caret {
-        width: 8px;
-        height: 1.1em;
+        display: inline-block;
+        width: 7px;
+        height: 15px;
         border-radius: 2px;
         background: rgba(55, 255, 103, 0.88);
         box-shadow: 0 0 8px rgba(55,255,103,0.22);
@@ -468,6 +485,20 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
 	        object-fit: contain;
 	      }
 
+      .console-wallet-skeleton-row:hover {
+        background: transparent;
+      }
+
+      .console-wallet-skeleton-icon {
+        width: 19px;
+        height: 19px;
+        border-radius: 999px;
+      }
+
+      .console-wallet-skeleton-cell {
+        width: min(150px, 72%);
+      }
+
       .console-decision-card {
         display: grid;
         gap: 6px;
@@ -569,6 +600,16 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
 	        .console-ops-grid {
 	          grid-template-columns: 1fr;
 	        }
+
+        .console-results-heading {
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .console-results-heading-stat {
+          max-width: none;
+          text-align: left;
+        }
 
         #pageConsole .console-main {
           height: auto;
@@ -711,6 +752,46 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         flex: 1 1 auto;
         min-height: 0;
         padding: 0;
+      }
+
+      .console-results-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 16px 18px 14px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012)),
+          rgba(255,255,255,0.015);
+      }
+
+      .console-results-heading-main {
+        min-width: 0;
+      }
+
+      .console-results-heading-title {
+        font-size: 14px;
+        line-height: 1.25;
+        font-weight: 800;
+        color: #f3f6ff;
+      }
+
+      .console-results-heading-meta {
+        margin-top: 6px;
+        font-size: 11.5px;
+        line-height: 1.45;
+        color: #9ca5b3;
+      }
+
+      .console-results-heading-stat {
+        flex: 0 0 auto;
+        max-width: 220px;
+        padding-top: 1px;
+        font-size: 11.5px;
+        line-height: 1.45;
+        color: #77eadc;
+        text-align: right;
       }
 
       .console-results-toolbar {
@@ -963,6 +1044,25 @@ export const DASHBOARD_CONSOLE_STYLES = String.raw`
         border-bottom: 1px solid rgba(255,255,255,0.04);
       }
 
+      .console-results-table tbody tr.console-results-status-row td {
+        padding: 14px;
+      }
+
+      .console-results-status-card {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 8px;
+        border: 1px solid rgba(108,240,232,0.24);
+        background: rgba(108,240,232,0.055);
+        color: #a9b0bc;
+      }
+
+      .console-results-status-card strong {
+        color: rgba(255,255,255,0.94);
+        font-size: 14px;
+      }
+
       .console-results-group-title {
         color: #eff3fb;
         font-size: 13px;
@@ -1134,12 +1234,9 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
                           <label class="field">
                             <span id="labelChain" class="field-label">Market</span>
                             <span class="settings-select-wrap">
-	                              <select id="marketSelect" data-default-value="aave-v3-ethereum">
-                                <option value="auto-ethereum">Auto Rotation / Ethereum</option>
+		                              <select id="marketSelect" data-default-value="aave-v3-bnb">
                                 <option value="aave-v3-ethereum">Aave V3 / Ethereum</option>
-                                <option value="spark-ethereum">SparkLend / Ethereum</option>
                                 <option value="aave-v3-arbitrum">Aave V3 / Arbitrum</option>
-                                <option value="aave-v3-polygon">Aave V3 / Polygon</option>
                                 <option value="aave-v3-bnb">Aave V3 / BNB Chain</option>
                               </select>
                             </span>
@@ -1152,7 +1249,7 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
                         </label>
 
                         <div class="button-grid" style="margin-top:2px;">
-                          <button id="actionSelfFunded" class="action-button primary" type="button"><span class="action-button-content"><img id="actionSelfFundedIcon" class="action-button-icon" src="/img/readyStart.svg" alt="" aria-hidden="true" /><span id="actionSelfFundedLabel" class="action-button-label">启动清算器</span></span></button>
+                          <button id="actionSelfFunded" class="action-button primary" type="button"><span class="action-button-content"><img id="actionSelfFundedIcon" class="action-button-icon" src="/img/readyStart.svg" alt="" aria-hidden="true" /><span id="actionSelfFundedLabel" class="action-button-label">启动</span></span></button>
                           <button id="actionPause" class="action-button" type="button" disabled><span class="action-button-content"><img id="actionPauseIcon" class="action-button-icon" src="/img/stop.svg" alt="" aria-hidden="true" /><span id="actionPauseLabel" class="action-button-label">暂停</span></span></button>
                         </div>
                       </div>
@@ -1160,8 +1257,10 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
                       <div class="console-machine-shell">
                         <div class="console-machine-grid">
                           <div class="console-machine-readout">
-                            <span id="consoleMachineText" class="console-machine-text"></span>
-                            <span class="console-machine-caret" aria-hidden="true"></span>
+                            <div class="console-machine-item">
+                              <span id="consoleMachineLine" class="console-machine-text console-machine-value">--</span>
+                              <span class="console-machine-caret" aria-hidden="true"></span>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1186,27 +1285,17 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
               </div>
 
               <div class="console-side">
-                <article class="panel intel-shell">
-                  <div class="panel-inner">
-                    <div class="panel-body console-results-body">
-                      <div class="console-summary-strip">
-                        <div class="console-summary-card">
-                          <div id="consoleSummaryBestLabel" class="console-summary-label">Best Rough Net</div>
-                          <div id="consoleSummaryBestValue" class="console-summary-value">--</div>
-                          <div id="consoleSummaryBestMeta" class="console-summary-meta">--</div>
-                        </div>
-                        <div class="console-summary-card">
-                          <div id="consoleSummaryRealizedLabel" class="console-summary-label">Latest Realized Net</div>
-                          <div id="consoleSummaryRealizedValue" class="console-summary-value">--</div>
-                          <div id="consoleSummaryRealizedMeta" class="console-summary-meta">--</div>
-                        </div>
-                        <div class="console-summary-card">
-                          <div id="consoleSummaryLiquidatableLabel" class="console-summary-label">Liquidatable</div>
-                          <div id="consoleSummaryLiquidatableValue" class="console-summary-value">0</div>
-                          <div id="consoleSummaryLiquidatableMeta" class="console-summary-meta">--</div>
-                        </div>
-                      </div>
-                      <div class="console-results-toolbar">
+	                <article class="panel intel-shell">
+	                  <div class="panel-inner">
+	                    <div class="panel-body console-results-body">
+	                      <div class="console-results-heading">
+	                        <div class="console-results-heading-main">
+	                          <div id="consoleSnapshotTitle" class="console-results-heading-title">Strategy Opportunities</div>
+	                          <div id="consoleSnapshotCopy" class="console-results-heading-meta">Candidates for the selected execution market.</div>
+	                        </div>
+	                        <div id="consoleSnapshotMeta" class="console-results-heading-stat">--</div>
+	                      </div>
+	                      <div class="console-results-toolbar">
                         <div class="console-results-filter-group">
                           <span id="consoleFilterSignalLabel" class="console-results-filter-label">Signal</span>
                           <button id="consoleFilterAll" class="console-filter-button is-active" type="button">All</button>
@@ -1217,7 +1306,9 @@ export const DASHBOARD_CONSOLE_PAGE = String.raw`
                         <div class="console-results-filter-group">
                           <span id="consoleFilterSourceLabel" class="console-results-filter-label">Source</span>
                           <button id="consoleSourceAll" class="console-filter-button is-active" type="button">All sources</button>
+                          <button id="consoleSourceScan" class="console-filter-button" type="button">Node server</button>
                           <button id="consoleSourceMorpho" class="console-filter-button" type="button">Morpho Blue</button>
+                          <button id="consoleSourceBscTail" class="console-filter-button" type="button">BSC Opportunities</button>
                         </div>
                         <div id="consoleMorphoSortGroup" class="console-results-filter-group is-hidden">
                           <span id="consoleMorphoSortLabel" class="console-results-filter-label">Market sort</span>

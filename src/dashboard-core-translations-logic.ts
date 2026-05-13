@@ -157,10 +157,11 @@ export const DASHBOARD_CORE_TRANSLATIONS_LOGIC = String.raw`
         text('saveSettingsButtonLabel', t('saveSettingsCompact'));
         text('toggleSettingsVisibilityLabel', state.settingsMasked ? t('settingsHideSecrets') : t('settingsShowSecrets'));
 
-        text('settingsPrivateKeyLabel', 'PRIVATE_KEY');
+        text('settingsPrivateKeyLabel', state.language === 'zh' ? '钱包私钥' : 'Wallet private key');
         text('settingsBitqueryApiKeyLabel', t('settingsBitqueryApiKeyLabel'));
         text('settingsZeroExApiKeyLabel', t('settingsZeroExApiKeyLabel'));
         text('settingsQuickNodeApiKeyLabel', t('settingsQuickNodeApiKeyLabel'));
+        text('settingsSuperMtNodeAppTokenLabel', 'SUPERMTNODE_APP_TOKEN');
         text('settingsControlRpcLabel', state.language === 'zh' ? '控制 RPC' : 'Control RPC URL');
         text('settingsExecutionRpcLabel', state.language === 'zh' ? '执行 RPC' : 'Execution RPC URL');
         text('settingsFlashbotsRelayLabel', state.language === 'zh' ? 'Flashbots Relay' : 'Flashbots Relay URL');

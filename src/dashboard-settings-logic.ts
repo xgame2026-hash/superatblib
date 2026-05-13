@@ -86,7 +86,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
 
 	      function syncCustomSelect(select) {
 	        if (!select || select.tagName !== 'SELECT') return;
-	        ensureValidSelectValue(select, select.id === 'marketSelect' ? 'aave-v3-ethereum' : '');
+	        ensureValidSelectValue(select, select.id === 'marketSelect' ? 'aave-v3-bnb' : '');
 	        if (select.id === 'marketSelect' && select.value && state.form.market !== select.value) {
 	          state.form.market = select.value;
 	          state.form.chain = inferExecutionChainFromMarketSelection(state.form.market);
@@ -171,26 +171,13 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
           };
         });
         if (configured.length > 0) {
-          const ethereumMarkets = configured.filter(function (market) {
-            return market.chain === 'ethereum';
-          });
-          if (ethereumMarkets.length > 1) {
-            return [{ value: 'auto-ethereum', label: 'Auto Rotation / Ethereum' }].concat(
-              configured.map(function (market) {
-                return { value: market.value, label: market.label };
-              })
-            );
-          }
           return configured.map(function (market) {
             return { value: market.value, label: market.label };
           });
         }
         return [
-          { value: 'auto-ethereum', label: 'Auto Rotation / Ethereum' },
           { value: 'aave-v3-ethereum', label: 'Aave V3 / Ethereum' },
-          { value: 'spark-ethereum', label: 'SparkLend / Ethereum' },
           { value: 'aave-v3-arbitrum', label: 'Aave V3 / Arbitrum' },
-          { value: 'aave-v3-polygon', label: 'Aave V3 / Polygon' },
           { value: 'aave-v3-bnb', label: 'Aave V3 / BNB Chain' }
         ];
       }
@@ -212,7 +199,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
 	          select.value = nextValue;
 	        }
 	        if (id === 'marketSelect') {
-	          state.form.market = select.value || nextValue || 'aave-v3-ethereum';
+		          state.form.market = select.value || nextValue || 'aave-v3-bnb';
 	          state.form.chain = inferExecutionChainFromMarketSelection(state.form.market);
 	        }
 	        syncCustomSelect(select);
@@ -222,11 +209,11 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
         const options = executionMarketSelectOptions();
         const settingsWrapper = state.data.settings;
         const settings = settingsWrapper && settingsWrapper.settings ? settingsWrapper.settings : null;
-        syncSelectOptions('marketSelect', options, state.form.market || 'aave-v3-ethereum');
+        syncSelectOptions('marketSelect', options, state.form.market || 'aave-v3-bnb');
         syncSelectOptions(
           'settingsDefaultMarket',
           options.filter(function (option) { return option.value !== 'auto-ethereum'; }),
-          settings && settings.market ? settings.market : (state.form.market || 'aave-v3-ethereum')
+          settings && settings.market ? settings.market : (state.form.market || 'aave-v3-bnb')
         );
       }
 
@@ -271,6 +258,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
             privateKey: readSensitiveSettingsValue('settingsPrivateKey'),
             fundingMode: document.getElementById('settingsFundingMode').value,
             language: document.getElementById('settingsLanguage').value,
+            superMtNodeAppToken: readSensitiveSettingsValue('settingsSuperMtNodeAppToken'),
             ethereumRpcUrl: readSensitiveSettingsValue('settingsEthereumRpc'),
             baseRpcUrl: readSensitiveSettingsValue('settingsBaseRpc'),
             chains: {
@@ -333,6 +321,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
           state.settingsRawValues.settingsBitqueryApiKey = settings.bitqueryApiKey || '';
           state.settingsRawValues.settingsZeroExApiKey = settings.zeroExApiKey || '';
           state.settingsRawValues.settingsQuickNodeApiKey = settings.quicknodeAdminApiKey || '';
+          state.settingsRawValues.settingsSuperMtNodeAppToken = settings.superMtNodeAppToken || '';
           state.settingsRawValues.settingsControlRpc = settings.controlRpcUrl || '';
           state.settingsRawValues.settingsExecutionRpc = settings.executionRpcUrl || '';
           state.settingsRawValues.settingsFlashbotsRelay = settings.flashbotsRelayUrl || '';
@@ -360,7 +349,7 @@ export const DASHBOARD_SETTINGS_LOGIC = String.raw`
           state.settingsRawValues.settingsGateSecretKey = exchangeSettings.gate.secretKey || '';
           state.settingsRawValues.settingsBaseRpc = settings.baseRpcUrl || '';
           applySensitiveSettingsVisibility();
-          setInputValue('settingsDefaultMarket', settings.market || 'aave-v3-ethereum');
+          setInputValue('settingsDefaultMarket', settings.market || 'aave-v3-bnb');
           setInputValue('settingsBroadcastTransport', settings.broadcastTransport || 'flashbots_bundle');
           setInputValue('settingsFundingMode', settings.fundingMode || 'flash_loan');
           setInputValue('settingsLanguage', settings.language || state.language);

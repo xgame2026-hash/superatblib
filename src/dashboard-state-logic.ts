@@ -6,7 +6,7 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         language: localStorage.getItem('dashboard-language') || 'en',
         page: localStorage.getItem('dashboard-page') || 'overview',
         settingsSection: localStorage.getItem('dashboard-settings-section') || 'general',
-        overviewPeriod: localStorage.getItem('dashboard-overview-period') || '7',
+        overviewPeriod: '1',
         flashloanPeriod: localStorage.getItem('dashboard-flashloan-period') || '7',
         leaderboardTab: localStorage.getItem('dashboard-leaderboard-tab') || 'txProfit',
         morphoOpportunityView: localStorage.getItem('dashboard-morpho-opportunity-view') || 'all',
@@ -21,10 +21,12 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
           history: null,
           wallet: null,
           settings: null,
-          marketDataIndexStatus: null,
           quicknodeUsage: null,
           rpcUsage: null,
+          overviewSnapshot: null,
           publicLiquidationFeed: null,
+          bscTailScan: null,
+          strategyNews: null,
           liquidationQueue: null,
           strategy: null,
           morphoBlueMarkets: null,
@@ -38,8 +40,8 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
 	          morphoBlueMarkets: true,
 	          morphoBlueBaseMarkets: true,
 	          eigenphiOverview: true,
-	          eigenphiLeaderboard: true,
-	          eigenphiLatestLiquidation: true,
+	          eigenphiLeaderboard: false,
+	          eigenphiLatestLiquidation: false,
 	          eigenphiFlashloanOverview: true,
 	          walletAssets: false
 	        },
@@ -62,8 +64,8 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         flashloanDeskFilter: 'all',
         lab: null,
         form: {
-          market: 'aave-v3-ethereum',
-          chain: 'ethereum',
+          market: 'aave-v3-bnb',
+          chain: 'bnb',
           lookbackBlocks: '2000',
           limit: '50',
           morphoMarketId: '',
@@ -92,6 +94,8 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         consoleLiveTargets: [],
         consoleFilter: 'all',
         consoleSourceFilter: 'all',
+        consoleConnectionAnnounced: false,
+        consoleQueueAnnounced: false,
         morphoMarketSort: 'liquidatable',
         arbitrageFilter: 'all',
         consoleStreamMode: false,
@@ -158,13 +162,14 @@ export const DASHBOARD_STATE_LOGIC = String.raw`
         }
       };
 
-      const validPages = ['overview', 'flashloan', 'liquidation', 'morpho', 'console', 'flashloanConsole', 'lab', 'arbitrage', 'txgraph', 'strategyPlaza', 'settings'];
+      const validPages = ['overview', 'flashloan', 'liquidation', 'morpho', 'console', 'lab', 'arbitrage', 'txgraph', 'strategyPlaza', 'settings'];
 
       const SENSITIVE_SETTINGS_FIELD_IDS = [
         'settingsPrivateKey',
         'settingsBitqueryApiKey',
         'settingsZeroExApiKey',
         'settingsQuickNodeApiKey',
+        'settingsSuperMtNodeAppToken',
         'settingsControlRpc',
         'settingsExecutionRpc',
         'settingsFlashbotsRelay',

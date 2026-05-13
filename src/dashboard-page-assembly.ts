@@ -1,7 +1,6 @@
 import { DASHBOARD_ARBITRAGE_PAGE } from './dashboard-arbitrage-module.js';
 import { DASHBOARD_CONSOLE_PAGE } from './dashboard-console-module.js';
 import { DASHBOARD_FLASHLOAN_PAGE } from './dashboard-flashloan-module.js';
-import { DASHBOARD_FLASHLOAN_CONSOLE_PAGE } from './dashboard-flashloan-module.js';
 import { DASHBOARD_LAB_PAGE } from './dashboard-lab-module.js';
 import { DASHBOARD_LIQUIDATION_PAGE } from './dashboard-liquidation-module.js';
 import { DASHBOARD_MORPHO_PAGE } from './dashboard-morpho-module.js';
@@ -17,7 +16,6 @@ ${DASHBOARD_FLASHLOAN_PAGE}
 ${DASHBOARD_LIQUIDATION_PAGE}
 ${DASHBOARD_MORPHO_PAGE}
 ${DASHBOARD_CONSOLE_PAGE}
-${DASHBOARD_FLASHLOAN_CONSOLE_PAGE}
 ${DASHBOARD_LAB_PAGE}
 ${DASHBOARD_ARBITRAGE_PAGE}
 ${DASHBOARD_TXGRAPH_PAGE}

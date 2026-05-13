@@ -27,7 +27,7 @@ function expectOrder(haystack: string, earlier: string, later: string, label: st
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageOverview"', 'page assembly overview');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageLiquidation"', 'page assembly liquidation');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageFlashloan"', 'page assembly flashloan');
-expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageFlashloanConsole"', 'page assembly flashloan console');
+expectExcludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageFlashloanConsole"', 'page assembly flashloan console');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageLab"', 'page assembly lab');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageMorpho"', 'page assembly morpho');
 expectIncludes(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageConsole"', 'page assembly console');
@@ -40,8 +40,7 @@ expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageOverview"', '<section id=
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageFlashloan"', '<section id="pageLiquidation"', 'page assembly order 2');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageLiquidation"', '<section id="pageMorpho"', 'page assembly order 3');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageMorpho"', '<section id="pageConsole"', 'page assembly order 4');
-expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageConsole"', '<section id="pageFlashloanConsole"', 'page assembly order 5');
-expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageFlashloanConsole"', '<section id="pageLab"', 'page assembly order 6');
+expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageConsole"', '<section id="pageLab"', 'page assembly order 5');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageLab"', '<section id="pageArbitrage"', 'page assembly order 6b');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageArbitrage"', '<section id="pageTxgraph"', 'page assembly order 7');
 expectOrder(DASHBOARD_PAGE_ASSEMBLY, '<section id="pageTxgraph"', '<section id="pageStrategyPlaza"', 'page assembly order 8');

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { URL } from "node:url";
+import { createClient } from "redis";
 
 type JsonResponder = (
   res: ServerResponse,
@@ -23,6 +24,16 @@ type DashboardCliActionSpec = {
   chain?: unknown;
   market?: unknown;
   args?: unknown;
+};
+
+type DashboardSnapshotPeriod = "1" | "7" | "30";
+
+export type DashboardApiHandler = ((
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+) => Promise<void>) & {
+  warmSnapshots: () => Promise<void>;
 };
 
 export type DashboardApiHandlerDeps = {
@@ -48,15 +59,15 @@ export type DashboardApiHandlerDeps = {
   }) => Promise<unknown>;
   fetchEigenphiFlashloanOverview: (
     chain: string,
-    period: "1" | "7" | "30",
+    period: DashboardSnapshotPeriod,
   ) => Promise<unknown>;
   fetchEigenphiLiquidationLeaderboard: (
     chain: string,
-    period: "1" | "7" | "30",
+    period: DashboardSnapshotPeriod,
   ) => Promise<unknown>;
   fetchEigenphiLiquidationOverview: (
     chain: string,
-    period: "1" | "7" | "30",
+    period: DashboardSnapshotPeriod,
   ) => Promise<unknown>;
   fetchMarketDataIndexStatus: () => unknown | Promise<unknown>;
   fetchMorphoBlueEthereumDashboardSnapshot: (payload: {
@@ -68,6 +79,13 @@ export type DashboardApiHandlerDeps = {
   fetchQuickNodeUsage: () => Promise<unknown>;
   fetchUserRpcUsage: () => Promise<unknown>;
   fetchPublicLiquidationFeed: (chain: string | null) => Promise<unknown>;
+  scanBscTailProtocol: (payload: {
+    protocolKey?: string;
+    lookbackBlocks?: number;
+    chunkSize?: number;
+    limit?: number;
+    nearLiquidityUsd?: number;
+  }) => Promise<unknown>;
   fetchLiquidationQueueStatus: (chain: string | null, market: string | null) => Promise<unknown>;
   reportLiquidationQueueEvent: (payload: Record<string, unknown>) => Promise<unknown>;
   fetchTxGraph: (payload: {
@@ -99,7 +117,7 @@ export type DashboardApiHandlerDeps = {
   ) => Promise<void>;
   supportedChains: () => DashboardChainLike[];
   truthy: (value: unknown) => boolean;
-  walletSnapshotForChain: (chain: DashboardChainLike) => Promise<unknown>;
+  walletSnapshotForChain: (chain: DashboardChainLike, options?: { force?: boolean }) => Promise<unknown>;
 };
 
 type DashboardHtmlResponderDeps = {
@@ -112,8 +130,203 @@ type DashboardStaticAssetResponderDeps = {
   cwd?: string;
 };
 
+type OverviewSnapshotCacheEntry = {
+  expiresAt: number;
+  staleUntil: number;
+  payload: Record<string, unknown>;
+};
+
+const OVERVIEW_SNAPSHOT_NEWS_URL = "https://news.supermtnode.io/api/news?limit=5";
+let overviewSnapshotRedisClient: ReturnType<typeof createClient> | null = null;
+let overviewSnapshotRedisConnect: Promise<ReturnType<typeof createClient> | null> | null = null;
+
+function overviewSnapshotTtlMs(): number {
+  const configured = Number(process.env.DASHBOARD_OVERVIEW_SNAPSHOT_TTL_MS);
+  return Number.isFinite(configured) && configured >= 0
+    ? configured
+    : 5 * 60_000;
+}
+
+function overviewSnapshotStaleMs(): number {
+  const configured = Number(process.env.DASHBOARD_OVERVIEW_STALE_MS);
+  return Number.isFinite(configured) && configured >= 0
+    ? configured
+    : 30 * 60_000;
+}
+
+function overviewSnapshotPeriod(value: unknown): "1" | "7" | "30" {
+  return value === "1" || value === "30" ? value : "7";
+}
+
+function overviewSnapshotSourceTimeoutMs(): number {
+  const configured = Number(process.env.DASHBOARD_OVERVIEW_SOURCE_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : 8_000;
+}
+
+async function withOverviewSnapshotTimeout<T>(label: string, task: Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`${label} snapshot source timed out.`));
+        }, overviewSnapshotSourceTimeoutMs());
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function overviewSnapshotRedis(): Promise<ReturnType<typeof createClient> | null> {
+  const url =
+    process.env.DASHBOARD_OVERVIEW_REDIS_URL ??
+    process.env.DASHBOARD_REDIS_URL ??
+    process.env.REDIS_URL;
+  if (!url) return null;
+  if (overviewSnapshotRedisClient?.isOpen) return overviewSnapshotRedisClient;
+  if (overviewSnapshotRedisConnect) return overviewSnapshotRedisConnect;
+  overviewSnapshotRedisConnect = (async () => {
+    try {
+      const client = createClient({ url });
+      client.on("error", () => {
+        // Redis is an optimization for the dashboard snapshot. Fall back to memory cache.
+      });
+      await client.connect();
+      overviewSnapshotRedisClient = client;
+      return client;
+    } catch {
+      overviewSnapshotRedisClient = null;
+      return null;
+    } finally {
+      overviewSnapshotRedisConnect = null;
+    }
+  })();
+  return overviewSnapshotRedisConnect;
+}
+
+async function readOverviewSnapshotCache(
+  memoryCache: Map<string, OverviewSnapshotCacheEntry>,
+  key: string,
+  options?: { allowStale?: boolean },
+): Promise<{
+  backend: "redis" | "server-memory";
+  payload: Record<string, unknown>;
+  stale: boolean;
+} | null> {
+  const now = Date.now();
+  const allowStale = Boolean(options?.allowStale);
+  const redis = await overviewSnapshotRedis();
+  if (redis) {
+    try {
+      const raw = await redis.get(key);
+      if (raw) {
+        const payload = JSON.parse(raw) as Record<string, unknown>;
+        const expiresAt = Date.parse(String(payload.expiresAt ?? ""));
+        const stale = Number.isFinite(expiresAt) ? expiresAt <= now : false;
+        if (stale && !allowStale) return null;
+        return {
+          backend: "redis",
+          payload,
+          stale,
+        };
+      }
+    } catch {
+      // Fall through to process memory.
+    }
+  }
+
+  const cached = memoryCache.get(key);
+  if (cached && (cached.expiresAt > now || (allowStale && cached.staleUntil > now))) {
+    return {
+      backend: "server-memory",
+      payload: cached.payload,
+      stale: cached.expiresAt <= now,
+    };
+  }
+  return null;
+}
+
+async function writeOverviewSnapshotCache(
+  memoryCache: Map<string, OverviewSnapshotCacheEntry>,
+  key: string,
+  payload: Record<string, unknown>,
+  ttlMs: number,
+): Promise<void> {
+  const staleMs = overviewSnapshotStaleMs();
+  memoryCache.set(key, {
+    expiresAt: Date.now() + ttlMs,
+    staleUntil: Date.now() + ttlMs + staleMs,
+    payload,
+  });
+  const redis = await overviewSnapshotRedis();
+  if (!redis) return;
+  try {
+    await redis.set(key, JSON.stringify(payload), {
+      EX: Math.max(1, Math.ceil((ttlMs + staleMs) / 1000)),
+    });
+  } catch {
+    // Memory cache already holds the snapshot.
+  }
+}
+
+async function fetchStrategyNewsSnapshot(): Promise<unknown> {
+  try {
+    const response = await fetch(OVERVIEW_SNAPSHOT_NEWS_URL, {
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(`News request failed (${response.status}).`);
+    }
+    return await response.json();
+  } catch (error) {
+    return {
+      ok: false,
+      rows: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function settledSnapshotValue<T>(
+  result: PromiseSettledResult<T>,
+  fallback: Record<string, unknown>,
+): T | Record<string, unknown> {
+  if (result.status === "fulfilled") return result.value;
+  return {
+    ...fallback,
+    ok: false,
+    sourceUnavailable: true,
+    error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+  };
+}
+
+function withDashboardCacheMeta(
+  payload: unknown,
+  cache: Record<string, unknown>,
+): Record<string, unknown> {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const record = payload as Record<string, unknown>;
+    return {
+      ...record,
+      cache: {
+        ...((record.cache as Record<string, unknown> | undefined) ?? {}),
+        ...cache,
+      },
+    };
+  }
+  return {
+    ok: true,
+    data: payload,
+    cache,
+  };
+}
+
 // Route table for the dashboard HTTP surface. The caller injects all side effects.
-export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
+export function createDashboardApiHandler(deps: DashboardApiHandlerDeps): DashboardApiHandler {
   const {
     activateLicense,
     buildCliActionSpec,
@@ -133,6 +346,7 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
     fetchQuickNodeUsage,
     fetchUserRpcUsage,
     fetchPublicLiquidationFeed,
+    scanBscTailProtocol,
     fetchLiquidationQueueStatus,
     reportLiquidationQueueEvent,
     fetchTxGraph,
@@ -154,6 +368,11 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
     truthy,
     walletSnapshotForChain,
   } = deps;
+
+  const overviewSnapshotCache = new Map<string, OverviewSnapshotCacheEntry>();
+  const overviewSnapshotRefreshes = new Map<string, Promise<void>>();
+  const dashboardSnapshotCache = new Map<string, OverviewSnapshotCacheEntry>();
+  const dashboardSnapshotRefreshes = new Map<string, Promise<void>>();
 
   const tokenFromRequest = (req: IncomingMessage): string | null =>
     parseOptionalString(req.headers?.authorization) ??
@@ -179,7 +398,207 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
     }
   };
 
-  return async function serveApi(
+  const buildOverviewSnapshot = async (
+    period: "1" | "7" | "30",
+    flashloanPeriod: "1" | "7" | "30",
+  ): Promise<Record<string, unknown>> => {
+    const generatedAtMs = Date.now();
+    const [
+      liquidationOverview,
+      flashloanOverview,
+      morphoBlueMarkets,
+      strategyNews,
+    ] = await Promise.allSettled([
+      withOverviewSnapshotTimeout(
+        "liquidation-overview",
+        fetchEigenphiLiquidationOverview("ethereum", period),
+      ),
+      withOverviewSnapshotTimeout(
+        "flashloan-overview",
+        fetchEigenphiFlashloanOverview("ethereum", flashloanPeriod),
+      ),
+      withOverviewSnapshotTimeout(
+        "morpho-blue",
+        fetchMorphoBlueEthereumDashboardSnapshot({ force: false }),
+      ),
+      withOverviewSnapshotTimeout("strategy-news", fetchStrategyNewsSnapshot()),
+    ]);
+
+    const ttlMs = overviewSnapshotTtlMs();
+    return {
+      ok: true,
+      source: "overview-snapshot",
+      generatedAt: new Date(generatedAtMs).toISOString(),
+      expiresAt: new Date(generatedAtMs + ttlMs).toISOString(),
+      cache: {
+        hit: false,
+        backend: "server-cache",
+        ttlMs,
+      },
+      period,
+      flashloanPeriod,
+      data: {
+        eigenphiOverview: settledSnapshotValue(liquidationOverview, {
+          chain: "ethereum",
+          period,
+          summary: null,
+        }),
+        eigenphiFlashloanOverview: settledSnapshotValue(flashloanOverview, {
+          chain: "ethereum",
+          period: flashloanPeriod,
+          summary: null,
+          latest: { rows: [] },
+        }),
+        morphoBlueMarkets: settledSnapshotValue(morphoBlueMarkets, {
+          chain: "ethereum",
+          markets: [],
+        }),
+        strategyNews: settledSnapshotValue(strategyNews, {
+          rows: [],
+        }),
+      },
+    };
+  };
+
+  const refreshOverviewSnapshot = (
+    cacheKey: string,
+    period: "1" | "7" | "30",
+    flashloanPeriod: "1" | "7" | "30",
+  ): Promise<void> => {
+    const inflight = overviewSnapshotRefreshes.get(cacheKey);
+    if (inflight) return inflight;
+    const refresh = (async () => {
+      const payload = await buildOverviewSnapshot(period, flashloanPeriod);
+      await writeOverviewSnapshotCache(
+        overviewSnapshotCache,
+        cacheKey,
+        payload,
+        overviewSnapshotTtlMs(),
+      );
+    })().catch(() => {
+      // Keep serving the stale snapshot; the next request can retry the refresh.
+    }).finally(() => {
+      overviewSnapshotRefreshes.delete(cacheKey);
+    });
+    overviewSnapshotRefreshes.set(cacheKey, refresh);
+    return refresh;
+  };
+
+  const refreshDashboardSnapshot = (
+    cacheKey: string,
+    buildPayload: () => Promise<unknown>,
+  ): Promise<void> => {
+    const inflight = dashboardSnapshotRefreshes.get(cacheKey);
+    if (inflight) return inflight;
+    const refresh = (async () => {
+      const payload = withDashboardCacheMeta(await buildPayload(), {
+        hit: false,
+        backend: "server-cache",
+        ttlMs: overviewSnapshotTtlMs(),
+        generatedAt: new Date().toISOString(),
+      });
+      await writeOverviewSnapshotCache(
+        dashboardSnapshotCache,
+        cacheKey,
+        payload,
+        overviewSnapshotTtlMs(),
+      );
+    })().catch(() => {
+      // Keep serving stale cached data; the next request can retry.
+    }).finally(() => {
+      dashboardSnapshotRefreshes.delete(cacheKey);
+    });
+    dashboardSnapshotRefreshes.set(cacheKey, refresh);
+    return refresh;
+  };
+
+  const serveCachedDashboardSnapshot = async (
+    res: ServerResponse,
+    url: URL,
+    cacheKey: string,
+    buildPayload: () => Promise<unknown>,
+  ): Promise<void> => {
+    const ttlMs = overviewSnapshotTtlMs();
+    const cached = truthy(url.searchParams.get("refresh"))
+      ? null
+      : await readOverviewSnapshotCache(dashboardSnapshotCache, cacheKey, { allowStale: true });
+    if (cached) {
+      const refreshing = cached.stale;
+      if (refreshing) {
+        void refreshDashboardSnapshot(cacheKey, buildPayload);
+      }
+      json(
+        res,
+        200,
+        withDashboardCacheMeta(cached.payload, {
+          hit: true,
+          backend: cached.backend,
+          ttlMs,
+          stale: cached.stale,
+          refreshing,
+        }),
+      );
+      return;
+    }
+
+    try {
+      const payload = withDashboardCacheMeta(await buildPayload(), {
+        hit: false,
+        backend: "server-cache",
+        ttlMs,
+        generatedAt: new Date().toISOString(),
+      });
+      await writeOverviewSnapshotCache(dashboardSnapshotCache, cacheKey, payload, ttlMs);
+      json(res, 200, payload);
+    } catch (error) {
+      json(res, 200, {
+        ok: false,
+        sourceUnavailable: true,
+        cache: {
+          hit: false,
+          backend: "server-cache",
+          ttlMs,
+        },
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const warmSnapshots = async (): Promise<void> => {
+    const periods: DashboardSnapshotPeriod[] = ["1", "7", "30"];
+    const tasks: Promise<void>[] = [
+      refreshOverviewSnapshot("overview:1:flashloan:1", "1", "1"),
+      refreshDashboardSnapshot(
+        "market-data:latest-liquidation:ethereum:all:0:10",
+        () => fetchEigenphiLatestLiquidationPage({
+          chain: "ethereum",
+          page: 0,
+          pageSize: 10,
+        }),
+      ),
+    ];
+
+    for (const period of periods) {
+      tasks.push(
+        refreshDashboardSnapshot(
+          `market-data:liquidation-overview:ethereum:${period}`,
+          () => fetchEigenphiLiquidationOverview("ethereum", period),
+        ),
+        refreshDashboardSnapshot(
+          `market-data:liquidation-leaderboard:ethereum:${period}`,
+          () => fetchEigenphiLiquidationLeaderboard("ethereum", period),
+        ),
+        refreshDashboardSnapshot(
+          `market-data:flashloan-overview:ethereum:${period}`,
+          () => fetchEigenphiFlashloanOverview("ethereum", period),
+        ),
+      );
+    }
+
+    await Promise.allSettled(tasks);
+  };
+
+  const serveApi = async function serveApi(
     req: IncomingMessage,
     res: ServerResponse,
     url: URL,
@@ -207,26 +626,80 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
       return;
     }
 
-    if (url.pathname === "/api/morpho-blue/markets") {
+    if (url.pathname === "/api/overview-snapshot") {
+      const period = overviewSnapshotPeriod(parseOptionalString(url.searchParams.get("period")));
+      const flashloanPeriod = overviewSnapshotPeriod(
+        parseOptionalString(url.searchParams.get("flashloanPeriod")),
+      );
+      const cacheKey = `overview:${period}:flashloan:${flashloanPeriod}`;
+      const ttlMs = overviewSnapshotTtlMs();
+      const cached = truthy(url.searchParams.get("refresh"))
+        ? null
+        : await readOverviewSnapshotCache(overviewSnapshotCache, cacheKey, { allowStale: true });
+      if (cached) {
+        const refreshing = cached.stale;
+        if (refreshing) {
+          void refreshOverviewSnapshot(cacheKey, period, flashloanPeriod);
+        }
+        json(res, 200, {
+          ...cached.payload,
+          cache: {
+            ...((cached.payload.cache as Record<string, unknown> | undefined) ?? {}),
+            hit: true,
+            backend: cached.backend,
+            stale: cached.stale,
+            refreshing,
+          },
+        });
+        return;
+      }
+
       try {
-        const chain = parseOptionalString(url.searchParams.get("chain")) === "base" ? "base" : "ethereum";
-        json(
-          res,
-          200,
-          chain === "base"
-            ? await fetchMorphoBlueBaseDashboardSnapshot({
-                force: truthy(url.searchParams.get("refresh")),
-              })
-            : await fetchMorphoBlueEthereumDashboardSnapshot({
-                force: truthy(url.searchParams.get("refresh")),
-              }),
-        );
+        const payload = await buildOverviewSnapshot(period, flashloanPeriod);
+        await writeOverviewSnapshotCache(overviewSnapshotCache, cacheKey, payload, ttlMs);
+        json(res, 200, payload);
+      } catch (error) {
+        json(res, 502, {
+          ok: false,
+          source: "overview-snapshot",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/bsc-tail/scan") {
+      try {
+        const blocks = Number(url.searchParams.get("blocks"));
+        const chunk = Number(url.searchParams.get("chunk"));
+        const limit = Number(url.searchParams.get("limit"));
+        const nearUsd = Number(url.searchParams.get("nearUsd"));
+        json(res, 200, await scanBscTailProtocol({
+          protocolKey: parseOptionalString(url.searchParams.get("protocol")),
+          lookbackBlocks: Number.isFinite(blocks) && blocks > 0 ? blocks : undefined,
+          chunkSize: Number.isFinite(chunk) && chunk > 0 ? chunk : undefined,
+          limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+          nearLiquidityUsd: Number.isFinite(nearUsd) && nearUsd > 0 ? nearUsd : undefined,
+        }));
       } catch (error) {
         json(res, 502, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/morpho-blue/markets") {
+      const chain = parseOptionalString(url.searchParams.get("chain")) === "base" ? "base" : "ethereum";
+      await serveCachedDashboardSnapshot(
+        res,
+        url,
+        `morpho-blue:markets:${chain}`,
+        () => chain === "base"
+          ? fetchMorphoBlueBaseDashboardSnapshot({ force: false })
+          : fetchMorphoBlueEthereumDashboardSnapshot({ force: false }),
+      );
       return;
     }
 
@@ -288,6 +761,7 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
 
     if (url.pathname === "/api/wallet") {
       const chainParam = parseOptionalString(url.searchParams.get("chain"));
+      const force = truthy(url.searchParams.get("force"));
       if (chainParam) {
         const chain = supportedChains().find((item) => item.key === chainParam);
         if (!chain) {
@@ -296,13 +770,13 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
         }
         json(res, 200, {
           ok: true,
-          wallet: await walletSnapshotForChain(chain),
+          wallet: await walletSnapshotForChain(chain, { force }),
         });
         return;
       }
 
       const wallets = await Promise.all(
-        supportedChains().map((chain) => walletSnapshotForChain(chain)),
+        supportedChains().map((chain) => walletSnapshotForChain(chain, { force })),
       );
       json(res, 200, {
         ok: true,
@@ -431,18 +905,12 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
         return;
       }
 
-      try {
-        json(res, 200, await fetchEigenphiLiquidationOverview(chain, period));
-      } catch (error) {
-        json(res, 200, {
-          ok: false,
-          sourceUnavailable: true,
-          chain,
-          period,
-          error: error instanceof Error ? error.message : String(error),
-          sourcePage: "market-data:onchain",
-        });
-      }
+      await serveCachedDashboardSnapshot(
+        res,
+        url,
+        `market-data:liquidation-overview:${chain}:${period}`,
+        () => fetchEigenphiLiquidationOverview(chain, period),
+      );
       return;
     }
 
@@ -466,18 +934,12 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
         return;
       }
 
-      try {
-        json(res, 200, await fetchEigenphiLiquidationLeaderboard(chain, period));
-      } catch (error) {
-        json(res, 200, {
-          ok: false,
-          sourceUnavailable: true,
-          chain,
-          period,
-          error: error instanceof Error ? error.message : String(error),
-          sourcePage: "market-data:onchain",
-        });
-      }
+      await serveCachedDashboardSnapshot(
+        res,
+        url,
+        `market-data:liquidation-leaderboard:${chain}:${period}`,
+        () => fetchEigenphiLiquidationLeaderboard(chain, period),
+      );
       return;
     }
 
@@ -501,18 +963,12 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
         return;
       }
 
-      try {
-        json(res, 200, await fetchEigenphiFlashloanOverview(chain, period));
-      } catch (error) {
-        json(res, 200, {
-          ok: false,
-          sourceUnavailable: true,
-          chain,
-          period,
-          error: error instanceof Error ? error.message : String(error),
-          sourcePage: "market-data:onchain",
-        });
-      }
+      await serveCachedDashboardSnapshot(
+        res,
+        url,
+        `market-data:flashloan-overview:${chain}:${period}`,
+        () => fetchEigenphiFlashloanOverview(chain, period),
+      );
       return;
     }
 
@@ -535,30 +991,17 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
         return;
       }
 
-      try {
-        json(
-          res,
-          200,
-          await fetchEigenphiLatestLiquidationPage({
-            chain,
-            date,
-            page,
-            pageSize,
-          }),
-        );
-      } catch (error) {
-        json(res, 200, {
-          ok: false,
-          sourceUnavailable: true,
+      await serveCachedDashboardSnapshot(
+        res,
+        url,
+        `market-data:latest-liquidation:${chain}:${date ?? "all"}:${page}:${pageSize}`,
+        () => fetchEigenphiLatestLiquidationPage({
           chain,
-          date: date ?? null,
+          date,
           page,
           pageSize,
-          rows: [],
-          error: error instanceof Error ? error.message : String(error),
-          sourcePage: "market-data:onchain",
-        });
-      }
+        }),
+      );
       return;
     }
 
@@ -747,7 +1190,10 @@ export function createDashboardApiHandler(deps: DashboardApiHandlerDeps) {
     }
 
     json(res, 404, { error: "Not found" });
-  };
+  } as DashboardApiHandler;
+
+  serveApi.warmSnapshots = warmSnapshots;
+  return serveApi;
 }
 
 export function serveDashboardHtml(

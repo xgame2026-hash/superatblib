@@ -21,7 +21,6 @@ expectIncludes('<!doctype html>', 'document head');
 expectIncludes('<section id="pageOverview"', 'overview page');
 expectIncludes('<section id="pageLiquidation"', 'liquidation page');
 expectIncludes('<section id="pageFlashloan"', 'flashloan page');
-expectIncludes('<section id="pageFlashloanConsole"', 'flashloan console page');
 expectIncludes('<section id="pageLab"', 'lab page');
 expectIncludes('<section id="pageMorpho"', 'morpho page');
 expectIncludes('<section id="pageConsole"', 'console page');
@@ -37,8 +36,7 @@ expectOrder('<section id="pageOverview"', '<section id="pageFlashloan"', 'page o
 expectOrder('<section id="pageFlashloan"', '<section id="pageLiquidation"', 'page order: flashloan before liquidation');
 expectOrder('<section id="pageLiquidation"', '<section id="pageMorpho"', 'page order: liquidation before morpho');
 expectOrder('<section id="pageMorpho"', '<section id="pageConsole"', 'page order: morpho before console');
-expectOrder('<section id="pageConsole"', '<section id="pageFlashloanConsole"', 'page order: console before flashloan console');
-expectOrder('<section id="pageFlashloanConsole"', '<section id="pageLab"', 'page order: flashloan console before lab');
+expectOrder('<section id="pageConsole"', '<section id="pageLab"', 'page order: console before lab');
 expectOrder('<section id="pageLab"', '<section id="pageArbitrage"', 'page order: lab before arbitrage');
 expectOrder('<section id="pageArbitrage"', '<section id="pageTxgraph"', 'page order: arbitrage before txgraph');
 expectOrder('<section id="pageTxgraph"', '<section id="pageSettings"', 'page order: txgraph before settings');

@@ -1,3 +1,23 @@
+const SETTINGS_CHAIN_RPC_FIELDS = [
+  { labelId: "settingsEthereumRpcLabel", inputId: "settingsEthereumRpc", icon: "eth.svg", label: "ETHEREUM_RPC_URL" },
+  { labelId: "settingsBnbRpcLabel", inputId: "settingsBnbRpc", icon: "bnb.svg", label: "BNB_RPC_URL" },
+  { labelId: "settingsArbitrumRpcLabel", inputId: "settingsArbitrumRpc", icon: "arb.svg", label: "ARBITRUM_RPC_URL" },
+  { labelId: "settingsBaseRpcLabel", inputId: "settingsBaseRpc", icon: "base.svg", label: "BASE_RPC_URL" },
+  { labelId: "settingsPolygonRpcLabel", inputId: "settingsPolygonRpc", icon: "Polygon.svg", label: "POLYGON_RPC_URL" },
+] as const;
+
+const renderSettingsChainRpcFields = () =>
+  SETTINGS_CHAIN_RPC_FIELDS.map(
+    ({ labelId, inputId, icon, label }) => String.raw`
+                    <label class="field full">
+                      <span class="field-label settings-chain-label">
+                        <img class="settings-chain-icon" src="/chain/${icon}" alt="" aria-hidden="true" />
+                        <span id="${labelId}">${label}</span>
+                      </span>
+                      <input id="${inputId}" class="settings-input" type="text" placeholder="https://..." />
+                    </label>`,
+  ).join("");
+
 export const DASHBOARD_SETTINGS_PAGE = String.raw`
           <section id="pageSettings" class="page">
             <div class="page-frame">
@@ -50,29 +70,14 @@ export const DASHBOARD_SETTINGS_PAGE = String.raw`
 
                   <div id="settingsGeneralFields" class="settings-form-grid">
                     <label class="field full">
-                      <span id="settingsPrivateKeyLabel" class="field-label">PRIVATE_KEY</span>
+                      <span id="settingsPrivateKeyLabel" class="field-label">钱包私钥</span>
                       <input id="settingsPrivateKey" class="settings-input" type="text" placeholder="0x..." />
                     </label>
                     <label class="field full">
-                      <span id="settingsEthereumRpcLabel" class="field-label">ETHEREUM_RPC_URL</span>
-                      <input id="settingsEthereumRpc" class="settings-input" type="text" placeholder="https://..." />
+                      <span id="settingsSuperMtNodeAppTokenLabel" class="field-label">SUPERMTNODE_APP_TOKEN</span>
+                      <input id="settingsSuperMtNodeAppToken" class="settings-input" type="text" placeholder="从 SuperMT Node 端点列表复制" />
                     </label>
-                    <label class="field full">
-                      <span id="settingsBnbRpcLabel" class="field-label">BNB_RPC_URL</span>
-                      <input id="settingsBnbRpc" class="settings-input" type="text" placeholder="https://..." />
-                    </label>
-                    <label class="field full">
-                      <span id="settingsArbitrumRpcLabel" class="field-label">ARBITRUM_RPC_URL</span>
-                      <input id="settingsArbitrumRpc" class="settings-input" type="text" placeholder="https://..." />
-                    </label>
-                    <label class="field full">
-                      <span id="settingsBaseRpcLabel" class="field-label">BASE_RPC_URL</span>
-                      <input id="settingsBaseRpc" class="settings-input" type="text" placeholder="https://..." />
-                    </label>
-                    <label class="field full">
-                      <span id="settingsPolygonRpcLabel" class="field-label">POLYGON_RPC_URL</span>
-                      <input id="settingsPolygonRpc" class="settings-input" type="text" placeholder="https://..." />
-                    </label>
+${renderSettingsChainRpcFields()}
                     <label class="field">
                       <span id="settingsFundingModeLabel" class="field-label">Funding mode</span>
                       <span class="settings-select-wrap">

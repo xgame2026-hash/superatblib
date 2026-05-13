@@ -14,7 +14,6 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
         if (
           (state.loading.eigenphiOverview && !state.data.eigenphiOverview) ||
           (state.loading.eigenphiFlashloanOverview && !state.data.eigenphiFlashloanOverview) ||
-          (state.loading.eigenphiLatestLiquidation && !state.data.eigenphiLatestLiquidation) ||
           (state.loading.morphoBlueMarkets && !state.data.morphoBlueMarkets) ||
           !state.data.strategy
         ) {
@@ -34,7 +33,6 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
           return;
         }
         [
-          function () { renderMarketDataIndexStatus(); },
           function () { renderEigenphiSummary(overview); },
           function () { renderEigenphiTrend(overview); },
           function () { renderEigenphiDistribution(overview); },
@@ -54,7 +52,6 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
         qsa('#pageFlashloan .top-pill[data-flashloan-period]').forEach(function (node) {
           node.classList.toggle('active', node.getAttribute('data-flashloan-period') === state.flashloanPeriod);
         });
-        renderMarketDataIndexStatus();
         renderFlashloanPagePayload(state.data.eigenphiFlashloanOverview);
       }
 
@@ -98,12 +95,12 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
       function applyFormToInputs() {
         const marketSelect = document.getElementById('marketSelect');
         if (marketSelect) {
-          marketSelect.value = state.form.market || 'aave-v3-ethereum';
+          marketSelect.value = state.form.market || 'aave-v3-bnb';
           if (!marketSelect.value) {
             marketSelect.value = Array.from(marketSelect.options).some(function (option) {
-              return option.value === 'aave-v3-ethereum';
-            }) ? 'aave-v3-ethereum' : (marketSelect.options[0] ? marketSelect.options[0].value : '');
-            state.form.market = marketSelect.value || 'aave-v3-ethereum';
+              return option.value === 'aave-v3-bnb';
+            }) ? 'aave-v3-bnb' : (marketSelect.options[0] ? marketSelect.options[0].value : '');
+            state.form.market = marketSelect.value || 'aave-v3-bnb';
             state.form.chain = inferExecutionChainFromMarketSelection(state.form.market);
           }
           if (typeof syncCustomSelect === 'function') {
@@ -128,7 +125,7 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
       }
 
       function syncFormFromInputs() {
-        state.form.market = document.getElementById('marketSelect').value || 'aave-v3-ethereum';
+        state.form.market = document.getElementById('marketSelect').value || 'aave-v3-bnb';
         state.form.chain = inferExecutionChainFromMarketSelection(state.form.market);
         const lookbackInput = document.getElementById('lookbackInput');
         const limitInput = document.getElementById('limitInput');
@@ -178,6 +175,15 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
         });
         applyTranslations();
         renderAll();
+        if (nextPage === 'console') {
+          refreshConsoleOpportunities().then(function () {
+            renderConsole();
+          }).catch(function () {});
+        } else if (!state.bootLoading && ['liquidation', 'flashloan', 'morpho'].includes(nextPage)) {
+          loadActivePageData().then(function () {
+            renderAll();
+          }).catch(function () {});
+        }
       }
 
       function setLanguage(language) {
@@ -189,7 +195,7 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
       }
 
       async function setOverviewPeriod(period) {
-        state.overviewPeriod = ['1', '7', '30'].includes(String(period)) ? String(period) : '7';
+        state.overviewPeriod = ['1', '7', '30'].includes(String(period)) ? String(period) : '1';
         localStorage.setItem('dashboard-overview-period', state.overviewPeriod);
         state.data.eigenphiOverview = loadCachedEigenphiOverview(state.overviewPeriod);
         state.data.eigenphiLeaderboard = loadCachedEigenphiLeaderboard(state.overviewPeriod);
@@ -197,10 +203,14 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
         state.loading.eigenphiLeaderboard = true;
         renderOverview();
         renderLiquidationPage();
-        await Promise.allSettled([
-          loadEigenphiOverview(),
-          loadEigenphiLeaderboard()
-        ]);
+        if (state.page === 'overview') {
+          await loadOverviewSnapshot({ force: true });
+        } else {
+          await Promise.allSettled([
+            loadEigenphiOverview(),
+            loadEigenphiLeaderboard()
+          ]);
+        }
         renderOverview();
         renderLiquidationPage();
       }
@@ -371,17 +381,20 @@ export const DASHBOARD_BOOTSTRAP_LOGIC = String.raw`
           renderAll();
         }).catch(function () {});
         setInterval(function () {
-          if (state.running) return;
+          if (document.hidden || state.running || state.page === 'console') return;
           loadData().then(function () {
             renderAll();
           }).catch(function () {});
-        }, 15000);
+        }, 60000);
         setInterval(function () {
+          if (document.hidden) return;
           refreshRpcUsage();
         }, 60000);
         setInterval(function () {
-          loadPublicLiquidationFeed();
-          loadLiquidationQueueStatus();
-        }, 10000);
+          if (document.hidden || state.page !== 'console') return;
+          refreshConsoleOpportunities().then(function () {
+            renderConsole();
+          }).catch(function () {});
+        }, 60000);
       }
 `;

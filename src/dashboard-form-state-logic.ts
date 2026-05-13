@@ -9,8 +9,8 @@ export const DASHBOARD_FORM_STATE_LOGIC = String.raw`
       }
 
       function preferredConsoleMarket(settings) {
-        if (!settings) return state.form.market || 'aave-v3-ethereum';
-        return settings.market || state.form.market || 'aave-v3-ethereum';
+        if (!settings) return state.form.market || 'aave-v3-bnb';
+        return settings.market || state.form.market || 'aave-v3-bnb';
       }
 
       function executionMarketsFromConfig() {

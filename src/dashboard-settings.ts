@@ -26,6 +26,7 @@ const MANAGED_KEYS = [
   "BITQUERY_API_KEY",
   "ZEROX_API_KEY",
   "QUICKNODE_ADMIN_API_KEY",
+  "SUPERMTNODE_APP_TOKEN",
   "FUNDING_MODE",
   "CONTROL_RPC_URL",
   "ETHEREUM_RPC_URL",
@@ -70,6 +71,7 @@ export type DashboardSettings = {
   bitqueryApiKey: string;
   zeroExApiKey: string;
   quicknodeAdminApiKey: string;
+  superMtNodeAppToken: string;
   fundingMode: string;
   controlRpcUrl: string;
   executionRpcUrl: string;
@@ -120,6 +122,7 @@ type DashboardSettingsPatch = Partial<{
   bitqueryApiKey: string;
   zeroExApiKey: string;
   quicknodeAdminApiKey: string;
+  superMtNodeAppToken: string;
   fundingMode: string;
   controlRpcUrl: string;
   executionRpcUrl: string;
@@ -211,6 +214,7 @@ function managedEnvSnapshot(): Record<ManagedKey, string> {
     BITQUERY_API_KEY: process.env.BITQUERY_API_KEY ?? "",
     ZEROX_API_KEY: process.env.ZEROX_API_KEY ?? "",
     QUICKNODE_ADMIN_API_KEY: process.env.QUICKNODE_ADMIN_API_KEY ?? "",
+    SUPERMTNODE_APP_TOKEN: process.env.SUPERMTNODE_APP_TOKEN ?? "",
     FUNDING_MODE: process.env.FUNDING_MODE ?? "flash_loan",
     CONTROL_RPC_URL: process.env.CONTROL_RPC_URL ?? "",
     ETHEREUM_RPC_URL: process.env.ETHEREUM_RPC_URL ?? "",
@@ -301,11 +305,11 @@ function loadExecutionMarketSettings(): DashboardSettings["markets"] {
 export function loadDashboardSettings(): DashboardSettings {
   const selectedMarket =
     (process.env.MARKET as ExecutionMarketPreset["key"] | undefined) ??
-    "aave-v3-ethereum";
+    "aave-v3-bnb";
   const selectedChain =
     process.env.CHAIN ??
     EXECUTION_MARKET_PRESETS[selectedMarket].chain ??
-    "ethereum";
+    "bnb";
 
   return {
     privateKey: process.env.PRIVATE_KEY ?? "",
@@ -315,6 +319,7 @@ export function loadDashboardSettings(): DashboardSettings {
     bitqueryApiKey: process.env.BITQUERY_API_KEY ?? "",
     zeroExApiKey: process.env.ZEROX_API_KEY ?? "",
     quicknodeAdminApiKey: process.env.QUICKNODE_ADMIN_API_KEY ?? "",
+    superMtNodeAppToken: process.env.SUPERMTNODE_APP_TOKEN ?? "",
     fundingMode: process.env.FUNDING_MODE ?? "flash_loan",
     controlRpcUrl: process.env.CONTROL_RPC_URL ?? "",
     executionRpcUrl: process.env.EXECUTION_RPC_URL ?? "",
@@ -416,8 +421,8 @@ function serializeManagedEnv(env: Record<ManagedKey, string>): string {
     {
       title: "# Advanced execution overrides",
       entries: [
-        ["CHAIN", "ethereum"],
-        ["MARKET", "aave-v3-ethereum"],
+        ["CHAIN", "bnb"],
+        ["MARKET", "aave-v3-bnb"],
         ["CONTROL_RPC_URL", ""],
         ["EXECUTION_RPC_URL", ""],
         ["FLASHBOTS_RELAY_URL", ""],
@@ -446,6 +451,7 @@ function serializeManagedEnv(env: Record<ManagedKey, string>): string {
         ["BITQUERY_API_KEY", ""],
         ["ZEROX_API_KEY", ""],
         ["QUICKNODE_ADMIN_API_KEY", ""],
+        ["SUPERMTNODE_APP_TOKEN", ""],
         ["ARBITRAGE_VENUES", "binance,okx,bitget,mexc,gate"],
       ],
     },
@@ -521,6 +527,10 @@ export function saveDashboardSettings(
   }
   if (patch.quicknodeAdminApiKey !== undefined) {
     next.QUICKNODE_ADMIN_API_KEY = patch.quicknodeAdminApiKey;
+  }
+  if (patch.superMtNodeAppToken !== undefined) {
+    next.SUPERMTNODE_APP_TOKEN = patch.superMtNodeAppToken;
+    process.env.SUPERMTNODE_APP_TOKEN = patch.superMtNodeAppToken;
   }
   if (patch.fundingMode !== undefined) {
     next.FUNDING_MODE = patch.fundingMode;

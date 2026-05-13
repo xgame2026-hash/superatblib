@@ -14,31 +14,6 @@ export const DASHBOARD_LIQUIDATION_PAGE = String.raw`
               </div>
             </div>
 
-            <article class="panel market-data-index-card" data-market-index-panel>
-              <div class="panel-inner market-data-index-inner">
-                <div>
-                  <div class="summary-title-row">
-                    <div class="panel-title" data-market-index-title>Local Index</div>
-                  </div>
-                  <div class="panel-sub" data-market-index-sources>--</div>
-                </div>
-                <div class="market-data-index-metrics">
-                  <div class="market-data-index-metric">
-                    <div class="tiny" data-market-index-block-label>Latest Block</div>
-                    <div class="market-data-index-value" data-market-index-block>--</div>
-                  </div>
-                  <div class="market-data-index-metric">
-                    <div class="tiny" data-market-index-size-label>File Size</div>
-                    <div class="market-data-index-value" data-market-index-size>--</div>
-                  </div>
-                  <div class="market-data-index-metric">
-                    <div class="tiny" data-market-index-state-label>Status</div>
-                    <div class="market-data-index-value" data-market-index-state>--</div>
-                  </div>
-                </div>
-              </div>
-            </article>
-
             <article class="panel summary-card">
               <div class="panel-inner">
                 <div class="summary-head">

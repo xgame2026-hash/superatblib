@@ -1,15 +1,20 @@
 export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
       const DASHBOARD_FETCH_TIMEOUT_MS = 10000;
+      let consoleOpportunityRefreshInFlight = null;
 
       async function fetchJson(url, options) {
         const requestOptions = options ? Object.assign({}, options) : {};
+        const timeoutMs = typeof requestOptions.timeoutMs === 'number'
+          ? requestOptions.timeoutMs
+          : DASHBOARD_FETCH_TIMEOUT_MS;
+        delete requestOptions.timeoutMs;
         let timeoutId = null;
         if (!requestOptions.signal && typeof AbortController !== 'undefined') {
           const controller = new AbortController();
           requestOptions.signal = controller.signal;
           timeoutId = setTimeout(function () {
             controller.abort();
-          }, DASHBOARD_FETCH_TIMEOUT_MS);
+          }, timeoutMs);
         }
         try {
           const response = await fetch(url, requestOptions);
@@ -115,10 +120,91 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
         return 'dashboard-market-data-flashloan-' + String(period || '7');
       }
 
+      async function loadStrategyNews() {
+        try {
+          const payload = await fetchJson('https://news.supermtnode.io/api/news?limit=5', {
+            timeoutMs: 6000,
+            cache: 'no-store'
+          });
+          state.data.strategyNews = payload;
+          if (state.page === 'overview') {
+            renderOverviewHub();
+          }
+          return payload;
+        } catch (error) {
+          state.data.strategyNews = {
+            ok: false,
+            rows: [],
+            error: error instanceof Error ? error.message : String(error)
+          };
+          return null;
+        }
+      }
+
+      function applyOverviewSnapshot(payload) {
+        const data = payload && payload.data ? payload.data : {};
+        state.data.overviewSnapshot = payload || null;
+        if (data.eigenphiOverview && !data.eigenphiOverview.sourceUnavailable) {
+          state.data.eigenphiOverview = data.eigenphiOverview;
+          saveCachedEigenphiOverview(state.overviewPeriod, data.eigenphiOverview);
+        } else if (!state.data.eigenphiOverview) {
+          state.data.eigenphiOverview = loadCachedEigenphiOverview(state.overviewPeriod);
+        }
+        if (data.eigenphiFlashloanOverview && !data.eigenphiFlashloanOverview.sourceUnavailable) {
+          state.data.eigenphiFlashloanOverview = data.eigenphiFlashloanOverview;
+          saveCachedEigenphiFlashloanOverview(state.flashloanPeriod, data.eigenphiFlashloanOverview);
+        } else if (!state.data.eigenphiFlashloanOverview) {
+          state.data.eigenphiFlashloanOverview = loadCachedEigenphiFlashloanOverview(state.flashloanPeriod);
+        }
+        if (data.morphoBlueMarkets) {
+          state.data.morphoBlueMarkets = data.morphoBlueMarkets;
+        }
+        if (data.strategyNews) {
+          state.data.strategyNews = data.strategyNews;
+        }
+      }
+
+      async function loadOverviewSnapshot(options) {
+        const config = options || {};
+        const query = new URLSearchParams();
+        query.set('period', String(state.overviewPeriod || '1'));
+        query.set('flashloanPeriod', String(state.overviewPeriod || '1'));
+        if (config.force) {
+          query.set('refresh', '1');
+        }
+
+        state.loading.eigenphiOverview = true;
+        state.loading.eigenphiFlashloanOverview = true;
+        state.loading.morphoBlueMarkets = true;
+        try {
+          const payload = await fetchJson('/api/overview-snapshot?' + query.toString(), {
+            timeoutMs: 12000
+          });
+          applyOverviewSnapshot(payload);
+          return payload;
+        } catch (_error) {
+          if (!state.data.eigenphiOverview) {
+            state.data.eigenphiOverview = loadCachedEigenphiOverview(state.overviewPeriod);
+          }
+          if (!state.data.eigenphiFlashloanOverview) {
+            state.data.eigenphiFlashloanOverview = loadCachedEigenphiFlashloanOverview(state.flashloanPeriod);
+          }
+          return null;
+        } finally {
+          state.loading.eigenphiOverview = false;
+          state.loading.eigenphiFlashloanOverview = false;
+          state.loading.morphoBlueMarkets = false;
+          renderOverview();
+          renderMorphoPage();
+          renderFlashloanPage();
+        }
+      }
+
       function loadCachedEigenphiOverview(period) {
         try {
           const raw = localStorage.getItem(overviewCacheKey(period));
-          return raw ? JSON.parse(raw) : null;
+          const payload = raw ? JSON.parse(raw) : null;
+          return payload && payload.sourceUnavailable ? null : payload;
         } catch {
           return null;
         }
@@ -152,7 +238,8 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
       function loadCachedEigenphiFlashloanOverview(period) {
         try {
           const raw = localStorage.getItem(flashloanCacheKey(period));
-          return raw ? JSON.parse(raw) : null;
+          const payload = raw ? JSON.parse(raw) : null;
+          return payload && payload.sourceUnavailable ? null : payload;
         } catch {
           return null;
         }
@@ -301,17 +388,6 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
         }
       }
 
-      async function loadMarketDataIndexStatus() {
-        try {
-          const payload = await fetchJson('/api/market-data/index-status');
-          state.data.marketDataIndexStatus = payload;
-          renderMarketDataIndexStatus();
-          return payload;
-        } catch (_error) {
-          return null;
-        }
-      }
-
       function applyLoadedFoundationData(results) {
         state.data.config = results[0].status === 'fulfilled' ? results[0].value : state.data.config;
         state.data.version = results[1].status === 'fulfilled' ? results[1].value : state.data.version;
@@ -319,11 +395,10 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
         state.data.history = results[3].status === 'fulfilled' ? results[3].value : state.data.history;
         state.data.wallet = results[4].status === 'fulfilled' && results[4].value ? results[4].value : state.data.wallet;
         state.data.settings = results[5].status === 'fulfilled' ? results[5].value : state.data.settings;
-        state.data.marketDataIndexStatus = results[6].status === 'fulfilled' ? results[6].value : state.data.marketDataIndexStatus;
-        state.data.strategy = results[7].status === 'fulfilled' && results[7].value
-          ? results[7].value
+        state.data.strategy = results[6].status === 'fulfilled' && results[6].value
+          ? results[6].value
           : (state.data.strategy || fallbackStrategySummary());
-        state.data.rpcUsage = results[8].status === 'fulfilled' && results[8].value ? results[8].value : state.data.rpcUsage;
+        state.data.rpcUsage = results[7].status === 'fulfilled' && results[7].value ? results[7].value : state.data.rpcUsage;
 
         applyLanguagePreferenceFromSettings();
         hydrateFormFromSettings({ preserveChain: state.hasHydratedForm });
@@ -341,7 +416,6 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
           fetchJson('/api/history?limit=80'),
           config.includeWallet ? fetchJson('/api/wallet').catch(function () { return null; }) : Promise.resolve(state.data.wallet),
           fetchJson('/api/settings'),
-          fetchJson('/api/market-data/index-status').catch(function () { return null; }),
           fetchJson('/api/strategy-markets').catch(function () { return null; }),
           config.includeWallet ? fetchJson('/api/rpc/usage').catch(function () { return null; }) : Promise.resolve(state.data.rpcUsage)
         ]);
@@ -349,40 +423,72 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
       }
 
       async function loadInitialData() {
-        const primaryTasks = [
-          loadMorphoBlueMarkets('ethereum'),
-          loadEigenphiOverview(),
-          loadEigenphiLatestLiquidation({ force: true }),
-          loadEigenphiFlashloanOverview(),
-          loadMarketDataIndexStatus()
-        ];
+        const overviewSnapshotTask = state.page === 'overview'
+          ? loadOverviewSnapshot().catch(function () {
+              return null;
+            })
+          : Promise.resolve(null);
 
         await loadDashboardFoundationData({
           includeWallet: false,
           includeQuicknode: false
         });
 
-        Promise.allSettled(primaryTasks).then(function () {
+        if (state.page !== 'overview') {
+          await loadActivePageData();
+        }
+
+        overviewSnapshotTask.then(function () {
           renderAll();
         }).catch(function () {});
       }
 
+      async function loadActivePageData() {
+        const tasks = [];
+        if (state.page === 'liquidation') {
+          tasks.push(loadEigenphiOverview());
+          tasks.push(loadEigenphiLeaderboard());
+          tasks.push(loadEigenphiLatestLiquidation({ force: false }));
+        } else if (state.page === 'flashloan') {
+          tasks.push(loadEigenphiFlashloanOverview());
+        } else if (state.page === 'morpho') {
+          tasks.push(loadMorphoBlueMarkets('ethereum'));
+          tasks.push(loadMorphoBlueMarkets('base'));
+        }
+        if (!tasks.length) return;
+        await Promise.allSettled(tasks);
+      }
+
       async function loadDeferredData() {
-        await Promise.allSettled([
-          loadMorphoBlueMarkets('base'),
-          loadEigenphiLeaderboard(),
-          fetchJson('/api/wallet').then(function (payload) {
-            state.data.wallet = payload;
-          }).catch(function () {}),
-          fetchJson('/api/rpc/usage').then(function (payload) {
-            state.data.rpcUsage = payload;
-          }).catch(function () {}),
+        const tasks = [
+          refreshWalletAssets(),
+          loadActivePageData()
+        ];
+        if (state.page === 'console') {
+          tasks.push(refreshConsoleOpportunities());
+        }
+        await Promise.allSettled(tasks);
+      }
+
+      async function refreshConsoleOpportunities() {
+        if (consoleOpportunityRefreshInFlight) {
+          return consoleOpportunityRefreshInFlight;
+        }
+        consoleOpportunityRefreshInFlight = Promise.allSettled([
           loadPublicLiquidationFeed(),
           loadLiquidationQueueStatus()
-        ]);
+        ]).finally(function () {
+          consoleOpportunityRefreshInFlight = null;
+        });
+        return consoleOpportunityRefreshInFlight;
       }
 
       async function loadData() {
+        if (state.page === 'overview') {
+          await loadOverviewSnapshot();
+          return;
+        }
+
         const morphoTask = Promise.allSettled([
           loadMorphoBlueMarkets('ethereum'),
           loadMorphoBlueMarkets('base')
@@ -398,7 +504,6 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
         });
 
         await Promise.allSettled([morphoTask, eigenphiTask, leaderboardTask, latestLiquidationTask, flashloanTask]);
-        await loadMarketDataIndexStatus();
       }
 
       async function refreshRpcUsage() {
@@ -437,8 +542,8 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
 
       async function loadLiquidationQueueStatus() {
         try {
-          const chain = state.form && state.form.chain ? state.form.chain : 'ethereum';
-          const market = state.form && state.form.market ? state.form.market : 'aave-v3-ethereum';
+          const chain = state.form && state.form.chain ? state.form.chain : 'bnb';
+          const market = state.form && state.form.market ? state.form.market : 'aave-v3-bnb';
           const query = new URLSearchParams();
           query.set('chain', chain);
           query.set('market', market);
@@ -450,7 +555,7 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
           state.data.liquidationQueue = {
             ok: false,
             source: 'local',
-            chain: state.form && state.form.chain ? state.form.chain : 'ethereum',
+            chain: state.form && state.form.chain ? state.form.chain : 'bnb',
             market: state.form && state.form.market ? state.form.market : '',
             eligible: false,
             reason: error instanceof Error ? error.message : String(error),
@@ -472,7 +577,10 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
             undefined;
           const payload = {
             chain: state.form && state.form.chain ? state.form.chain : 'ethereum',
-            market: state.form && state.form.market ? state.form.market : 'aave-v3-ethereum',
+            market: state.form && state.form.market ? state.form.market : 'aave-v3-bnb',
+            walletAddress: state.data && state.data.liquidationQueue && state.data.liquidationQueue.walletAddress
+              ? state.data.liquidationQueue.walletAddress
+              : undefined,
             outcome: outcome,
             user: state.autoExecuteSelection && state.autoExecuteSelection.user ? state.autoExecuteSelection.user : undefined,
             txHash: txHash,
@@ -494,7 +602,7 @@ export const DASHBOARD_DATA_LOADING_LOGIC = String.raw`
 	        renderConsole();
 	        try {
 	          const results = await Promise.allSettled([
-	            fetchJson('/api/wallet'),
+	            fetchJson('/api/wallet?force=1'),
 	            fetchJson('/api/rpc/usage')
 	          ]);
 	          if (results[0].status === 'fulfilled') {

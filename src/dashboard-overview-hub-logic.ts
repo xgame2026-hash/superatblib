@@ -47,13 +47,8 @@ export const DASHBOARD_OVERVIEW_HUB_LOGIC = String.raw`
         ].join(''));
         text('overviewHubUpdated', '--');
         text('overviewSurfacesSub', '--');
-        text('overviewLiquidationSnapshotSub', '--');
-        text('overviewFlashloanSnapshotSub', '--');
         renderOverviewSurfaceCardsSkeleton();
-        html('overviewLiquidationSnapshotHeaderRow', renderOverviewSnapshotHeader(t('overviewLiquidationSnapshotCols')));
-        html('overviewFlashloanSnapshotHeaderRow', renderOverviewSnapshotHeader(t('overviewFlashloanSnapshotCols')));
-        html('overviewLiquidationSnapshotRows', renderOverviewHubSkeletonRows(5, 5));
-        html('overviewFlashloanSnapshotRows', renderOverviewHubSkeletonRows(5, 5));
+        renderOverviewNews();
         html('strategyMarketRows', renderOverviewHubSkeletonRows(6, 6));
       }
 
@@ -104,8 +99,102 @@ export const DASHBOARD_OVERVIEW_HUB_LOGIC = String.raw`
         }).join('');
       }
 
+      function renderOverviewNews() {
+        const payload = state.data && state.data.strategyNews ? state.data.strategyNews : null;
+        const remoteRows = payload && Array.isArray(payload.rows) ? payload.rows.slice(0, 5) : [];
+        const fallbackItems = [
+          {
+            tag: state.language === 'zh' ? '架构' : 'Architecture',
+            title: state.language === 'zh' ? '首页改为服务端快照入口' : 'Overview now favors server snapshots',
+            body: state.language === 'zh'
+              ? '高频变化数据后续由服务器定时汇总到 Redis，客户端只读取快照，减少端点压力。'
+              : 'High-churn data can be aggregated into Redis by the server; the client reads snapshots instead of polling every endpoint.'
+          },
+          {
+            tag: state.language === 'zh' ? '策略' : 'Strategy',
+            title: state.language === 'zh' ? '执行市场只接入已部署策略' : 'Execution markets require deployed strategies',
+            body: state.language === 'zh'
+              ? '控制台只展示服务器已部署、已预检通过的 ETH / ARB / BNB 策略市场。'
+              : 'The console only exposes ETH / ARB / BNB strategy markets that are deployed and prechecked on the server.'
+          },
+          {
+            tag: state.language === 'zh' ? '维护' : 'Maintenance',
+            title: state.language === 'zh' ? 'BASE / POLYGON 继续维护' : 'BASE / POLYGON remain in maintenance',
+            body: state.language === 'zh'
+              ? '相关节点不进入执行市场，也不参与立即同步与清算队列。'
+              : 'These nodes stay out of execution markets, immediate sync, and liquidation queues.'
+          }
+        ];
+        const items = remoteRows.length
+          ? remoteRows.map(function (row) {
+              return {
+                tag: row.tag || (state.language === 'zh' ? '资讯' : 'Intel'),
+                title: row.title || '--',
+                body: row.content || row.body || '--',
+                time: row.time || row.createdAt || ''
+              };
+            })
+          : fallbackItems;
+        text('overviewNewsTitle', state.language === 'zh' ? '最新资讯' : 'Latest Intel');
+        text(
+          'overviewNewsSub',
+          remoteRows.length
+            ? (
+                state.language === 'zh'
+                  ? '来自 news.supermtnode.io 的策略资讯，首页只读取最新 5 条。'
+                  : 'Strategy intel from news.supermtnode.io. Overview reads the latest 5 rows.'
+              )
+            : (
+                state.language === 'zh'
+                  ? '资讯服务未返回数据，当前显示本地默认内容。'
+                  : 'News service returned no rows. Showing local fallback content.'
+              )
+        );
+        html('overviewNewsList', items.map(function (item) {
+          return '<article class="overview-news-item">' +
+            '<div class="overview-news-tag">' + escapeHtml(item.tag) + '</div>' +
+            '<div class="overview-news-copy">' +
+              '<div class="overview-news-title">' + escapeHtml(item.title) + '</div>' +
+              (item.time ? '<div class="overview-news-time">' + escapeHtml(formatNewsTime(item.time)) + '</div>' : '') +
+              '<div class="overview-news-body">' + escapeHtml(item.body) + '</div>' +
+            '</div>' +
+          '</article>';
+        }).join(''));
+      }
+
+      function formatNewsTime(value) {
+        const time = Date.parse(String(value || ''));
+        if (!Number.isFinite(time)) return String(value || '');
+        try {
+          return new Date(time).toLocaleString(state.language === 'zh' ? 'zh-CN' : 'en-US', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        } catch (_error) {
+          return String(value || '');
+        }
+      }
+
+      function summarizeBscTailScan(payload) {
+        const rows = payload && Array.isArray(payload.rows) ? payload.rows : [];
+        const shortfall = rows.filter(function (row) { return row && row.status === 'shortfall'; }).length;
+        const near = rows.filter(function (row) { return row && row.status === 'near'; }).length;
+        return {
+          ok: Boolean(payload && payload.ok),
+          markets: payload && typeof payload.markets === 'number' ? payload.markets : null,
+          candidates: payload && typeof payload.candidates === 'number' ? payload.candidates : null,
+          shortfall: shortfall,
+          near: near,
+          actionable: shortfall + near,
+          error: payload && payload.error ? String(payload.error) : ''
+        };
+      }
+
       function renderOverviewSurfaceCards(liquidation, flashloan, morphoPayload) {
         const morphoAnalysis = morphoPayload && morphoPayload.analysis ? morphoPayload.analysis : null;
+        const bscTail = summarizeBscTailScan(state.data.bscTailScan);
         const cards = [
           {
             key: 'liquidation',
@@ -142,7 +231,7 @@ export const DASHBOARD_OVERVIEW_HUB_LOGIC = String.raw`
               [t('overviewSurfaceMetricRisk'), morphoAnalysis && typeof morphoAnalysis.riskyPositions === 'number' ? String(morphoAnalysis.riskyPositions) : '--']
             ],
             button: t('overviewSurfaceOpenMorpho')
-          }
+          },
         ];
         html('overviewSurfaceCards', cards.map(function (card) {
           return '<article class="overview-surface-card">' +
@@ -170,9 +259,9 @@ export const DASHBOARD_OVERVIEW_HUB_LOGIC = String.raw`
         const flashloan = state.data.eigenphiFlashloanOverview;
         const morphoPayload = state.data.morphoBlueMarkets;
         const morphoAnalysis = morphoPayload && morphoPayload.analysis ? morphoPayload.analysis : null;
-        const strategy = state.data.strategy;
         const summary = liquidation && liquidation.summary && liquidation.summary.data ? liquidation.summary.data : null;
         const flashloanSummary = flashloan && flashloan.summary && flashloan.summary.data ? flashloan.summary.data : null;
+        const bscTail = summarizeBscTailScan(state.data.bscTailScan);
 
         renderNamedSummaryColumns(
           'overviewHubLeft',
@@ -186,32 +275,27 @@ export const DASHBOARD_OVERVIEW_HUB_LOGIC = String.raw`
           [
             [t('overviewHubRightRows')[0], morphoAnalysis ? String(morphoAnalysis.riskyPositions || 0) : '--'],
             [t('overviewHubRightRows')[1], morphoAnalysis ? String(morphoAnalysis.liquidatablePositions || 0) : '--'],
-            [t('overviewHubRightRows')[2], strategy && Array.isArray(strategy.markets) ? String(strategy.markets.length) : '--'],
-            [t('overviewHubRightRows')[3], strategy ? String(strategy.currentExecutionLabel || '--') : '--']
+            [t('overviewHubRightRows')[2], bscTail.candidates !== null ? formatInteger(bscTail.candidates) : '--'],
+            [t('overviewHubRightRows')[3], bscTail.ok ? formatInteger(bscTail.actionable) : '--']
           ]
         );
 
+        const overviewSnapshot = state.data && state.data.overviewSnapshot ? state.data.overviewSnapshot : null;
+        const snapshotGeneratedAt = overviewSnapshot && overviewSnapshot.generatedAt
+          ? Date.parse(overviewSnapshot.generatedAt) / 1000
+          : null;
         const updatedTimes = [
           liquidation && liquidation.summary ? liquidation.summary.updateTimestamp : null,
           flashloan && flashloan.summary ? flashloan.summary.updateTimestamp : null,
           morphoPayload && morphoPayload.generatedAt ? Date.parse(morphoPayload.generatedAt) / 1000 : null
         ].filter(function (value) { return Number.isFinite(value); });
-        const latestUpdated = updatedTimes.length ? Math.max.apply(null, updatedTimes) : null;
+        const latestUpdated = Number.isFinite(snapshotGeneratedAt)
+          ? snapshotGeneratedAt
+          : (updatedTimes.length ? Math.max.apply(null, updatedTimes) : null);
         text('overviewHubUpdated', latestUpdated ? formatRelativeFromUnix(latestUpdated) : '--');
 
         renderOverviewSurfaceCards(liquidation, flashloan, morphoPayload);
-        text(
-          'overviewSurfacesSub',
-          state.language === 'zh'
-            ? '总览只做入口聚合，详细分析请进入各专题页。'
-            : 'Overview stays aggregated. Use the dedicated pages for detailed analysis.'
-        );
-
-        html('overviewLiquidationSnapshotHeaderRow', renderOverviewSnapshotHeader(t('overviewLiquidationSnapshotCols')));
-        html('overviewFlashloanSnapshotHeaderRow', renderOverviewSnapshotHeader(t('overviewFlashloanSnapshotCols')));
-        html('overviewLiquidationSnapshotRows', renderOverviewLatestLiquidationRows(state.data.eigenphiLatestLiquidation));
-        html('overviewFlashloanSnapshotRows', renderOverviewFlashloanRows(flashloan));
-        text('overviewLiquidationSnapshotSub', state.language === 'zh' ? '最近 5 条清算记录' : 'Latest 5 liquidation rows');
-        text('overviewFlashloanSnapshotSub', state.language === 'zh' ? '最近 5 条闪电贷记录' : 'Latest 5 flashloan rows');
+        text('overviewSurfacesSub', '');
+        renderOverviewNews();
       }
 `;

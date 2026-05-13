@@ -50,9 +50,6 @@ export const DASHBOARD_APP_SHELL_START = String.raw`
             <button class="nav-button" type="button" data-page="console" title="Console">
               <img class="nav-icon" src="/img/Console.svg" alt="console" />
             </button>
-            <button class="nav-button" type="button" data-page="flashloanConsole" title="Flashloan Console">
-              <img class="nav-icon" src="/img/startFlashloan.svg?v=202604161230" alt="flashloan console" />
-            </button>
             <button class="nav-button" type="button" data-page="lab" title="Create">
               <img class="nav-icon" src="/img/combo.svg?v=202604161214" alt="combo" />
             </button>

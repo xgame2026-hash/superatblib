@@ -54,8 +54,45 @@ export const DASHBOARD_CONSOLE_RESULTS_LOGIC = String.raw`
           '</tr>';
         }
 
+        function renderBscTailScanStatusMarkup(payload) {
+          if (!payload || state.consoleSourceFilter === 'morpho-blue') {
+            return '';
+          }
+          const ok = payload.ok !== false;
+          const protocol = payload.protocol || 'Venus Protocol';
+          const markets = typeof payload.markets === 'number' ? String(payload.markets) : '--';
+          const candidates = typeof payload.candidates === 'number' ? String(payload.candidates) : '--';
+          const rows = Array.isArray(payload.rows) ? payload.rows : [];
+          const shortfall = rows.filter(function (row) { return row && row.status === 'shortfall'; }).length;
+          const near = rows.filter(function (row) { return row && row.status === 'near'; }).length;
+          const blockRange = payload.fromBlock && payload.toBlock
+            ? String(payload.fromBlock) + ' -> ' + String(payload.toBlock)
+            : '--';
+          const label = ok
+            ? (state.language === 'zh' ? 'BSC 服务端机会已同步' : 'BSC server opportunities synced')
+            : (state.language === 'zh' ? 'BSC 服务端机会同步失败' : 'BSC server opportunity sync failed');
+          const detail = ok
+            ? (
+                state.language === 'zh'
+                  ? protocol + ' / 市场 ' + markets + ' / 候选 ' + candidates + ' / shortfall ' + String(shortfall) + ' / near ' + String(near)
+                  : protocol + ' / markets ' + markets + ' / candidates ' + candidates + ' / shortfall ' + String(shortfall) + ' / near ' + String(near)
+              )
+            : String(payload.error || '--');
+          return '<tr class="console-results-status-row">' +
+            '<td colspan="8">' +
+              '<div class="console-results-status-card">' +
+                '<strong>' + escapeHtml(label) + '</strong>' +
+                '<span>' + escapeHtml(detail) + '</span>' +
+                '<span>' + escapeHtml((state.language === 'zh' ? '区块 ' : 'Blocks ') + blockRange) + '</span>' +
+              '</div>' +
+            '</td>' +
+          '</tr>';
+        }
+
         function renderConsoleResultsMarkup(displayedTargets, scanStarted, morphoOnlyVisible) {
           if (!displayedTargets.length) {
+            const bscStatus = renderBscTailScanStatusMarkup(state.data.bscTailScan);
+            if (bscStatus) return bscStatus;
             return '<tr><td colspan="8">' + escapeHtml(scanStarted ? t('targetsEmpty') : (state.language === 'zh' ? '暂无数据' : 'No data yet.')) + '</td></tr>';
           }
           if (!morphoOnlyVisible) {

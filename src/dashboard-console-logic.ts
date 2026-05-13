@@ -20,24 +20,13 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
           renderAll,
           openModal
         } = deps;
-        let machineTickTimer = null;
-        let machineStepTimer = null;
-        let machineMessagesKey = '';
-        let machineMessageIndex = 0;
         let balanceTickTimer = null;
         let balanceRotationKey = '';
         let balanceRotationIndex = 0;
-
-        function stopMachineTimers() {
-          if (machineTickTimer) {
-            clearTimeout(machineTickTimer);
-            machineTickTimer = null;
-          }
-          if (machineStepTimer) {
-            clearTimeout(machineStepTimer);
-            machineStepTimer = null;
-          }
-        }
+        let machineTickTimer = null;
+        let machineTypeTimer = null;
+        let machineRotationIndex = 0;
+        let machineRotationKey = '';
 
         function stopBalanceTimer() {
           if (balanceTickTimer) {
@@ -46,10 +35,15 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
           }
         }
 
-        function setMachineText(value) {
-          const node = document.getElementById('consoleMachineText');
-          if (!node) return;
-          node.textContent = value;
+        function stopMachineTimers() {
+          if (machineTickTimer) {
+            clearTimeout(machineTickTimer);
+            machineTickTimer = null;
+          }
+          if (machineTypeTimer) {
+            clearTimeout(machineTypeTimer);
+            machineTypeTimer = null;
+          }
         }
 
         function setMachineActive(active) {
@@ -70,6 +64,16 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
             return String(item && item.key ? item.key : '').toLowerCase() === String(state.form.market || '').toLowerCase();
           });
           return matched && matched.label ? String(matched.label) : 'Aave V3 / Ethereum';
+        }
+
+        function selectedChainLabel() {
+          const key = String(state.form.chain || '').toLowerCase();
+          if (key === 'bnb') return 'BNB Chain';
+          if (key === 'ethereum') return 'Ethereum';
+          if (key === 'arbitrum') return 'Arbitrum One';
+          if (key === 'polygon') return 'Polygon';
+          if (key === 'base') return 'Base';
+          return key ? key.toUpperCase() : '--';
         }
 
         function compactUserLabel(value) {
@@ -302,7 +306,7 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
             return state.language === 'zh' ? '等待恢复监控' : 'Waiting to resume';
           }
           if (!selection || !selection.user) {
-            return state.language === 'zh' ? '继续扫描市场' : 'Continue scanning';
+            return state.language === 'zh' ? '等待服务端机会' : 'Waiting for server opportunities';
           }
           if (!selection.liquidatable) {
             return state.language === 'zh' ? '等待仓位跌破清算线' : 'Waiting for liquidation threshold';
@@ -316,130 +320,136 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
           if (hasLiquidatable) {
             return state.language === 'zh' ? '已武装，等待广播门槛' : 'Armed, waiting for broadcast gate';
           }
-          return state.language === 'zh' ? '继续扫描市场' : 'Continue scanning';
+          return state.language === 'zh' ? '等待服务端机会' : 'Waiting for server opportunities';
         }
 
-        function syncMachineHud() {
-          const liquidatableCount = state.consoleLiveTargets.filter(function (row) { return !!row.liquidatable; }).length;
-          const totalTargets = state.consoleLiveTargets.length;
-          const selection = state.autoExecuteSelection;
-          const roughNet = selection ? String(selection.roughNetProfitDisplay || '--') : '--';
-          const selectionHf = selection && selection.healthFactor ? String(selection.healthFactor) : '--';
-          const gateText = latestExecutionGateText();
-          const roundText = String(Math.max(0, Number(state.autoExecuteRunSerial || 0)));
-          text(
-            'consoleMachineStatusLine1',
-            (state.language === 'zh' ? '市场 ' : 'MARKET ') +
-              selectedExecutionMarketLabel() +
-              ' / ' +
-              (state.language === 'zh' ? '轮次 ' : 'ROUND ') +
-              roundText +
-              ' / ' +
-              (state.language === 'zh'
-                ? String(liquidatableCount) + ' 可清算 / ' + String(totalTargets) + ' 候选'
-                : String(liquidatableCount) + ' liquidatable / ' + String(totalTargets) + ' candidates')
-          );
-          text(
-            'consoleMachineStatusLine2',
-            (state.language === 'zh' ? '机会 ' : 'PRIORITY ') +
-              machineDecisionText() +
-              ' / HF ' +
-              selectionHf +
-              ' / NET ' +
-              roughNet
-          );
-          text(
-            'consoleMachineStatusLine3',
-            (state.language === 'zh' ? '门槛 ' : 'GATE ') +
-              gateText +
-              ' / ' +
-              (state.language === 'zh' ? '动作 ' : 'NEXT ') +
-              machineActionText()
-          );
-        }
-
-        function buildMachineMessages() {
-          const marketText = selectedExecutionMarketLabel();
-          const selection = state.autoExecuteSelection;
-          const selectionText = selection && selection.user
-            ? shortAddress(String(selection.user || '--')) + ' / ' + String(selection.debtSymbol || '--') + ' <- ' + String(selection.collateralSymbol || '--')
-            : '--';
-          const roughNetText = selection && selection.roughNetProfitDisplay
-            ? String(selection.roughNetProfitDisplay)
-            : '--';
-          const liquidatableCount = state.consoleLiveTargets.filter(function (row) { return !!row.liquidatable; }).length;
-          const candidateText = String(state.consoleLiveTargets.length) + (state.language === 'zh' ? ' 候选 / ' : ' candidates / ') + String(liquidatableCount) + (state.language === 'zh' ? ' 可清算' : ' liquidatable');
-          const gateText = latestExecutionGateText();
-          let scanText = state.language === 'zh' ? '等待扫描' : 'Awaiting scan';
-          if (state.runStateMode === 'running') {
-            scanText = state.language === 'zh'
-              ? '正在扫描 ' + marketText
-              : 'Scanning ' + marketText;
-          } else if (state.runStateMode === 'paused') {
-            scanText = state.language === 'zh'
-              ? '已暂停 ' + marketText
-              : 'Paused ' + marketText;
+        function selectedWalletSummary() {
+          const wallets = state.data.wallet && Array.isArray(state.data.wallet.wallets)
+            ? state.data.wallet.wallets
+            : [];
+          const wallet = wallets.find(function (item) {
+            return item && String(item.chain || '').toLowerCase() === String(state.form.chain || '').toLowerCase();
+          });
+          if (!wallet || wallet.ready !== true) {
+            return state.language === 'zh' ? '钱包未就绪' : 'Wallet not ready';
           }
+          const gasDisplay = wallet.nativeBalanceDisplay
+            ? formatFixedAmount(wallet.nativeBalanceDisplay, 4)
+            : '--';
+          return 'Gas ' +
+            gasDisplay +
+            ' ' +
+            String(wallet.nativeSymbol || '') +
+            ' | USDC ' +
+            String(wallet.usdcBalanceDisplay || '--') +
+            ' | USDT ' +
+            String(wallet.usdtBalanceDisplay || '--');
+        }
+
+        function queueStatusSummary() {
+          if (!state.running && state.runStateMode !== 'paused') {
+            return state.language === 'zh' ? '未排队' : 'Not queued';
+          }
+          if (state.consoleQueueAnnounced) {
+            return state.language === 'zh' ? '排队成功' : 'Queued';
+          }
+          const queue = state.data.liquidationQueue && state.data.liquidationQueue.queue
+            ? state.data.liquidationQueue.queue
+            : null;
+          if (queue && queue.enabled !== false) {
+            return state.language === 'zh' ? '排队成功' : 'Queued';
+          }
+          return state.language === 'zh' ? '连接中' : 'Connecting';
+        }
+
+        function strategyStatusSummary() {
+          if (state.runStateMode === 'paused') {
+            return state.language === 'zh' ? '已暂停' : 'Paused';
+          }
+          if (state.running) {
+            return state.language === 'zh' ? '策略正常' : 'Strategy OK';
+          }
+          return state.language === 'zh' ? '待启动' : 'Idle';
+        }
+
+        function waitingStatusSummary() {
+          if (state.runStateMode === 'paused') {
+            return state.language === 'zh' ? '暂停中' : 'Paused';
+          }
+          if (state.running) {
+            return state.language === 'zh' ? '正在排队清算' : 'Waiting in queue';
+          }
+          return state.language === 'zh' ? '等待启动' : 'Waiting to start';
+        }
+
+        function bestNetSummary() {
+          const selection = state.autoExecuteSelection;
+          if (selection && selection.roughNetProfitDisplay) {
+            return String(selection.roughNetProfitDisplay);
+          }
+          const candidates = state.consoleLiveTargets.filter(function (row) {
+            return row && row.roughNetProfitDisplay;
+          }).map(function (row) {
+            return {
+              value: toNumber(row.roughNetProfitDisplay),
+              label: String(row.roughNetProfitDisplay || '--')
+            };
+          }).filter(function (row) {
+            return row.value !== null;
+          }).sort(function (left, right) {
+            return Number(right.value) - Number(left.value);
+          });
+          return candidates[0] ? candidates[0].label : '--';
+        }
+
+        function machineLines() {
           return [
-            state.language === 'zh' ? '执行市场 ' + marketText : 'MARKET ' + marketText,
-            state.language === 'zh' ? '候选状态 ' + candidateText : 'TARGETS ' + candidateText,
-            state.language === 'zh' ? '首选目标 ' + selectionText : 'PRIORITY ' + selectionText,
-            state.language === 'zh' ? '粗净利润 ' + roughNetText : 'ROUGH NET ' + roughNetText,
-            state.language === 'zh' ? '执行门槛 ' + gateText : 'GATE ' + gateText,
-            state.language === 'zh' ? '下一动作 ' + machineActionText() : 'NEXT ' + machineActionText(),
-            scanText
+            (state.language === 'zh' ? '执行市场: ' : 'Market: ') + selectedExecutionMarketLabel(),
+            (state.language === 'zh' ? '排队: ' : 'Queue: ') + queueStatusSummary(),
+            (state.language === 'zh' ? '策略: ' : 'Strategy: ') + strategyStatusSummary(),
+            (state.language === 'zh' ? '钱包: ' : 'Wallet: ') + selectedWalletSummary(),
+            (state.language === 'zh' ? '状态: ' : 'Status: ') + waitingStatusSummary(),
+            (state.language === 'zh' ? '最佳粗净利: ' : 'Best rough net: ') + bestNetSummary()
           ];
         }
 
-        function runMachineTyping(messages) {
-          if (!messages.length) {
-            setMachineText('');
-            return;
+        function typeMachineLine(value) {
+          const node = document.getElementById('consoleMachineLine');
+          if (!node) return;
+          if (machineTypeTimer) {
+            clearTimeout(machineTypeTimer);
+            machineTypeTimer = null;
           }
-          stopMachineTimers();
-          const current = String(messages[machineMessageIndex % messages.length] || '');
-          let charIndex = 0;
-          setMachineText('');
-          function typeNext() {
-            setMachineText(current.slice(0, charIndex));
-            if (charIndex < current.length) {
-              charIndex += 1;
-              machineStepTimer = setTimeout(typeNext, 32);
-              return;
+          const textValue = String(value || '--');
+          let cursor = 0;
+          node.textContent = '';
+          const step = function () {
+            cursor += 1;
+            node.textContent = textValue.slice(0, cursor);
+            if (cursor < textValue.length) {
+              machineTypeTimer = setTimeout(step, 28);
+            } else {
+              machineTypeTimer = null;
             }
-            machineTickTimer = setTimeout(function () {
-              machineMessageIndex = (machineMessageIndex + 1) % messages.length;
-              runMachineTyping(messages);
-            }, 1600);
-          }
-          typeNext();
+          };
+          step();
         }
 
         function syncMachineDisplay() {
-          syncMachineHud();
-          if (state.runStateMode !== 'running') {
-            stopMachineTimers();
-            machineMessagesKey = '';
-            machineMessageIndex = 0;
-            setMachineActive(false);
-            if (state.runStateMode === 'paused') {
-              setMachineText(state.language === 'zh' ? '已暂停' : 'PAUSED');
-            } else {
-              setMachineText('');
-            }
-            return;
+          const lines = machineLines();
+          const nextKey = lines.join('|');
+          if (nextKey !== machineRotationKey) {
+            machineRotationKey = nextKey;
+            machineRotationIndex = 0;
           }
+          const line = lines[machineRotationIndex % lines.length] || '--';
+          typeMachineLine(line);
+          machineRotationIndex = (machineRotationIndex + 1) % lines.length;
+          if (machineTickTimer) {
+            clearTimeout(machineTickTimer);
+          }
+          machineTickTimer = setTimeout(syncMachineDisplay, 2600);
           setMachineActive(true);
-          const messages = buildMachineMessages();
-          const nextKey = messages.join('||');
-          if (nextKey === machineMessagesKey && (machineTickTimer || machineStepTimer)) {
-            return;
-          }
-          machineMessagesKey = nextKey;
-          if (machineMessageIndex >= messages.length) {
-            machineMessageIndex = 0;
-          }
-          runMachineTyping(messages);
         }
 
         function availableBalanceItems(selectedWallet) {
@@ -527,9 +537,7 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
 	          return [
 	            { key: 'ethereum', label: 'ETH', icon: '/chain/eth.svg' },
 	            { key: 'bnb', label: 'BNB', icon: '/chain/bnb.svg' },
-	            { key: 'base', label: 'Base', icon: '/chain/base.svg' },
-	            { key: 'arbitrum', label: 'ARB', icon: '/chain/arb.svg' },
-	            { key: 'polygon', label: 'Polygon', icon: '/chain/Polygon.svg' }
+	            { key: 'arbitrum', label: 'ARB', icon: '/chain/arb.svg' }
 	          ].map(function (chain) {
 	            const wallet = wallets.find(function (item) { return item && item.chain === chain.key; }) || {};
 	            const rpcMetric = rpcUsage[chain.key] || null;
@@ -560,11 +568,36 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
 	        }
 
 	        function formatRpcUsageMetric(metric) {
-	          if (!metric || typeof metric.requestCount !== 'number') return '--';
-	          const used = formatInteger(metric.requestCount);
-	          return typeof metric.requestLimit === 'number' && metric.requestLimit > 0
-	            ? used + ' / ' + formatInteger(metric.requestLimit)
-	            : used;
+	          if (!metric) return '--';
+	          if (typeof metric.requestCount === 'number') {
+	            return formatInteger(metric.requestCount);
+	          }
+	          if (
+	            typeof metric.remainingRequests === 'number' &&
+	            typeof metric.requestLimit === 'number' &&
+	            metric.requestLimit > 0
+	          ) {
+	            return formatInteger(Math.max(0, metric.requestLimit - metric.remainingRequests));
+	          }
+	          const status = String(metric.status || '');
+	          const zh = {
+	            missing_credentials: '缺少 Token',
+	            missing_rpc: '未配置 RPC',
+	            unmatched: '未匹配端点',
+	            error: '读取失败',
+	            ok: '无用量'
+	          };
+	          const en = {
+	            missing_credentials: 'Missing token',
+	            missing_rpc: 'No RPC',
+	            unmatched: 'Unmatched endpoint',
+	            error: 'Error',
+	            ok: 'No usage'
+	          };
+	          if (status === 'error' && /invalid token|missing token|401/i.test(String(metric.message || ''))) {
+	            return state.language === 'zh' ? 'Token 失效' : 'Invalid token';
+	          }
+	          return state.language === 'zh' ? (zh[status] || '--') : (en[status] || '--');
 	        }
 
 	        function renderWalletAssetsTable() {
@@ -580,6 +613,11 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
 	          text('consoleWalletChainHeader', state.language === 'zh' ? '链' : 'Chain');
 	          text('consoleWalletGasHeader', state.language === 'zh' ? 'Gas 余额' : 'Gas');
 	          text('consoleWalletRpcHeader', state.language === 'zh' ? 'RPC 用量' : 'RPC Usage');
+
+	          if (state.loading.walletAssets) {
+	            html('consoleWalletBalanceRows', renderWalletAssetSkeletonRows());
+	            return;
+	          }
 
           const rows = walletChainRows();
           html(
@@ -599,32 +637,47 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
           );
         }
 
-        function walletStartupLines(payload) {
-          const wallets = payload && Array.isArray(payload.wallets) ? payload.wallets : [];
-          if (!wallets.length) return '$ 钱包资产读取: --\n';
-          return wallets.map(function (wallet) {
-            const chainName = wallet && wallet.chainName ? String(wallet.chainName) : String(wallet && wallet.chain ? wallet.chain : '--');
-            if (!wallet || wallet.ready !== true) {
-              return '$ ' + chainName + ' 钱包读取失败: ' + String(wallet && wallet.reason ? wallet.reason : '--') + '\n';
-            }
-            return '$ ' +
-              chainName +
-              ' 钱包 ' +
-              shortAddress(String(wallet.address || '--')) +
-              ' | Gas ' +
-              String(wallet.nativeBalanceDisplay || '--') +
-              ' ' +
-              String(wallet.nativeSymbol || '') +
-              ' | USDC ' +
-              String(wallet.usdcBalanceDisplay || '--') +
-              ' | USDT ' +
-              String(wallet.usdtBalanceDisplay || '--') +
-              '\n';
+        function renderWalletAssetSkeletonRows() {
+          return [0, 1, 2].map(function () {
+            return '<tr class="console-wallet-skeleton-row">' +
+              '<td><div class="skeleton-block console-wallet-skeleton-icon"></div></td>' +
+              '<td><div class="skeleton-table-cell console-wallet-skeleton-cell"></div></td>' +
+              '<td><div class="skeleton-table-cell console-wallet-skeleton-cell"></div></td>' +
+              '<td><div class="skeleton-table-cell console-wallet-skeleton-cell"></div></td>' +
+              '<td><div class="skeleton-table-cell console-wallet-skeleton-cell"></div></td>' +
+              '</tr>';
           }).join('');
         }
 
+        function walletStartupLines(payload) {
+          const wallets = payload && Array.isArray(payload.wallets) ? payload.wallets : [];
+          if (!wallets.length) return '$ 钱包资产读取: --\n';
+          const selected = wallets.find(function (wallet) {
+            return wallet && String(wallet.chain || '').toLowerCase() === String(state.form.chain || '').toLowerCase();
+          }) || wallets[0];
+          const chainName = selected && selected.chainName ? String(selected.chainName) : selectedChainLabel();
+          if (!selected || selected.ready !== true) {
+            return '$ ' + chainName + ' 钱包读取失败: ' + String(selected && selected.reason ? selected.reason : '--') + '\n';
+          }
+          return '$ ' +
+            chainName +
+            ' 钱包 ' +
+            shortAddress(String(selected.address || '--')) +
+            ' | Gas ' +
+            (selected.nativeBalanceDisplay ? formatFixedAmount(selected.nativeBalanceDisplay, 4) : '--') +
+            ' ' +
+            String(selected.nativeSymbol || '') +
+            ' | USDC ' +
+            String(selected.usdcBalanceDisplay || '--') +
+            ' | USDT ' +
+            String(selected.usdtBalanceDisplay || '--') +
+            '\n';
+        }
+
         function appendTerminal(chunk) {
-          state.terminal += chunk;
+          const text = String(chunk || '');
+          if (!text) return;
+          state.terminal += text.endsWith('\n') ? text : text + '\n';
           syncTerminalOutput();
           const container = document.getElementById('terminalOutput');
           if (container) {
@@ -633,10 +686,32 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
         }
 
         function appendTerminalNormalized(chunk) {
-          const runSerial = Math.max(1, Number(state.autoExecuteRunSerial || 1));
-          const normalized = String(chunk).replace(/\$ cycle (\d+)/g, function (_match, cycle) {
-            return '$ round ' + String(runSerial) + ' / cycle ' + String(cycle);
-          });
+          const normalized = String(chunk)
+            .split('\n')
+            .filter(function (line) {
+              const value = String(line || '').trim();
+              if (!value) return false;
+              if (/^\$\s*正在连接\s+.+节点服务器/i.test(value)) return false;
+              if (/^\$\s*执行市场:/i.test(value)) return false;
+              if (/^\$\s*已连接节点服务器/i.test(value)) return false;
+              if (/^\$\s*预检通过:/i.test(value)) return false;
+              if (/^\$\s*真实执行模式:/i.test(value)) return false;
+              if (/^\$\s*执行合约:/i.test(value)) return false;
+              if (/^\$\s*正在扫描清算机会/i.test(value)) return false;
+              if (/^\$\s*清算监控已启动/i.test(value)) return false;
+              if (/^\$\s*切换市场/i.test(value)) return false;
+              if (/^\$\s*加载储备元数据/i.test(value)) return false;
+              if (/^\$\s*储备元数据/i.test(value)) return false;
+              if (/^\$?\s*round\s+\d+/i.test(value)) return false;
+              if (/^\$?\s*cycle\s+\d+/i.test(value)) return false;
+              if (/^Scanning pool events:/i.test(value)) return false;
+              if (/^Found\s+\d+\s+new candidate users/i.test(value)) return false;
+              if (/^Reading user account data:/i.test(value)) return false;
+              if (/^Cycle\s+\d+\s+completed/i.test(value)) return false;
+              return true;
+            })
+            .join('\n');
+          if (!normalized) return;
           appendTerminal(normalized);
         }
 
@@ -663,6 +738,10 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
               collateralSymbol: row.collateralSymbol || '--',
               grossProfitDisplay: row.grossProfitDisplay || '--',
               roughNetProfitDisplay: row.roughNetProfitDisplay || '--',
+              repayAmountDisplay: row.repayAmountDisplay || undefined,
+              seizeAmountDisplay: row.seizeAmountDisplay || undefined,
+              exitPathDisplay: row.exitPathDisplay || undefined,
+              simulationReason: row.simulationReason || undefined,
               selectionScoreDisplay: row.selectionScoreDisplay || '--',
               selectionMethod: row.selectionMethod || '--',
               source: row.source || 'scan'
@@ -672,61 +751,30 @@ export const DASHBOARD_CONSOLE_LOGIC = String.raw`
           state.consoleLiveTargets = Array.from(map.values()).sort(compareTargetsByExecutionPriority);
         }
 
-        function publicFeedQueueStatusText() {
-          const queueStatus = state.data.liquidationQueue || null;
-          const queuePayload = queueStatus && queueStatus.queue ? queueStatus.queue : null;
-          if (queueStatus) {
-            if (queueStatus.eligible === false) {
-              return state.language === 'zh'
-                ? '队列已退出: ' + String(queueStatus.reason || '--')
-                : 'Queue excluded: ' + String(queueStatus.reason || '--');
-            }
-            const position = queuePayload && (queuePayload.position || queuePayload.queuePosition || queuePayload.currentPosition || '');
-            const size = queuePayload && (queuePayload.size || queuePayload.queueSize || queuePayload.total || '');
-            if (position && size) {
-              return state.language === 'zh'
-                ? '执行队列 ' + String(position) + ' / ' + String(size)
-                : 'Execution queue ' + String(position) + ' / ' + String(size);
-            }
-            if (queuePayload && queuePayload.status) {
-              return state.language === 'zh'
-                ? '执行队列: ' + String(queuePayload.status)
-                : 'Execution queue: ' + String(queuePayload.status);
-            }
-          }
-          const payload = state.data.publicLiquidationFeed || null;
-          const queue = payload && payload.queue ? payload.queue : null;
-          if (!payload) {
-            return state.language === 'zh' ? '公共池未加载' : 'Public pool not loaded';
-          }
-          if (payload.configured === false) {
-            return state.language === 'zh' ? '公共池未配置' : 'Public pool unconfigured';
-          }
-          if (payload.ok === false) {
-            return state.language === 'zh' ? '公共池连接异常' : 'Public pool error';
-          }
-          if (!queue || queue.enabled === false) {
-            return state.language === 'zh' ? '公共队列未启用' : 'Public queue disabled';
-          }
-          const position = queue.position || queue.queuePosition || queue.currentPosition || '';
-          const size = queue.size || queue.queueSize || queue.total || '';
-          if (position && size) {
+        function consoleSnapshotMetaText(displayedTargets, sourceVisibleTargets) {
+          const count = Array.isArray(displayedTargets) ? displayedTargets.length : 0;
+          const sourceCount = Array.isArray(sourceVisibleTargets) ? sourceVisibleTargets.length : count;
+          const bscScan = state.data && state.data.bscTailScan ? state.data.bscTailScan : null;
+          if (bscScan && bscScan.toBlock) {
             return state.language === 'zh'
-              ? '公共队列 ' + String(position) + ' / ' + String(size)
-              : 'Public queue ' + String(position) + ' / ' + String(size);
+              ? '当前市场 · ' + String(count || sourceCount) + ' 条'
+              : 'Current market · ' + String(count || sourceCount) + ' rows';
           }
-          return state.language === 'zh' ? '公共池已连接' : 'Public pool connected';
+          const feed = state.data && state.data.publicLiquidationFeed ? state.data.publicLiquidationFeed : null;
+          if (feed && feed.ok === false) {
+            return state.language === 'zh' ? '暂未更新' : 'Not updated';
+          }
+          return state.language === 'zh'
+            ? selectedChainLabel() + ' · ' + String(count || sourceCount) + ' 条'
+            : selectedChainLabel() + ' · ' + String(count || sourceCount) + ' rows';
         }
 
 ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
 
         function renderConsole() {
           const wallets = state.data.wallet && state.data.wallet.wallets ? state.data.wallet.wallets : [];
-          const selectedWallet = wallets.find(function (item) { return item.chain === state.form.chain; }) || {};
-          const historySummary = state.data.history && state.data.history.summary ? state.data.history.summary : {};
           const targets = deriveTargets();
-          const consoleResult = state.hasConsoleRun ? state.lastResult : null;
-          const scanStarted = state.hasConsoleRun || state.running || state.consoleLiveTargets.length > 0;
+          const scanStarted = state.hasConsoleRun || state.running || state.consoleLiveTargets.length > 0 || !!state.data.bscTailScan;
           const sourceVisibleTargets = scanStarted
             ? targets.filter(matchesConsoleSourceFilter)
             : [];
@@ -745,7 +793,7 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                   liquidatable: !!currentSelection.liquidatable,
                   state: currentSelection.liquidatable
                     ? (state.language === 'zh' ? '可清算' : 'Liquidatable')
-                    : (state.language === 'zh' ? '扫描中' : 'Scanning'),
+                    : (state.language === 'zh' ? '等待机会' : 'Waiting'),
                   debtSymbol: currentSelection.debtSymbol || '--',
                   collateralSymbol: currentSelection.collateralSymbol || '--',
                   grossProfitDisplay: currentSelection.grossProfitDisplay || '--',
@@ -764,107 +812,18 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
               ? [fallbackSelectionTarget]
               : [];
           const displayedTargets = visibleTargets.length ? visibleTargets : fallbackVisibleTargets;
-          const watchedBalances = Array.isArray(selectedWallet.watchedBalances)
-            ? selectedWallet.watchedBalances
-            : [];
-          const selectedUsdtBalance = watchedBalances.find(function (item) {
-            return item && String(item.symbol || '').toUpperCase() === 'USDT';
-          }) || null;
-          const usdtBalanceValue =
-            selectedUsdtBalance && selectedUsdtBalance.balanceDisplay
-              ? String(selectedUsdtBalance.balanceDisplay) + ' USDT'
-              : (
-                  selectedWallet && selectedWallet.usdtBalanceDisplay
-                    ? String(selectedWallet.usdtBalanceDisplay) + ' USDT'
-                    : '--'
-                );
-          const liveLiquidatableCount = targets.filter(function (target) { return target.liquidatable; }).length;
-          const sourceLiquidatableCount = sourceVisibleTargets.filter(function (target) { return target.liquidatable; }).length;
-          const visibleLiquidatableCount = visibleTargets.filter(function (target) { return target.liquidatable; }).length;
-          const liquidatableCount =
-            scanStarted
-              ? ((state.form.liquidationOnly || state.consoleFilter === 'liquidatable')
-                  ? visibleLiquidatableCount
-                  : ((state.running || state.consoleLiveTargets.length > 0)
-                      ? (state.consoleSourceFilter === 'all' ? liveLiquidatableCount : sourceLiquidatableCount)
-                      : (typeof historySummary.liquidatableCount === 'number'
-                          ? (state.consoleSourceFilter === 'all' ? historySummary.liquidatableCount : sourceLiquidatableCount)
-                          : (state.consoleSourceFilter === 'all' ? liveLiquidatableCount : sourceLiquidatableCount))))
-              : 0;
-          const filteredTargets = displayedTargets.slice();
           const morphoOnlyVisible = sourceVisibleTargets.length > 0 && sourceVisibleTargets.every(function (target) {
             return isMorphoBlueTarget(target);
           });
-          const bestTarget = filteredTargets.find(function (target) {
-            return !!target && !!target.roughNetProfitDisplay && target.roughNetProfitDisplay !== '--';
-          }) || null;
-          const priorityTarget = filteredTargets[0] || null;
-          const latestResultUser =
-            historySummary.latestUser ||
-            (consoleResult && consoleResult.parsed && consoleResult.parsed.selectedUser) ||
-            '--';
-          const latestResultPair =
-            historySummary.latestPair ||
-            (consoleResult &&
-            consoleResult.parsed &&
-            consoleResult.parsed.debtSymbol &&
-            consoleResult.parsed.collateralSymbol
-              ? String(consoleResult.parsed.debtSymbol) + ' <- ' + String(consoleResult.parsed.collateralSymbol)
-              : '--');
           renderWalletAssetsTable();
-          text('consoleSummaryBestLabel', morphoOnlyVisible
-            ? (state.language === 'zh' ? '最大风险借款' : 'Largest Borrow At Risk')
-            : (state.language === 'zh' ? '最佳粗净利' : 'Best Rough Net'));
-          text('consoleSummaryRealizedLabel', state.language === 'zh' ? '当前链 USDT 余额' : 'Current-chain USDT');
-          text('consoleSummaryLiquidatableLabel', state.language === 'zh' ? '可清算数量' : 'Liquidatable');
-          text('consoleSummaryBestValue',
-            morphoOnlyVisible
-              ? (priorityTarget && priorityTarget.selectionScoreDisplay ? String(priorityTarget.selectionScoreDisplay) : '--')
-              : (bestTarget && bestTarget.roughNetProfitDisplay ? String(bestTarget.roughNetProfitDisplay) : '--')
-          );
+          text('consoleSnapshotTitle', state.language === 'zh' ? '策略机会' : 'Strategy Opportunities');
           text(
-            'consoleSummaryBestMeta',
-            morphoOnlyVisible
-              ? (priorityTarget
-                  ? String(priorityTarget.marketLabel || '--') +
-                    ' / ' +
-                    String(priorityTarget.user || '--')
-                  : '--')
-              : (bestTarget
-                  ? String(bestTarget.user || '--') +
-                    ' / ' +
-                    String(bestTarget.debtSymbol || '--') +
-                    ' <- ' +
-                    String(bestTarget.collateralSymbol || '--')
-                  : '--')
+            'consoleSnapshotCopy',
+            state.language === 'zh'
+              ? '按当前执行市场筛选出的候选机会，重点关注高风险、可清算和可执行目标。'
+              : 'Candidates for the selected execution market, focused on risky, liquidatable, and actionable targets.'
           );
-          if (!morphoOnlyVisible && !bestTarget) {
-            text('consoleSummaryBestMeta', publicFeedQueueStatusText());
-          }
-          text('consoleSummaryRealizedValue', usdtBalanceValue);
-          text(
-            'consoleSummaryRealizedMeta',
-            selectedWallet && selectedWallet.chainName
-              ? String(selectedWallet.chainName) +
-                ' / ' +
-                (
-                  selectedWallet.address
-                    ? shortAddress(String(selectedWallet.address))
-                    : t('walletUnavailable')
-                )
-              : '--'
-          );
-          text('consoleSummaryLiquidatableValue', String(liquidatableCount));
-          text(
-            'consoleSummaryLiquidatableMeta',
-            scanStarted
-              ? (
-                  state.language === 'zh'
-                    ? '总目标 ' + String(state.consoleSourceFilter === 'all' ? targets.length : sourceVisibleTargets.length) + ' / 当前链 ' + String(state.form.chain || '').toUpperCase()
-                    : 'Total ' + String(state.consoleSourceFilter === 'all' ? targets.length : sourceVisibleTargets.length) + ' / ' + String(state.form.chain || '').toUpperCase()
-                )
-              : '--'
-          );
+          text('consoleSnapshotMeta', consoleSnapshotMetaText(displayedTargets, sourceVisibleTargets));
           const startButton = document.getElementById('actionSelfFunded');
           const startIcon = document.getElementById('actionSelfFundedIcon');
           const startLabel = document.getElementById('actionSelfFundedLabel');
@@ -883,8 +842,8 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
           if (startIcon) startIcon.setAttribute('src', isRunning ? '/img/run.svg' : '/img/readyStart.svg');
           if (pauseIcon) pauseIcon.setAttribute('src', '/img/stop.svg');
           if (startLabel) startLabel.textContent = isPaused
-            ? (state.language === 'zh' ? '继续清算器' : 'Resume Liquidator')
-            : (state.language === 'zh' ? '启动清算器' : 'Start Liquidator');
+            ? (state.language === 'zh' ? '继续' : 'Resume')
+            : (state.language === 'zh' ? '启动' : 'Start');
           if (pauseLabel) pauseLabel.textContent = isPaused ? '已暂停' : '暂停';
           if (morphoLabel) morphoLabel.textContent = state.morphoReadOnlyRunning
             ? (state.language === 'zh' ? 'Morpho 分析中' : 'Morpho running')
@@ -896,7 +855,9 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
           text('consoleFilterSignalLabel', state.language === 'zh' ? '信号' : 'Signal');
           text('consoleFilterSourceLabel', t('consoleSourceLabel'));
           text('consoleSourceAll', t('consoleSourceAll'));
+          text('consoleSourceScan', t('consoleSourceScan'));
           text('consoleSourceMorpho', t('consoleSourceMorpho'));
+          text('consoleSourceBscTail', t('consoleSourceBscTail'));
           text('consoleMorphoSortLabel', t('morphoSortLabel'));
           text('consoleMorphoSortLiq', t('morphoSortLiq'));
           text('consoleMorphoSortNear', t('morphoSortNear'));
@@ -916,7 +877,9 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
           });
           [
             ['consoleSourceAll', 'all'],
-            ['consoleSourceMorpho', 'morpho-blue']
+            ['consoleSourceScan', 'scan'],
+            ['consoleSourceMorpho', 'morpho-blue'],
+            ['consoleSourceBscTail', 'bsc-tail']
           ].forEach(function (entry) {
             const node = document.getElementById(entry[0]);
             if (!node) return;
@@ -970,15 +933,6 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
               });
             });
           });
-          const renderedLiquidatableCount = document.querySelectorAll('#consoleResultsRows tr.is-liquidatable').length;
-          text(
-            'consoleSummaryLiquidatableValue',
-            String(
-              (state.form.liquidationOnly || state.consoleFilter === 'liquidatable')
-                ? renderedLiquidatableCount
-                : liquidatableCount
-            )
-          );
           syncTerminalOutput();
           syncMachineDisplay();
 
@@ -1040,6 +994,25 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
               renderConsole();
               return;
             }
+            if (
+              queueStatus &&
+              queueStatus.queue &&
+              queueStatus.queue.enabled !== false &&
+              queueStatus.queue.action &&
+              queueStatus.queue.action !== 'execute'
+            ) {
+              const position = queueStatus.queue.position || queueStatus.queue.queuePosition || queueStatus.queue.currentPosition || '';
+              const size = queueStatus.queue.size || queueStatus.queue.queueSize || queueStatus.queue.total || '';
+              state.terminal = '$ 等待执行队列';
+              if (position && size) {
+                state.terminal += ': ' + String(position) + ' / ' + String(size);
+              }
+              state.terminal += '\n';
+              state.runStateMode = 'idle';
+              state.running = false;
+              renderConsole();
+              return;
+            }
           }
           if (!preserveSession) {
             state.autoExecuteRunSerial = 0;
@@ -1058,7 +1031,7 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
           state.consoleStreamMode = true;
           state.runStateMode = 'running';
           if (isResuming) {
-            appendTerminal('\n$ 从区块 ' + String(activeResumeCursor.resumeFromBlock) + ' 继续清算器\n');
+            appendTerminal('\n$ 继续连接节点服务器...\n');
           } else if (preserveSession) {
             appendTerminal('\n$ 继续上一轮监控...\n');
           } else {
@@ -1067,7 +1040,11 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
             state.selectedTarget = null;
             state.lastResult = null;
             state.autoExecuteResumeCursor = null;
-            state.terminal = '$ 正在连接节点服务器...\n';
+            state.consoleConnectionAnnounced = false;
+            state.consoleQueueAnnounced = false;
+            state.terminal =
+              '$ 正在连接节点服务器...\n' +
+              '$ 正在连接 ' + selectedChainLabel() + ' 节点服务器...\n';
             state.consoleLiveTargets = [];
             appendTerminal('');
           }
@@ -1075,7 +1052,7 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
 
           const query = new URLSearchParams();
           query.set('chain', state.form.chain);
-          query.set('market', state.form.market || 'aave-v3-ethereum');
+          query.set('market', state.form.market || 'aave-v3-bnb');
           if (state.form.lookbackBlocks) query.set('lookbackBlocks', String(state.form.lookbackBlocks));
           if (state.form.limit) query.set('limit', String(state.form.limit));
           if (state.form.minNetProfit) query.set('minNetProfit', String(state.form.minNetProfit));
@@ -1118,18 +1095,28 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                 if (!line.trim()) return;
                 const event = JSON.parse(line);
                 if (event.type === 'meta') {
-                  appendTerminal(
-                    '$ 清算市场 ' +
-                    String(event.marketLabel || event.market || event.chain || '--') +
-                    ' / round ' +
-                    String(state.autoExecuteRunSerial) +
-                    '\n'
-                  );
+                  if (!state.consoleConnectionAnnounced) {
+                    state.consoleConnectionAnnounced = true;
+                    appendTerminal(
+                      '$ 执行市场: ' +
+                      String(event.marketLabel || event.market || selectedExecutionMarketLabel()) +
+                      '\n' +
+                      '$ 已连接节点服务器\n'
+                    );
+                  }
                   renderConsole();
                 } else if (event.type === 'wallet') {
                   if (event.data) state.data.wallet = event.data;
                   if (event.rpcUsage) state.data.rpcUsage = event.rpcUsage;
-                  appendTerminal(walletStartupLines(event.data));
+                  if (!state.consoleQueueAnnounced) {
+                    state.consoleQueueAnnounced = true;
+                    appendTerminal(
+                      '$ 执行模式: 开启：self-funded\n' +
+                      walletStartupLines(event.data) +
+                      '$ 进入排队系统成功...\n' +
+                      '$ 清算监控已启动，等待清算中...\n'
+                    );
+                  }
                   renderConsole();
                 } else if (event.type === 'stdout' || event.type === 'stderr') {
                   appendTerminalNormalized(event.data);
@@ -1142,25 +1129,19 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
                     renderConsole();
                     return;
                   }
-                  appendTerminal(
-                    '$ 首选 #' +
-                      String(event.data && typeof event.data.rank === 'number' ? event.data.rank : 1) +
-                      ' [' +
-                      String(event.data && event.data.marketLabel ? event.data.marketLabel : '--') +
-                      '] ' +
-                      String(event.data && event.data.user ? event.data.user : '--') +
-                      ' | ' +
-                      String(event.data && event.data.debtSymbol ? event.data.debtSymbol : '--') +
-                      ' <- ' +
-                      String(event.data && event.data.collateralSymbol ? event.data.collateralSymbol : '--') +
-                      ' | ' +
-                      String(event.data && event.data.selectionMethod ? event.data.selectionMethod : '--') +
-                      ' | score ' +
-                      String(event.data && event.data.selectionScoreDisplay ? event.data.selectionScoreDisplay : '--') +
-                      ' | rough net ' +
-                      String(event.data && event.data.roughNetProfitDisplay ? event.data.roughNetProfitDisplay : '--') +
-                      '\n'
-                  );
+                  if (event.data && event.data.liquidatable) {
+                    appendTerminal(
+                      '$ 发现可清算机会: ' +
+                        String(event.data.user || '--') +
+                        ' | ' +
+                        String(event.data.debtSymbol || '--') +
+                        ' <- ' +
+                        String(event.data.collateralSymbol || '--') +
+                        ' | 粗净利 ' +
+                        String(event.data.roughNetProfitDisplay || '--') +
+                        '\n'
+                    );
+                  }
                   renderConsole();
                 } else if (event.type === 'execution') {
                   state.lastResult = event.data;
@@ -1288,7 +1269,6 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
             }
           }
           syncFormFromInputs();
-          state.consoleSourceFilter = 'morpho-blue';
           state.morphoReadOnlyRunning = true;
           state.hasConsoleRun = true;
           state.consoleStreamMode = false;
@@ -1381,7 +1361,9 @@ ${DASHBOARD_CONSOLE_RESULTS_LOGIC}
           });
           [
             ['consoleSourceAll', 'all'],
-            ['consoleSourceMorpho', 'morpho-blue']
+            ['consoleSourceScan', 'scan'],
+            ['consoleSourceMorpho', 'morpho-blue'],
+            ['consoleSourceBscTail', 'bsc-tail']
           ].forEach(function (entry) {
             const node = document.getElementById(entry[0]);
             if (!node) return;

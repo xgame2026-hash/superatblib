@@ -66,6 +66,7 @@ function createDeps(): DashboardApiHandlerDeps {
     fetchQuickNodeUsage: async () => ({ ok: true, type: "quicknode" }),
     fetchUserRpcUsage: async () => ({ ok: true, type: "user-rpc" }),
     fetchPublicLiquidationFeed: async () => ({ ok: true, type: "public-feed", targets: [] }),
+    scanBscTailProtocol: async () => ({ ok: true, type: "bsc-tail", targets: [] }),
     fetchLiquidationQueueStatus: async () => ({ ok: true, type: "liquidation-queue", eligible: true }),
     reportLiquidationQueueEvent: async () => ({ ok: true, type: "liquidation-queue-event" }),
     fetchTxGraph: async () => ({ ok: true, type: "tx-graph" }),
@@ -134,6 +135,31 @@ const lockedApiHandler = createDashboardApiHandler({
 }
 
 {
+  let calls = 0;
+  const cachedHandler = createDashboardApiHandler({
+    ...createDeps(),
+    fetchEigenphiFlashloanOverview: async () => {
+      calls += 1;
+      return { ok: true, type: "flashloan-overview", calls };
+    },
+  });
+  const firstReq = createMockRequest("GET");
+  const firstRes = createMockResponse();
+  await cachedHandler(firstReq, firstRes, new URL("http://localhost/api/market-data/flashloan-overview?chain=ethereum&period=7"));
+  assert.equal(firstRes.statusCode, 200);
+  const firstPayload = JSON.parse(firstRes.body ?? "{}") as Record<string, unknown>;
+  assert.equal(firstPayload.calls, 1);
+  const secondReq = createMockRequest("GET");
+  const secondRes = createMockResponse();
+  await cachedHandler(secondReq, secondRes, new URL("http://localhost/api/market-data/flashloan-overview?chain=ethereum&period=7"));
+  assert.equal(secondRes.statusCode, 200);
+  const secondPayload = JSON.parse(secondRes.body ?? "{}") as Record<string, unknown>;
+  assert.equal(secondPayload.calls, 1);
+  assert.equal(((secondPayload.cache as Record<string, unknown>).hit), true);
+  assert.equal(calls, 1);
+}
+
+{
   const req = createMockRequest("GET");
   const res = createMockResponse();
   await lockedApiHandler(req, res, new URL("http://localhost/api/market-data/flashloan-overview?chain=ethereum&period=7"));
@@ -150,6 +176,31 @@ const lockedApiHandler = createDashboardApiHandler({
   assert.equal(res.statusCode, 200);
   const payload = JSON.parse(res.body ?? "{}") as Record<string, unknown>;
   assert.equal(payload.type, "index-status");
+}
+
+{
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: true, rows: [{ title: "news" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  try {
+    const req = createMockRequest("GET");
+    const res = createMockResponse();
+    await apiHandler(req, res, new URL("http://localhost/api/overview-snapshot?period=7&flashloanPeriod=7"));
+    assert.equal(res.statusCode, 200);
+    const payload = JSON.parse(res.body ?? "{}") as Record<string, unknown>;
+    assert.equal(payload.ok, true);
+    assert.equal(payload.source, "overview-snapshot");
+    const data = payload.data as Record<string, Record<string, unknown>>;
+    assert.equal(data.eigenphiOverview.type, "overview");
+    assert.equal(data.eigenphiFlashloanOverview.type, "flashloan-overview");
+    assert.equal(data.morphoBlueMarkets.type, "morpho");
+    assert.deepEqual(data.strategyNews.rows, [{ title: "news" }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 {
