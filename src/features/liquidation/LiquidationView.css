@@ -1,0 +1,404 @@
+.liquidation-page {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-columns: minmax(430px, 0.4fr) minmax(620px, 0.6fr);
+  gap: 16px;
+}
+
+.liquidation-left {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 16px;
+}
+
+.terminal-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.market-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.96fr);
+  gap: 14px 16px;
+}
+
+.market-control label {
+  display: grid;
+  gap: 8px;
+}
+
+.market-control label span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.market-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.market-option strong {
+  overflow: hidden;
+  color: #eee8ff;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-option em {
+  flex: 0 0 auto;
+  border: 1px solid rgba(174, 126, 255, 0.18);
+  border-radius: 999px;
+  color: #a99fc0;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.market-option em.is-ready {
+  border-color: rgba(99, 240, 144, 0.45);
+  color: #63f090;
+}
+
+.market-option em.is-warn {
+  border-color: rgba(242, 193, 108, 0.45);
+  color: #f2c16c;
+}
+
+.market-option em.is-locked {
+  color: #897f9f;
+}
+
+.market-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-self: end;
+}
+
+.opportunity-snapshot span {
+  color: #897f9f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.opportunity-snapshot strong {
+  color: #dcd3f5;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.opportunity-snapshot strong.is-ready {
+  color: #63f090;
+}
+
+.opportunity-snapshot strong.is-warn {
+  color: #f2c16c;
+}
+
+.run-button,
+.pause-button {
+  display: inline-flex;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid rgba(174, 126, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #dcd3f5;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.run-button {
+  border-color: rgba(139, 92, 246, 0.56);
+  background: rgba(139, 92, 246, 0.18);
+}
+
+.run-button .el-icon {
+  color: #63f090;
+  font-size: 22px;
+}
+
+.run-button.is-running {
+  border-color: rgba(99, 240, 144, 0.62);
+  background: rgba(22, 163, 74, 0.14);
+  color: #78f7a5;
+}
+
+.run-state-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+  animation: run-state-spin 1.05s linear infinite;
+}
+
+@keyframes run-state-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pause-button .el-icon {
+  color: #d94d49;
+  font-size: 22px;
+}
+
+.market-monitor-field {
+  grid-column: 1 / -1;
+}
+
+.terminal-panel {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: 40px minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+}
+
+.terminal-title {
+  height: 40px;
+  border-bottom: 1px solid rgba(174, 126, 255, 0.12);
+  background: rgba(255, 255, 255, 0.055);
+  color: white;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 0 14px;
+}
+
+.terminal-title .el-icon {
+  color: #62dec5;
+}
+
+.terminal-title-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-title-label img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+}
+
+.terminal-panel pre {
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  background: rgba(0, 3, 5, 0.72);
+  color: #dcd3f5;
+  font: 13px/1.85 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 16px;
+  white-space: pre-wrap;
+}
+
+.opportunities-panel {
+  display: grid;
+  height: calc(100vh - 206px);
+  min-height: 0;
+  grid-template-rows: auto 2px minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+  background: #05040a;
+}
+
+.snapshot-refresh-progress {
+  height: 2px;
+  overflow: hidden;
+  background: rgba(174, 126, 255, 0.12);
+}
+
+.snapshot-refresh-progress span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #57ffa1, #8b5cf6);
+  box-shadow: 0 0 12px rgba(87, 255, 161, 0.42);
+  transition: width 0.12s linear;
+}
+
+.opportunity-snapshot {
+  display: flex;
+  align-items: center;
+  background: var(--surface);
+  padding: 12px 18px;
+}
+
+.opportunity-snapshot div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.opportunity-table-shell {
+  min-height: 0;
+  overflow: auto;
+  background: #05040a;
+}
+
+.opportunity-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  border-radius: 0;
+  background: #05040a;
+  color: #dcd3f5;
+  font-size: 12px;
+}
+
+.opportunity-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.opportunity-table th {
+  background: #231b40;
+  color: #a99fc0;
+  font-weight: 800;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.opportunity-table td {
+  border-bottom: 1px solid rgba(174, 126, 255, 0.1);
+  padding: 11px 12px;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.opportunity-table tbody,
+.opportunity-table tbody tr,
+.opportunity-table tbody td {
+  background: #05040a;
+}
+
+.opportunity-table tbody tr:hover td {
+  background: rgba(139, 92, 246, 0.13);
+}
+
+.opportunity-table td[colspan] {
+  height: 42px;
+  color: white;
+}
+
+.account-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-short {
+  min-width: 0;
+}
+
+.copy-account-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #bfb4dc;
+  cursor: pointer;
+  opacity: 0.74;
+  transition: color 0.16s ease, opacity 0.16s ease, transform 0.16s ease;
+}
+
+.copy-account-button:hover {
+  color: #57ffa1;
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.copy-account-button .el-icon {
+  font-size: 15px;
+}
+
+.hf-cell {
+  font-weight: 900;
+}
+
+.hf-cell.is-safe {
+  color: #63f090;
+}
+
+.hf-cell.is-warn {
+  color: #f2c16c;
+}
+
+.hf-cell.is-danger {
+  color: #ff5b5b;
+}
+
+.hf-cell.is-neutral {
+  color: #dcd3f5;
+}
+
+.status-pill {
+  display: inline-flex;
+  min-width: 54px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(174, 126, 255, 0.18);
+  border-radius: 999px;
+  color: #dcd3f5;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.status-pill.is-review {
+  border-color: rgba(245, 181, 83, 0.28);
+  color: #f2c16c;
+}
+
+.status-pill.is-safe {
+  border-color: rgba(99, 240, 144, 0.34);
+  color: #63f090;
+}
+
+.status-pill.is-warn {
+  border-color: rgba(245, 181, 83, 0.42);
+  color: #f2c16c;
+}
+
+.status-pill.is-danger {
+  border-color: rgba(255, 91, 91, 0.46);
+  color: #ff6b6b;
+}
+
+.status-pill.is-watch {
+  color: #bfb5d8;
+}
+
+.empty-cell {
+  color: #a99fc0 !important;
+}
+
+@media (max-width: 1180px) {
+  .liquidation-page {
+    grid-template-columns: 1fr;
+  }
+
+  .opportunity-snapshot {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

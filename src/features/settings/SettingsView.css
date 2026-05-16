@@ -1,0 +1,172 @@
+.settings-page {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.settings-nav {
+  align-self: start;
+}
+
+.settings-nav-button {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #dcd3f5;
+  cursor: pointer;
+  margin-top: 8px;
+  padding: 12px;
+  text-align: left;
+  transition: 0.18s ease;
+}
+
+.settings-nav-button span {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.settings-nav-button small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-nav-button:hover,
+.settings-nav-button.active {
+  border-color: rgba(168, 85, 247, 0.42);
+  background: rgba(139, 92, 246, 0.16);
+}
+
+.settings-panel {
+  min-height: 520px;
+}
+
+.settings-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-panel-actions :deep(.el-button) {
+  --el-button-bg-color: rgba(35, 24, 61, 0.86);
+  --el-button-border-color: rgba(139, 92, 246, 0.56);
+  --el-button-text-color: #ddd5f4;
+  --el-button-hover-bg-color: rgba(47, 31, 82, 0.9);
+  --el-button-hover-border-color: rgba(168, 85, 247, 0.62);
+  --el-button-hover-text-color: #f4efff;
+  --el-button-active-bg-color: rgba(55, 35, 96, 0.95);
+  --el-button-active-border-color: rgba(168, 85, 247, 0.68);
+  min-width: 82px;
+  height: 34px;
+  border-radius: 8px;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 7px;
+  padding-inline: 12px;
+}
+
+.settings-panel-actions :deep(.el-button--primary) {
+  --el-button-bg-color: rgba(86, 55, 148, 0.92);
+  --el-button-border-color: rgba(168, 85, 247, 0.62);
+  --el-button-hover-bg-color: rgba(98, 63, 166, 0.96);
+  --el-button-hover-border-color: rgba(180, 112, 255, 0.7);
+  --el-button-active-bg-color: rgba(76, 48, 132, 0.96);
+  box-shadow: 0 10px 24px rgba(43, 24, 84, 0.26);
+}
+
+.logout-settings-button {
+  --el-button-bg-color: rgba(70, 28, 48, 0.78);
+  --el-button-border-color: rgba(248, 113, 113, 0.54);
+  --el-button-text-color: #ffd6df;
+  --el-button-hover-bg-color: rgba(90, 35, 59, 0.9);
+  --el-button-hover-border-color: rgba(248, 113, 113, 0.68);
+  --el-button-hover-text-color: #fff0f4;
+  --el-button-active-bg-color: rgba(78, 29, 52, 0.96);
+  --el-button-active-border-color: rgba(248, 113, 113, 0.74);
+}
+
+.settings-action-icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  margin-right: 8px;
+}
+
+.save-settings-button :deep(span) {
+  gap: 0;
+}
+
+.settings-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.settings-field {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.settings-field.is-full {
+  grid-column: 1 / -1;
+}
+
+.settings-field > span,
+.exchange-title {
+  color: #ddd5f4;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.settings-chain-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-chain-label img {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.exchange-settings {
+  display: grid;
+  gap: 18px;
+}
+
+.exchange-block {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(174, 126, 255, 0.12);
+  padding-top: 16px;
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid rgba(174, 126, 255, 0.12);
+  margin-top: 18px;
+  padding-top: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 980px) {
+  .settings-page,
+  .settings-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-field.is-full {
+    grid-column: auto;
+  }
+}

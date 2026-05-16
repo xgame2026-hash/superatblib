@@ -1,0 +1,335 @@
+.txgraph-page {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+}
+
+.txgraph-controls-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.txgraph-query-row {
+  display: grid;
+  grid-template-columns: auto minmax(360px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.txgraph-chain-icons {
+  display: inline-flex;
+  height: 48px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(174, 126, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 5px;
+}
+
+.txgraph-chain-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.txgraph-chain-icon img {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+}
+
+.txgraph-chain-icon:hover,
+.txgraph-chain-icon.active {
+  border-color: rgba(168, 85, 247, 0.58);
+  background: rgba(139, 92, 246, 0.2);
+}
+
+.txgraph-search-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #dcd3f5;
+  cursor: pointer;
+  padding: 0;
+}
+
+.txgraph-search-icon img {
+  display: block;
+  width: 17px;
+  height: 17px;
+  opacity: 0.92;
+}
+
+.txgraph-search-icon:hover:not(:disabled) {
+  border-color: rgba(168, 85, 247, 0.42);
+  background: rgba(139, 92, 246, 0.18);
+  color: white;
+}
+
+.txgraph-search-icon:disabled {
+  color: rgba(220, 211, 245, 0.36);
+  cursor: not-allowed;
+}
+
+.txgraph-filter-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.txgraph-filter-button {
+  display: inline-flex;
+  min-width: 92px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(174, 126, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #dcd3f5;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  transition: 0.18s ease;
+}
+
+.txgraph-filter-state {
+  display: block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  opacity: 0.9;
+}
+
+.txgraph-filter-button:hover,
+.txgraph-filter-button.active {
+  border-color: rgba(174, 126, 255, 0.42);
+  background: rgba(255, 255, 255, 0.065);
+  color: white;
+  box-shadow: 0 0 0 1px rgba(174, 126, 255, 0.12) inset;
+}
+
+.txgraph-filter-button.active .txgraph-filter-state {
+  opacity: 1;
+  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.24));
+}
+
+.txgraph-alert {
+  margin: 0;
+}
+
+.txgraph-grid {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+.txgraph-summary-panel {
+  align-self: start;
+  display: grid;
+  gap: 10px;
+}
+
+.txgraph-summary-panel h3 {
+  margin: 0 0 4px;
+  color: white;
+  font-size: 17px;
+}
+
+.txgraph-summary-item {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(174, 126, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 12px;
+}
+
+.txgraph-summary-item span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.txgraph-summary-item strong {
+  min-width: 0;
+  color: white;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.txgraph-canvas-panel {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.032) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.032) 1px, transparent 1px),
+    #2a2f36;
+  background-size: 40px 40px, 40px 40px, 10px 10px, 10px 10px, auto;
+  background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px, center;
+}
+
+.txgraph-canvas {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.txgraph-watermark {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  z-index: 3;
+  width: 86px;
+  height: auto;
+  opacity: 0.16;
+  filter: brightness(0) invert(1);
+  pointer-events: none;
+  user-select: none;
+}
+
+.txgraph-canvas-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  display: inline-flex;
+  gap: 7px;
+}
+
+.txgraph-tool-button {
+  display: flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(174, 126, 255, 0.3);
+  border-radius: 7px;
+  background: rgba(16, 13, 28, 0.72);
+  color: #eeeaff;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+}
+
+.txgraph-tool-button img {
+  display: block;
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+}
+
+.txgraph-tool-zoom img {
+  width: 11px;
+  height: 11px;
+}
+
+.txgraph-canvas-actions button:hover {
+  border-color: rgba(168, 85, 247, 0.62);
+  background: rgba(86, 55, 148, 0.82);
+}
+
+.txgraph-canvas-panel:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  padding: 14px;
+}
+
+.txgraph-canvas-panel:fullscreen .txgraph-canvas {
+  min-height: calc(100vh - 28px);
+}
+
+.txgraph-edges line {
+  stroke: rgba(168, 85, 247, 0.78);
+  stroke-width: 2.2;
+}
+
+.txgraph-edges line.is-transfer {
+  stroke: rgba(65, 240, 170, 0.78);
+}
+
+.txgraph-edges line.is-reference {
+  stroke: rgba(39, 215, 255, 0.45);
+  stroke-dasharray: 6 6;
+}
+
+.txgraph-edge-label {
+  fill: #bdb4d2;
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.txgraph-node circle {
+  stroke: rgba(168, 85, 247, 0.8);
+  stroke-width: 2;
+  fill: rgba(35, 24, 61, 0.98);
+  filter: drop-shadow(0 0 12px rgba(139, 92, 246, 0.3));
+}
+
+.txgraph-node.is-wallet circle {
+  stroke: rgba(39, 215, 255, 0.86);
+}
+
+.txgraph-node.is-token circle {
+  stroke: rgba(65, 240, 170, 0.8);
+}
+
+.txgraph-node.is-system circle {
+  stroke: rgba(255, 255, 255, 0.46);
+}
+
+.txgraph-node text {
+  fill: #f7f3ff;
+  font-size: 12px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+
+.txgraph-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(220, 211, 245, 0.58);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 980px) {
+  .txgraph-query-row,
+  .txgraph-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .txgraph-filter-row {
+    flex-wrap: wrap;
+  }
+}

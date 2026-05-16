@@ -1,0 +1,100 @@
+.wallet-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wallet-panel-header h3 {
+  margin: 0;
+  color: white;
+  font-size: 17px;
+}
+
+.wallet-refresh-button {
+  height: 30px;
+  border: 1px solid rgba(220, 211, 245, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #dcd3f5;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 0 12px;
+}
+
+.wallet-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.wallet-table {
+  width: 100%;
+  margin-top: 14px;
+  overflow: hidden;
+  border-collapse: collapse;
+  border-radius: 7px;
+  color: #dcd3f5;
+  font-size: 12px;
+}
+
+.wallet-table th {
+  background: rgba(255, 255, 255, 0.045);
+  color: #a99fc0;
+  font-weight: 800;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.wallet-table td {
+  border-bottom: 1px solid rgba(174, 126, 255, 0.1);
+  padding: 11px 12px;
+}
+
+.wallet-table img {
+  display: block;
+  width: 19px;
+  height: 19px;
+  border-radius: 999px;
+}
+
+.wallet-skeleton-row td {
+  height: 42px;
+}
+
+.wallet-skeleton {
+  display: block;
+  overflow: hidden;
+  position: relative;
+  border-radius: 999px;
+  background: rgba(220, 211, 245, 0.08);
+}
+
+.wallet-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(220, 211, 245, 0.16), transparent);
+  animation: wallet-skeleton-scan 1.15s ease-in-out infinite;
+}
+
+.wallet-skeleton-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.wallet-skeleton-value {
+  width: min(112px, 72%);
+  height: 13px;
+}
+
+.wallet-skeleton-value.short {
+  width: 54px;
+}
+
+@keyframes wallet-skeleton-scan {
+  100% {
+    transform: translateX(100%);
+  }
+}
