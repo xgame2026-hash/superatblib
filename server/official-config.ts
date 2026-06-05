@@ -28,7 +28,7 @@ const OFFICIAL_ENDPOINTS: OfficialEndpointRule[] = [
     label: "清算快照接口",
     defaultValue: "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
     protocols: ["https:"],
-    hosts: ["api.supermtnode.io", "bsc.rpc.supermtnode.io"],
+    hosts: ["bsc.rpc.supermtnode.io"],
     paths: ["/api/public/liquidations/snapshot"],
     required: true,
   },

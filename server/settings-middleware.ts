@@ -6,6 +6,8 @@ import { bootstrapPrivateMemberWalletOnce, privateMemberWalletBootstrapStatus } 
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const ENV_EXAMPLE_FILE = resolve(process.cwd(), ".env.example");
+const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot";
+const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
 
 type SettingsPayload = {
   env?: unknown;
@@ -102,7 +104,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
   }
 
   if (req.method === "GET") {
-    const envText = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : "";
+    const envText = migrateLegacySnapshotEndpoint(existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : "");
     const exampleText = existsSync(ENV_EXAMPLE_FILE) ? readFileSync(ENV_EXAMPLE_FILE, "utf8") : "";
     json(res, 200, {
       ok: true,
@@ -125,7 +127,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           json(res, 400, { ok: false, error: "Missing env text." });
           return;
         }
-        const normalizedEnv = normalizeEnv(payload.env);
+        const normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(payload.env));
         try {
           assertOfficialConfig("保存配置", parseEnv(normalizedEnv));
         } catch (error) {
@@ -168,6 +170,11 @@ function parseEnv(source: string): Record<string, string> {
     parsed[line.slice(0, separator).trim()] = line.slice(separator + 1);
   }
   return parsed;
+}
+
+function migrateLegacySnapshotEndpoint(envText: string): string {
+  if (!envText.includes(`LIQUIDATION_SNAPSHOT_API_URL=${LEGACY_SNAPSHOT_API_URL}`)) return envText;
+  return envText.replace(`LIQUIDATION_SNAPSHOT_API_URL=${LEGACY_SNAPSHOT_API_URL}`, `LIQUIDATION_SNAPSHOT_API_URL=${DEFAULT_SNAPSHOT_API_URL}`);
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {

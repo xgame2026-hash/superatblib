@@ -8,6 +8,7 @@ const ENV_FILE = resolve(process.cwd(), ".env");
 const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot";
+const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
 const DEFAULT_WSS_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liquidation-queue/status";
 const DEFAULT_BNB_FALLBACK_RPC_URL = "https://blissful-wiser-pool.bsc.quiknode.pro/d1a545871254b13042697bed9cefb1339dc65173/";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -1667,6 +1668,9 @@ function readEnv(): Record<string, string> {
     const separator = line.indexOf("=");
     if (separator <= 0) continue;
     parsed[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
+  }
+  if (parsed.LIQUIDATION_SNAPSHOT_API_URL?.trim() === LEGACY_SNAPSHOT_API_URL) {
+    parsed.LIQUIDATION_SNAPSHOT_API_URL = DEFAULT_SNAPSHOT_API_URL;
   }
   return parsed;
 }
