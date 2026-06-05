@@ -1,0 +1,41 @@
+.market-monitor {
+  display: flex;
+  min-height: 84px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(174, 126, 255, 0.16);
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    rgba(20, 24, 30, 0.82);
+  background-size: 14px 14px;
+  color: #63f090;
+  font-family: "DatDot", Inter, sans-serif;
+  font-size: 16px;
+}
+
+.market-monitor-line {
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:deep(.typed-cursor) {
+  display: inline-block;
+  width: 0.42em;
+  height: 1em;
+  margin-left: 4px;
+  transform: translateY(0.08em);
+  background: #63f090;
+  animation: market-monitor-cursor 1s steps(2, jump-none) infinite;
+}
+
+@keyframes market-monitor-cursor {
+  50% {
+    opacity: 0;
+  }
+}
