@@ -85,7 +85,7 @@ ARBITRUM_RPC_URL=
 ETHEREUM_RPC_URL=
 SUPERMTNODE_APP_TOKEN=
 LIQUIDATION_QUEUE_WSS_TOKEN=
-LIQUIDATION_SNAPSHOT_API_URL=https://api.supermtnode.io/api/public/liquidations/snapshot
+LIQUIDATION_SNAPSHOT_API_URL=https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot
 LIQUIDATION_QUEUE_TX_EVENTS_URL=https://private.superarb.ai/api/liquidation-queue/contract-events/today
 DASHBOARD_PORT=4310
 ```
@@ -271,7 +271,7 @@ ARBITRUM_RPC_URL=
 ETHEREUM_RPC_URL=
 SUPERMTNODE_APP_TOKEN=
 LIQUIDATION_QUEUE_WSS_TOKEN=
-LIQUIDATION_SNAPSHOT_API_URL=https://api.supermtnode.io/api/public/liquidations/snapshot
+LIQUIDATION_SNAPSHOT_API_URL=https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot
 LIQUIDATION_QUEUE_TX_EVENTS_URL=https://private.superarb.ai/api/liquidation-queue/contract-events/today
 DASHBOARD_PORT=4310
 ```
