@@ -94,7 +94,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+
+const props = withDefaults(defineProps<{ active?: boolean }>(), {
+  active: true,
+});
 
 type QueueRow = {
   id: string;
@@ -141,8 +145,13 @@ const AUTH_CODE_KEY = "liq2-auth-code";
 const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
 let latestRefreshTimer = 0;
 let activeQueueTimer = 0;
+let latestLoadedAt = 0;
 const LATEST_REFRESH_INTERVAL_MS = 10_000;
 const ACTIVE_QUEUE_INTERVAL_MS = 5_000;
+const WSS_STALE_MS = 45_000;
+const QUEUE_ROW_RETAIN_MS = 75_000;
+const retainedQueuedWalletRows = new Map<string, { row: QueueRow; lastSeenAt: number }>();
+const retainedQueueRows = new Map<string, { row: QueueRow; lastSeenAt: number }>();
 const queuedWalletRows = computed(() => {
   const sourceRows = queuedWalletSourceRows.value.length > 0 ? queuedWalletSourceRows.value : queueRows.value.filter(isQueuedWalletRow);
   const productionRows = sourceRows.filter(isProductionQueueWallet);
@@ -187,16 +196,17 @@ const activeQueueGlobalIndex = ref(0);
 const queueParticipantCount = ref(0);
 const queueSubscribers = ref(0);
 const queueUpdatedAt = ref("");
-const wssConnected = computed(() => queueTransport.value.toLowerCase() === "wss" && !errorMessage.value);
+const wssConnected = ref(false);
+let lastWssConnectedAt = 0;
+const stableQueueParticipantCount = computed(() => queuedWalletRows.value.length || queueParticipantCount.value);
 const wssConnectionText = computed(() => {
   if (!wssConnected.value) return "未连接";
-  const count = queueParticipantCount.value || queuedWalletRows.value.length;
-  return `${count} 个钱包`;
+  return `${stableQueueParticipantCount.value} 个钱包`;
 });
 const wssStatusTitle = computed(() => {
   if (!wssConnected.value) return "WSS 队列状态未连接";
   const updatedAt = queueUpdatedAt.value ? new Date(queueUpdatedAt.value).toLocaleString() : "--";
-  return `WSS 队列：${queueParticipantCount.value} 个钱包，${queueSubscribers.value} 个 tx2 订阅，更新 ${updatedAt}`;
+  return `WSS 队列：${stableQueueParticipantCount.value} 个钱包，${queueSubscribers.value} 个 tx2 订阅，更新 ${updatedAt}`;
 });
 let totalUsdtPulseTimer = 0;
 let totalTodayPulseTimer = 0;
@@ -227,17 +237,46 @@ watch(walletSearchQuery, () => {
 });
 
 onMounted(() => {
-  void loadLatestLiquidations();
-  latestRefreshTimer = window.setInterval(loadLatestLiquidations, LATEST_REFRESH_INTERVAL_MS);
-  activeQueueTimer = window.setInterval(advanceActiveQueueRow, ACTIVE_QUEUE_INTERVAL_MS);
+  if (props.active) startLatestLiquidationsView();
 });
 
+onActivated(() => {
+  if (props.active) startLatestLiquidationsView();
+});
+
+onDeactivated(() => stopLatestLiquidationsView());
+
+watch(
+  () => props.active,
+  (active) => {
+    if (active) {
+      startLatestLiquidationsView();
+      return;
+    }
+    stopLatestLiquidationsView();
+  },
+);
+
 onBeforeUnmount(() => {
-  if (latestRefreshTimer) window.clearInterval(latestRefreshTimer);
-  if (activeQueueTimer) window.clearInterval(activeQueueTimer);
+  stopLatestLiquidationsView();
   if (totalUsdtPulseTimer) window.clearTimeout(totalUsdtPulseTimer);
   if (totalTodayPulseTimer) window.clearTimeout(totalTodayPulseTimer);
 });
+
+function startLatestLiquidationsView(): void {
+  if (!latestRefreshTimer) latestRefreshTimer = window.setInterval(loadLatestLiquidations, LATEST_REFRESH_INTERVAL_MS);
+  if (!activeQueueTimer) activeQueueTimer = window.setInterval(advanceActiveQueueRow, ACTIVE_QUEUE_INTERVAL_MS);
+  if (!latestLoadedAt) {
+    void loadLatestLiquidations();
+  }
+}
+
+function stopLatestLiquidationsView(): void {
+  if (latestRefreshTimer) window.clearInterval(latestRefreshTimer);
+  if (activeQueueTimer) window.clearInterval(activeQueueTimer);
+  latestRefreshTimer = 0;
+  activeQueueTimer = 0;
+}
 
 async function loadLatestLiquidations(): Promise<void> {
   if (loading.value) return;
@@ -258,23 +297,56 @@ async function loadLatestLiquidations(): Promise<void> {
       queueUpdatedAt?: string;
     };
 
-    queueRows.value = Array.isArray(payload.queue) ? payload.queue : [];
-    queuedWalletSourceRows.value = Array.isArray(payload.queuedWallets) ? payload.queuedWallets : [];
-    queueTransport.value = payload.queueTransport || "";
-    queueParticipantCount.value = Number.isFinite(payload.queueParticipantCount) ? Number(payload.queueParticipantCount) : queuedWalletSourceRows.value.length;
+    queueRows.value = retainRecentQueueRows(retainedQueueRows, Array.isArray(payload.queue) ? payload.queue : []);
+    queuedWalletSourceRows.value = retainRecentQueueRows(retainedQueuedWalletRows, Array.isArray(payload.queuedWallets) ? payload.queuedWallets : []);
+    updateWssStatus(payload.queueTransport || "");
+    const reportedParticipants = Number.isFinite(payload.queueParticipantCount) ? Number(payload.queueParticipantCount) : 0;
+    queueParticipantCount.value = Math.max(reportedParticipants, queuedWalletRows.value.length);
     queueSubscribers.value = Number.isFinite(payload.queueSubscribers) ? Number(payload.queueSubscribers) : 0;
     queueUpdatedAt.value = payload.queueUpdatedAt || "";
+    latestLoadedAt = Date.now();
   } catch (error) {
-    queueRows.value = [];
-    queuedWalletSourceRows.value = [];
-    queueTransport.value = "";
-    queueParticipantCount.value = 0;
-    queueSubscribers.value = 0;
-    queueUpdatedAt.value = "";
+    if (queuedWalletRows.value.length === 0) {
+      queueRows.value = [];
+      queuedWalletSourceRows.value = [];
+      queueTransport.value = "";
+      wssConnected.value = false;
+      queueParticipantCount.value = 0;
+      queueSubscribers.value = 0;
+      queueUpdatedAt.value = "";
+    }
+    markWssStaleIfNeeded();
     errorMessage.value = error instanceof Error ? `排队钱包接口读取失败：${error.message}` : "排队钱包接口读取失败";
   } finally {
     loading.value = false;
   }
+}
+
+function updateWssStatus(transport: string): void {
+  queueTransport.value = transport;
+  if (transport.toLowerCase() === "wss") {
+    lastWssConnectedAt = Date.now();
+    wssConnected.value = true;
+    return;
+  }
+  markWssStaleIfNeeded();
+}
+
+function markWssStaleIfNeeded(): void {
+  if (!lastWssConnectedAt || Date.now() - lastWssConnectedAt > WSS_STALE_MS) {
+    wssConnected.value = false;
+  }
+}
+
+function retainRecentQueueRows(cache: Map<string, { row: QueueRow; lastSeenAt: number }>, rows: QueueRow[]): QueueRow[] {
+  const now = Date.now();
+  for (const row of rows.filter(isProductionQueueWallet)) {
+    cache.set(queueDedupKey(row), { row, lastSeenAt: now });
+  }
+  for (const [key, entry] of cache) {
+    if (now - entry.lastSeenAt > QUEUE_ROW_RETAIN_MS) cache.delete(key);
+  }
+  return [...cache.values()].map((entry) => entry.row);
 }
 
 function latestHeaders(): Record<string, string> {

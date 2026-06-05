@@ -304,7 +304,7 @@ function normalizeSnapshotUrl(value: string): string {
   }
 }
 
-async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingMessage): Promise<{ rows: SnapshotQueueRow[]; status: SnapshotPayload }> {
+async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingMessage): Promise<{ ok: boolean; rows: SnapshotQueueRow[]; status: SnapshotPayload }> {
   const privateMemberBase = env.LIQ2_PRIVATE_MEMBER_API_URL?.trim()?.replace(/\/+$/, "");
   const queueUrl =
     env.LIQUIDATION_QUEUE_WSS_STATUS_URL?.trim() ||
@@ -322,20 +322,21 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
   const payload = (await response.json()) as SnapshotPayload;
   const sourcePayload = unwrapPayload(payload);
   return {
+    ok: true,
     rows: readQueue(sourcePayload.items ?? sourcePayload.queue ?? sourcePayload.queues ?? sourcePayload.rows),
     status: sourcePayload,
   };
 }
 
 function emptyWssQueueSnapshot() {
-  return { rows: [] as SnapshotQueueRow[], status: {} as SnapshotPayload };
+  return { ok: false, rows: [] as SnapshotQueueRow[], status: {} as SnapshotPayload };
 }
 
 function buildSnapshotResponse(
   payload: SnapshotPayload,
   env: Record<string, string>,
   queuedWallets: SnapshotQueueRow[],
-  wssQueue: { rows: SnapshotQueueRow[]; status: SnapshotPayload },
+  wssQueue: { ok: boolean; rows: SnapshotQueueRow[]; status: SnapshotPayload },
 ) {
   const sourcePayload = unwrapPayload(payload);
   const sourceRows = readRows(sourcePayload);
@@ -360,7 +361,7 @@ function buildSnapshotResponse(
     ok: true,
     source: "liquidation-snapshot-service",
     status: "connected",
-    queueTransport: "wss",
+    queueTransport: wssQueue.ok ? "wss" : "unavailable",
     queueSource: stringValue(wssQueue.status.source) ?? "privateMember-liquidation-queue-wss",
     queueParticipantCount: numberValue(wssQueue.status.participantCount, wssQueue.status.participant_count) ?? queuedWallets.length,
     queueSubscribers: numberValue(wssQueue.status.subscribers) ?? 0,

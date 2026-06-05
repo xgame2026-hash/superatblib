@@ -106,7 +106,7 @@ const OFFICIAL_ENDPOINTS: OfficialEndpointRule[] = [
   },
   {
     key: "LIQUIDATION_QUEUE_TX_EVENTS_URL",
-    label: "tx2 今日合约流水接口",
+    label: "执行流水接口",
     defaultValue: "",
     protocols: ["https:"],
     hosts: ["private.superarb.ai"],
@@ -115,7 +115,7 @@ const OFFICIAL_ENDPOINTS: OfficialEndpointRule[] = [
   },
   {
     key: "PRIVATE_MEMBER_TX2_CONTRACT_EVENTS_URL",
-    label: "privateMember tx2 合约流水接口",
+    label: "备用执行流水接口",
     defaultValue: "",
     protocols: ["https:"],
     hosts: ["private.superarb.ai"],
@@ -184,9 +184,12 @@ export function checkOfficialConfig(scope: string, env: Record<string, string>):
 
 export async function checkRuntimeSettings(scope: string, env: Record<string, string>): Promise<SecurityCheckItem[]> {
   const wallet = checkWallet(scope, env);
-  const token = await checkSuperMtNodeToken(scope, env);
-  const bnbRpc = await checkBnbRpc(scope, env, token.endpoints);
   const queueToken = checkQueueWssToken(scope, env);
+  const tokenPromise = checkSuperMtNodeToken(scope, env);
+  const bnbRpcPromise = checkBnbRpc(scope, env, []);
+  const [token, bnbRpcResult] = await Promise.all([tokenPromise, bnbRpcPromise]);
+  const usage = bnbRpcResult.ok ? readEndpointUsage(token.endpoints, env.BNB_RPC_URL?.trim() ?? "") : "";
+  const bnbRpc = usage ? { ...bnbRpcResult, message: `${bnbRpcResult.message}；${usage}` } : bnbRpcResult;
   return [wallet, token.item, bnbRpc, queueToken];
 }
 
@@ -382,7 +385,7 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[]): Promis
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    signal: AbortSignal.timeout(8_000),
+    signal: AbortSignal.timeout(4_000),
   });
   const payload = (await response.json()) as { result?: T; error?: { message?: string } };
   if (!response.ok || payload.error || payload.result === undefined) {
@@ -395,7 +398,7 @@ async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: str
   const apiBase = (env.SUPERMTNODE_API_BASE_URL?.trim() || "https://api.supermtnode.io").replace(/\/+$/, "");
   const response = await fetch(`${apiBase}/api/rpc-endpoints`, {
     headers: { accept: "application/json", authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(8_000),
+    signal: AbortSignal.timeout(4_000),
   });
   const payload = (await response.json().catch(() => ({}))) as { endpoints?: unknown; error?: unknown; message?: unknown };
   if (!response.ok) {
@@ -409,7 +412,7 @@ function readEndpointUsage(endpoints: Array<Record<string, unknown>>, rpcUrl: st
   const endpoint = endpoints.find((item) => {
     const url = stringValue(item.httpUrl, item.http_url);
     return url && normalizeUrl(url) === normalizeUrl(rpcUrl);
-  }) ?? endpoints.find((item) => String(stringValue(item.chain) ?? "").toLowerCase().includes("bnb"));
+  });
   if (!endpoint) return "";
   const count = numberValue(endpoint.requestCount, endpoint.request_count);
   const limit = numberValue(endpoint.requestLimit, endpoint.request_limit);

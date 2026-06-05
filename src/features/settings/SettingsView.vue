@@ -91,7 +91,7 @@
           </el-select>
         </label>
         <label class="settings-field">
-          <span>单次金额授权</span>
+          <span>授权金额</span>
           <el-input v-model="settingsForm.singleTradeAuthAmountUsdt" inputmode="decimal" placeholder="100">
             <template #suffix>USDT</template>
           </el-input>

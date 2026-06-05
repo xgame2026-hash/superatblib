@@ -20,10 +20,15 @@
             <p class="topic-kicker">Market Classification</p>
             <h2>可接入市场状态</h2>
           </div>
-          <span>{{ snapshotMeta }}</span>
+          <div class="topic-heading-actions">
+            <span>{{ loading && sources.length === 0 ? "读取中" : snapshotMeta }}</span>
+            <button type="button" :disabled="loading" @click="refreshSnapshot">
+              {{ loading ? "刷新中" : "刷新" }}
+            </button>
+          </div>
         </div>
 
-        <p v-if="loading" class="topic-empty-state">正在读取策略快照服务。</p>
+        <p v-if="loading && sources.length === 0" class="topic-empty-state">正在读取策略快照服务。</p>
         <div v-else-if="sources.length > 0" class="topic-source-grid">
           <article v-for="source in sources" :key="source.id" class="topic-source-card">
             <header class="topic-source-head">
@@ -110,10 +115,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import arbIcon from "../../img/arb.svg";
 import bnbIcon from "../../img/bnb.svg";
 import ethIcon from "../../img/eth.svg";
+
+const props = withDefaults(defineProps<{ active?: boolean }>(), {
+  active: true,
+});
 
 type ChainKey = "ethereum" | "eth" | "bnb" | "arbitrum" | "arb" | string;
 
@@ -167,6 +176,8 @@ const strategies = ref<StrategyRow[]>([]);
 const updatedAt = ref("");
 const AUTH_CODE_KEY = "liq2-auth-code";
 const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const TOPIC_SNAPSHOT_CACHE_KEY = "liq2-liquidation-topic-snapshot-cache";
+let snapshotRequested = false;
 
 const summaryCards = computed(() => {
   const total = sources.value.length;
@@ -185,8 +196,27 @@ const summaryCards = computed(() => {
 const snapshotMeta = computed(() => (updatedAt.value ? `更新 ${formatDateTime(updatedAt.value)}` : "RPC / Queue / Keeper"));
 
 onMounted(() => {
-  void loadSnapshot();
+  restoreSnapshotCache();
+  if (props.active) void loadSnapshotOnce();
 });
+
+watch(
+  () => props.active,
+  (active) => {
+    if (active) void loadSnapshotOnce();
+  },
+);
+
+async function loadSnapshotOnce() {
+  if (snapshotRequested) return;
+  snapshotRequested = true;
+  if (sources.value.length === 0) await loadSnapshot();
+}
+
+function refreshSnapshot() {
+  snapshotRequested = true;
+  void loadSnapshot();
+}
 
 async function loadSnapshot() {
   loading.value = true;
@@ -208,17 +238,59 @@ async function loadSnapshot() {
     queue.value = Array.isArray(payload.queue) ? payload.queue : [];
     strategies.value = Array.isArray(payload.strategies) ? payload.strategies.map(normalizeStrategyRow) : [];
     updatedAt.value = payload.updatedAt ?? "";
+    saveSnapshotCache();
 
     if (sources.value.length === 0 && payload.message) error.value = payload.message;
   } catch (cause) {
-    sources.value = [];
-    queue.value = [];
-    strategies.value = [];
-    updatedAt.value = "";
+    if (sources.value.length === 0 && queue.value.length === 0 && strategies.value.length === 0) {
+      sources.value = [];
+      queue.value = [];
+      strategies.value = [];
+      updatedAt.value = "";
+    }
     error.value = cause instanceof Error ? cause.message : "快照服务不可用";
   } finally {
     loading.value = false;
   }
+}
+
+function restoreSnapshotCache() {
+  const raw = localStorage.getItem(scopedStorageKey(TOPIC_SNAPSHOT_CACHE_KEY));
+  if (!raw) return;
+  try {
+    const cached = JSON.parse(raw) as { sources?: SourceRow[]; queue?: QueueRow[]; strategies?: StrategyRow[]; updatedAt?: string };
+    if (!Array.isArray(cached.sources) || cached.sources.length === 0) return;
+    sources.value = cached.sources;
+    queue.value = Array.isArray(cached.queue) ? cached.queue : [];
+    strategies.value = Array.isArray(cached.strategies) ? cached.strategies.map(normalizeStrategyRow) : [];
+    updatedAt.value = cached.updatedAt ?? "";
+    snapshotRequested = true;
+    loading.value = false;
+    error.value = "";
+  } catch {
+    localStorage.removeItem(scopedStorageKey(TOPIC_SNAPSHOT_CACHE_KEY));
+  }
+}
+
+function saveSnapshotCache() {
+  localStorage.setItem(
+    scopedStorageKey(TOPIC_SNAPSHOT_CACHE_KEY),
+    JSON.stringify({ sources: sources.value, queue: queue.value, strategies: strategies.value, updatedAt: updatedAt.value, savedAt: Date.now() }),
+  );
+}
+
+function scopedStorageKey(baseKey: string): string {
+  const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+  return authCode ? `${baseKey}:${hashStorageScope(authCode)}` : baseKey;
+}
+
+function hashStorageScope(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
 }
 
 function chainIcon(chain: ChainKey) {

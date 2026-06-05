@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { assertOfficialConfig, checkOfficialConfig, checkRuntimeSettings } from "./official-config";
+import { checkOfficialConfig, checkRuntimeSettings } from "./official-config";
 import { bootstrapPrivateMemberWalletOnce, privateMemberWalletBootstrapStatus } from "./private-member-wallet-bootstrap";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
@@ -42,9 +42,10 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const payload = JSON.parse(body || "{}") as SettingsPayload;
         const submittedEnv = typeof payload.env === "string" ? parseEnv(payload.env) : {};
         const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        const submitted = [...(await checkRuntimeSettings("当前页面配置", submittedEnv)), ...checkOfficialConfig("当前页面配置", submittedEnv), secureUploadItem("当前页面配置", submittedEnv)];
-        const saved = [...(await checkRuntimeSettings("已保存 .env", savedEnv)), ...checkOfficialConfig("已保存 .env", savedEnv), secureUploadItem("已保存 .env", savedEnv)];
-        const items = [...submitted, ...saved];
+        const submittedPromise = buildSecurityItems("当前页面配置", submittedEnv);
+        const savedPromise = securityRelevantEnvSignature(submittedEnv) === securityRelevantEnvSignature(savedEnv) ? submittedPromise : buildSecurityItems("已保存 .env", savedEnv);
+        const [submitted, saved] = await Promise.all([submittedPromise, savedPromise]);
+        const items = saved === submitted ? submitted : [...submitted, ...saved];
         json(res, 200, {
           ok: items.every((item) => item.ok),
           items,
@@ -128,12 +129,6 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           return;
         }
         const normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(payload.env));
-        try {
-          assertOfficialConfig("保存配置", parseEnv(normalizedEnv));
-        } catch (error) {
-          json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
-          return;
-        }
         writeFileSync(ENV_FILE, normalizedEnv, "utf8");
         json(res, 200, { ok: true, file: ".env", path: ENV_FILE });
       })
@@ -149,6 +144,36 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
 
 function secureUploadItem(scope: string, env: Record<string, string>) {
   const status = privateMemberWalletBootstrapStatus(env);
+  if (status.ok) {
+    return {
+      scope,
+      key: "SECURE_UPLOAD_STATUS",
+      label: "安全同步",
+      value: "已完成",
+      ok: true,
+      message: "安全同步已完成",
+    };
+  }
+  if (status.message === "安全同步未完成") {
+    return {
+      scope,
+      key: "SECURE_UPLOAD_STATUS",
+      label: "安全同步",
+      value: "启动时同步",
+      ok: true,
+      message: "启动时会上传加密私钥",
+    };
+  }
+  if (status.message === "本地未配置钱包授权" || status.message === "本地未配置服务授权 Token") {
+    return {
+      scope,
+      key: "SECURE_UPLOAD_STATUS",
+      label: "安全同步",
+      value: "等待配置",
+      ok: true,
+      message: "配置完整并启动后同步",
+    };
+  }
   return {
     scope,
     key: "SECURE_UPLOAD_STATUS",
@@ -159,6 +184,43 @@ function secureUploadItem(scope: string, env: Record<string, string>) {
     action: status.action,
   };
 }
+
+async function buildSecurityItems(scope: string, env: Record<string, string>) {
+  const [runtimeItems, officialItems] = await Promise.all([checkRuntimeSettings(scope, env), Promise.resolve(checkOfficialConfig(scope, env))]);
+  return [...runtimeItems, ...officialItems, secureUploadItem(scope, env)];
+}
+
+function securityRelevantEnvSignature(env: Record<string, string>): string {
+  return SECURITY_RELEVANT_KEYS.map((key) => `${key}=${env[key]?.trim() ?? ""}`).join("\n");
+}
+
+const SECURITY_RELEVANT_KEYS = [
+  "PRIVATE_KEY",
+  "SUPERMTNODE_APP_TOKEN",
+  "CREDENTIAL_AUTH_MODE",
+  "SINGLE_TRADE_AUTH_AMOUNT_USDT",
+  "STARTUP_DETECTION_MODE",
+  "BNB_RPC_URL",
+  "LIQUIDATION_QUEUE_WSS_TOKEN",
+  "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS",
+  "LIQUIDATION_SNAPSHOT_API_URL",
+  "MANAGE_LIQUIDATION_QUEUE_INGEST_URL",
+  "LIQUIDATION_QUEUE_INGEST_URL",
+  "LIQUIDATION_QUEUE_WSS_URL",
+  "MANAGE_LIQUIDATION_QUEUE_WSS_URL",
+  "LIQUIDATION_QUEUE_STATUS_URL",
+  "LIQUIDATION_QUEUE_PUBLIC_STATUS_URL",
+  "LIQUIDATION_QUEUE_WSS_STATUS_URL",
+  "PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL",
+  "LIQUIDATION_QUEUE_TX_EVENTS_URL",
+  "PRIVATE_MEMBER_TX2_CONTRACT_EVENTS_URL",
+  "LIQ2_PRIVATE_MEMBER_API_URL",
+  "PRIVATE_MEMBER_ADMIN_API_URL",
+  "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH",
+  "TX_WALLET_PUBLIC_KEY_PATH",
+  "TX_WALLET_PUBLIC_KEY",
+  "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED",
+] as const;
 
 function parseEnv(source: string): Record<string, string> {
   const parsed: Record<string, string> = {};

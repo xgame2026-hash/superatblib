@@ -74,12 +74,17 @@
           <p class="eyebrow">Market Classification</p>
           <h3>可接入市场状态</h3>
         </div>
-        <span class="market-status-time" :class="{ 'is-loading': marketStatusLoading }">
-          {{ marketStatusLoading ? "读取中" : marketStatusUpdatedAt }}
-        </span>
+        <div class="market-status-actions">
+          <span class="market-status-time" :class="{ 'is-loading': marketStatusLoading && marketStatusRows.length === 0 }">
+            {{ marketStatusLoading && marketStatusRows.length === 0 ? "读取中" : marketStatusUpdatedAt }}
+          </span>
+          <button class="market-status-refresh" type="button" :disabled="marketStatusLoading" @click="refreshMarketStatus">
+            {{ marketStatusLoading ? "刷新中" : "刷新" }}
+          </button>
+        </div>
       </div>
 
-      <div v-if="marketStatusLoading" class="market-status-skeleton">
+      <div v-if="marketStatusLoading && marketStatusRows.length === 0" class="market-status-skeleton">
         <span v-for="index in 3" :key="index"></span>
       </div>
       <div v-else-if="marketStatusRows.length > 0" class="market-source-grid">
@@ -120,7 +125,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { NewsItem } from "../../types/news";
 import runIconUrl from "../../img/run.svg";
 import stopIconUrl from "../../img/stop.svg";
@@ -167,6 +172,7 @@ type MarketStrategyRow = {
 };
 
 const props = defineProps<{
+  active?: boolean;
   metrics: Metric[];
   marketIcon: (chain: string) => string;
   newsItems: NewsItem[];
@@ -190,7 +196,13 @@ const overviewValueAnimationTimers = new Map<string, number>();
 const AUTH_CODE_KEY = "liq2-auth-code";
 const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
+const OVERVIEW_METRICS_CACHE_KEY = "liq2-overview-metrics-cache";
+const MARKET_STATUS_CACHE_KEY = "liq2-market-status-cache";
+const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 let overviewRefreshTimer = 0;
+let overviewRuntimeTicker = 0;
+let marketStatusRequested = false;
+let overviewMetricsRequested = false;
 
 const latestNews = computed(() => props.newsItems.slice(0, 6));
 const marketStatusRows = computed(() => {
@@ -198,16 +210,49 @@ const marketStatusRows = computed(() => {
 });
 
 onMounted(() => {
-  void loadMarketStatus();
-  void loadOverviewMetrics();
-  overviewRefreshTimer = window.setInterval(loadOverviewMetrics, 30_000);
+  restoreOverviewMetricsCache();
+  restoreMarketStatusCache();
+  if (props.active ?? true) startDashboardView();
+  window.addEventListener(OVERVIEW_REFRESH_EVENT, handleOverviewRuntimeEvent);
 });
 
+watch(
+  () => props.active,
+  (active) => {
+    if (active ?? true) {
+      startDashboardView();
+      return;
+    }
+    stopDashboardView();
+  },
+);
+
 onBeforeUnmount(() => {
-  if (overviewRefreshTimer) window.clearInterval(overviewRefreshTimer);
+  stopDashboardView();
+  window.removeEventListener(OVERVIEW_REFRESH_EVENT, handleOverviewRuntimeEvent);
   overviewValueAnimationTimers.forEach((timer) => window.clearInterval(timer));
   overviewValueAnimationTimers.clear();
 });
+
+function startDashboardView() {
+  if (!marketStatusRequested) {
+    marketStatusRequested = true;
+    if (marketSources.value.length === 0) void loadMarketStatus();
+  }
+  if (!overviewMetricsRequested) {
+    overviewMetricsRequested = true;
+    void loadOverviewMetrics();
+  }
+  if (!overviewRefreshTimer) overviewRefreshTimer = window.setInterval(loadOverviewMetrics, 30_000);
+  if (!overviewRuntimeTicker) overviewRuntimeTicker = window.setInterval(tickRunningRpcMetric, 1_000);
+}
+
+function stopDashboardView() {
+  if (overviewRefreshTimer) window.clearInterval(overviewRefreshTimer);
+  if (overviewRuntimeTicker) window.clearInterval(overviewRuntimeTicker);
+  overviewRefreshTimer = 0;
+  overviewRuntimeTicker = 0;
+}
 
 function createOverviewMetrics(): OverviewMetric[] {
   return [
@@ -219,14 +264,55 @@ function createOverviewMetrics(): OverviewMetric[] {
 }
 
 async function loadOverviewMetrics() {
-  const [bnbUsdt, bnbRpc, wssQueue] = await Promise.all([
-    readBnbUsdtMetric(),
-    readBnbRpcMetric(),
-    readWssQueueMetric(),
-  ]);
-  const liquidationStarted = readLiquidationStartedMetric();
-  overviewMetrics.value = [bnbUsdt, bnbRpc, wssQueue, liquidationStarted];
-  animateOverviewValues(overviewMetrics.value);
+  updateOverviewMetric(readLiquidationStartedMetric());
+  void readBnbUsdtMetric().then(updateOverviewMetric);
+  void readBnbRpcMetric().then(updateOverviewMetric);
+  void readWssQueueMetric().then(updateOverviewMetric);
+}
+
+function handleOverviewRuntimeEvent() {
+  updateOverviewMetric(readLiquidationStartedMetric());
+  updateOverviewMetric(readLocalWssQueueMetric());
+  tickRunningRpcMetric();
+  void readBnbRpcMetric().then(updateOverviewMetric);
+}
+
+function updateOverviewMetric(nextMetric: OverviewMetric) {
+  overviewMetrics.value = overviewMetrics.value.map((metric) => (metric.label === nextMetric.label ? nextMetric : metric));
+  saveOverviewMetricsCache();
+  animateOverviewValues([nextMetric]);
+}
+
+function restoreOverviewMetricsCache() {
+  const raw = localStorage.getItem(scopedStorageKey(OVERVIEW_METRICS_CACHE_KEY));
+  if (!raw) return;
+  try {
+    const cached = JSON.parse(raw) as { metrics?: OverviewMetric[] };
+    if (Array.isArray(cached.metrics) && cached.metrics.length === overviewMetrics.value.length) {
+      overviewMetrics.value = cached.metrics;
+      animateOverviewValues(cached.metrics);
+    }
+  } catch {
+    localStorage.removeItem(scopedStorageKey(OVERVIEW_METRICS_CACHE_KEY));
+  }
+}
+
+function saveOverviewMetricsCache() {
+  localStorage.setItem(scopedStorageKey(OVERVIEW_METRICS_CACHE_KEY), JSON.stringify({ metrics: overviewMetrics.value, savedAt: Date.now() }));
+}
+
+function scopedStorageKey(baseKey: string): string {
+  const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+  return authCode ? `${baseKey}:${hashStorageScope(authCode)}` : baseKey;
+}
+
+function hashStorageScope(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
 }
 
 async function readBnbUsdtMetric(): Promise<OverviewMetric> {
@@ -278,11 +364,16 @@ async function readWssQueueMetric(): Promise<OverviewMetric> {
     const row = payload.queuedWallets?.find((item) => {
       return String(item.chain).toLowerCase() === currentChain && sameWallet(item.wallet || item.walletShort, currentWallet);
     });
-    if (!row) return { label: "WSS 排队", value: "未排队", note: "未找到当前钱包", tone: "danger" };
+    if (!row) return readLocalWssQueueMetric(runningMarket);
     return { label: "WSS 排队", value: "已排队", note: `排队ID ${formatQueueId(row)}`, tone: "ready" };
   } catch {
-    return { label: "WSS 排队", value: "--", note: "读取失败", tone: "flat" };
+    return readLocalWssQueueMetric(runningMarket);
   }
+}
+
+function readLocalWssQueueMetric(state = readRunningMarketState()): OverviewMetric {
+  if (!state) return { label: "WSS 排队", value: "未排队", note: "清算未启动", tone: "danger" };
+  return { label: "WSS 排队", value: "已排队", note: `排队ID ${formatQueueId(state)}`, tone: "ready" };
 }
 
 async function refreshWssQueueMetric() {
@@ -296,9 +387,52 @@ async function refreshWssQueueMetric() {
   }
 }
 
+function restoreMarketStatusCache() {
+  const raw = localStorage.getItem(MARKET_STATUS_CACHE_KEY);
+  if (!raw) return;
+  try {
+    const cached = JSON.parse(raw) as { sources?: MarketSourceRow[]; updatedAt?: string };
+    if (!Array.isArray(cached.sources) || cached.sources.length === 0) return;
+    marketSources.value = cached.sources;
+    marketStatusUpdatedAt.value = cached.updatedAt || "--";
+    marketStatusRequested = true;
+    marketStatusLoading.value = false;
+    marketStatusError.value = "";
+  } catch {
+    localStorage.removeItem(MARKET_STATUS_CACHE_KEY);
+  }
+}
+
+function saveMarketStatusCache() {
+  localStorage.setItem(
+    MARKET_STATUS_CACHE_KEY,
+    JSON.stringify({ sources: marketSources.value, updatedAt: marketStatusUpdatedAt.value, savedAt: Date.now() }),
+  );
+}
+
+function refreshMarketStatus() {
+  void loadMarketStatus();
+}
+
 function readLiquidationStartedMetric(): OverviewMetric {
   const started = Boolean(readRunningMarketState());
   return { label: "清算启动", value: started ? "已启动" : "未启动", note: "本地状态", tone: started ? "ready" : "danger" };
+}
+
+function tickRunningRpcMetric() {
+  const runningMarket = readRunningMarketState();
+  if (!runningMarket || runningMarketChain(runningMarket) !== "bnb") return;
+  const burn = typeof runningMarket.creditBurnPerSecond === "number" && runningMarket.creditBurnPerSecond > 0 ? runningMarket.creditBurnPerSecond : 0;
+  if (!burn) return;
+  const current = overviewMetrics.value.find((metric) => metric.label === "BNB RPC");
+  const currentValue = current ? parseOverviewNumericValue(current.value) : null;
+  if (currentValue === null) return;
+  updateOverviewMetric({
+    label: "BNB RPC",
+    value: Math.round(currentValue + burn).toLocaleString("en-US"),
+    note: current?.note || "运行中",
+    tone: "ready",
+  });
 }
 
 function metricClass(metric: OverviewMetric) {
@@ -326,11 +460,11 @@ async function loadMarketStatus() {
     const strategies = Array.isArray(payload.strategies) ? payload.strategies.map(strategyToMarketSource) : [];
     marketSources.value = strategies.length > 0 ? strategies : Array.isArray(payload.sources) ? payload.sources : [];
     marketStatusUpdatedAt.value = payload.updatedAt ? `更新 ${formatDateTime(payload.updatedAt)}` : "--";
+    saveMarketStatusCache();
     if (marketSources.value.length === 0 && payload.message) marketStatusError.value = payload.message;
   } catch (error) {
     marketStatusError.value = error instanceof Error ? error.message : "策略快照读取失败";
-    marketSources.value = [];
-    marketStatusUpdatedAt.value = "--";
+    if (marketSources.value.length === 0) marketStatusUpdatedAt.value = "--";
   } finally {
     marketStatusLoading.value = false;
   }
@@ -421,6 +555,10 @@ type RunningMarketState = {
   option?: { disabled?: boolean; chain?: string };
   chain?: string;
   walletAddress?: string;
+  endpointSlug?: string;
+  endpointId?: string;
+  id?: string;
+  creditBurnPerSecond?: number | null;
 };
 
 function readRunningMarketState(): RunningMarketState | null {

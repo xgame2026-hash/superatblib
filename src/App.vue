@@ -5,7 +5,7 @@
       <main class="login-panel">
         <div class="login-brand-row">
           <img class="login-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-          <span class="login-version">1.3.9</span>
+          <span class="login-version">1.4.0</span>
         </div>
 
         <el-form class="auth-form" @submit.prevent="submitLogin">
@@ -60,7 +60,7 @@
       <header class="topbar">
         <div class="topbar-left">
           <img class="system-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-          <span class="topbar-version">1.3.9</span>
+          <span class="topbar-version">1.4.0</span>
         </div>
         <div class="topbar-right">
           <button
@@ -110,13 +110,40 @@
           </div>
         </section>
 
-        <LiquidationView
-          v-show="activeView === 'analytics'"
-          ref="liquidationViewRef"
-          :startup-detection-mode="settingsForm.startupDetectionMode"
-          @launch-sound="handleLaunchSound"
-          @refresh="refreshData"
-        />
+        <div v-show="activeView === 'analytics'" :hidden="activeView !== 'analytics'">
+          <LiquidationView
+            ref="liquidationViewRef"
+            :active="activeView === 'analytics'"
+            :startup-detection-mode="settingsForm.startupDetectionMode"
+            @launch-sound="handleLaunchSound"
+            @refresh="refreshData"
+          />
+        </div>
+
+        <div v-show="activeView === 'execution'" :hidden="activeView !== 'execution'">
+          <LatestLiquidationsView
+            :active="activeView === 'execution'"
+            @open-tx-graph="openTxGraphFromLiquidation"
+          />
+        </div>
+
+        <div v-show="activeView === 'liquidationTopic'" :hidden="activeView !== 'liquidationTopic'">
+          <LiquidationTopicView
+            :active="activeView === 'liquidationTopic'"
+          />
+        </div>
+
+        <div v-show="activeView === 'overview'" :hidden="activeView !== 'overview'">
+          <DashboardView
+            :active="activeView === 'overview'"
+            :metrics="metrics"
+            :news-items="newsItems"
+            :news-loading="newsLoading"
+            :news-error="newsError"
+            :market-icon="marketIcon"
+            @open-news="openNewsFromDashboard"
+          />
+        </div>
 
         <template v-if="activeView === 'news'">
           <NewsPanel
@@ -131,14 +158,6 @@
 
         <template v-else-if="activeView === 'txgraph'">
           <TxGraphPanel :rpc-map="settingsForm.rpc" :initial-query="txGraphInitialQuery" />
-        </template>
-
-        <template v-else-if="activeView === 'liquidationTopic'">
-          <LiquidationTopicView />
-        </template>
-
-        <template v-else-if="activeView === 'execution'">
-          <LatestLiquidationsView @open-tx-graph="openTxGraphFromLiquidation" />
         </template>
 
         <template v-else-if="activeView === 'settings'">
@@ -165,16 +184,7 @@
           />
         </template>
 
-        <template v-else-if="activeView === 'overview'">
-          <DashboardView
-            :metrics="metrics"
-            :news-items="newsItems"
-            :news-loading="newsLoading"
-            :news-error="newsError"
-            :market-icon="marketIcon"
-            @open-news="openNewsFromDashboard"
-          />
-        </template>
+        <template v-else-if="activeView === 'overview'"></template>
       </main>
 
       <footer class="fixed-footer">
@@ -182,7 +192,7 @@
           <img :src="footerLogoUrl" alt="SuperARB" />
           Copyright © 2026 SuperMT Node. Internal testing only.
         </span>
-        <span>Local: http://127.0.0.1:{{ dashboardPort }}</span>
+        <span>Local: http://127.0.0.1:{{ runningDashboardPort }}</span>
       </footer>
     </section>
 
@@ -333,7 +343,7 @@ const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.3.9";
+const appVersion = "1.4.0";
 
 const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
 const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "settings"] satisfies ViewKey[];
@@ -487,7 +497,7 @@ const settingsForm = reactive({
   arbitrageIntensity: "conservative",
   credentialAuthMode: "single",
   singleTradeAuthAmountUsdt: "100",
-  startupDetectionMode: "auto",
+  startupDetectionMode: "manual",
   wssCorrectionMode: "enabled",
   dashboardPort: "4310",
   launchSoundMode: readStoredValue(LAUNCH_SOUND_KEY, ["enabled", "disabled"], "enabled"),
@@ -548,6 +558,7 @@ const currentSettingsSection = computed(() => {
 
 const secretInputType = computed(() => (settingsSecretsVisible.value ? "text" : "password"));
 const dashboardPort = computed(() => normalizeDashboardPort(settingsForm.dashboardPort));
+const runningDashboardPort = computed(() => window.location.port || dashboardPort.value);
 const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");
 const settingsSaveTitle = computed(() => {
   if (settingsSaveState.value === "done") return "保存完成";
@@ -579,6 +590,7 @@ const settingsSecurityOk = computed(() => visibleSecurityItems.value.length > 0 
 const settingsSecurityTitle = computed(() => {
   if (settingsSecurityOk.value) return "官方配置检测通过";
   const failed = visibleSecurityItems.value.filter((item) => !item.ok);
+  if (failed.some(isAuthorizationFailureItem)) return "授权失效";
   const onlyMissingLocalConfig = failed.length > 0 && failed.every((item) => missingLocalConfigKeys.includes(item.key));
   return onlyMissingLocalConfig ? "本地未配置" : "检测到非官方配置";
 });
@@ -917,6 +929,11 @@ function dedupeSecurityItems(items: SecurityCheckItem[]) {
   return result;
 }
 
+function isAuthorizationFailureItem(item: SecurityCheckItem) {
+  if (!["SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"].includes(item.key)) return false;
+  return /token has been rotated|HTTP 401|HTTP 403|unauthorized|forbidden|blocked/i.test(item.message);
+}
+
 function formatSecurityCheckedAt(value?: string) {
   if (!value) return "";
   const date = new Date(value);
@@ -925,6 +942,8 @@ function formatSecurityCheckedAt(value?: string) {
 }
 
 function formatSecurityLabel(item: SecurityCheckItem) {
+  if (item.key === "LIQUIDATION_QUEUE_TX_EVENTS_URL") return "执行流水接口";
+  if (item.key === "PRIVATE_MEMBER_TX2_CONTRACT_EVENTS_URL") return "备用执行流水接口";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") return "安全通道主机";
   if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") return "安全通道路径";
   if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") return "安全校验文件";
@@ -993,9 +1012,9 @@ function formatSecurityMessage(item: SecurityCheckItem) {
 
 function formatSecuritySummary(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? `钱包地址 ${shortAddress(item.value)}` : "本地未配置";
-  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : "本地未配置";
+  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : item.message;
   if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "队列授权已配置" : "本地未配置";
-  if (item.key === "BNB_RPC_URL") return item.ok ? item.message : "本地未配置或连接失败";
+  if (item.key === "BNB_RPC_URL") return item.ok || item.value ? item.message : "本地未配置";
   if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
   if (item.ok) return "检查通过";
   return formatSecurityMessage(item);
@@ -1007,7 +1026,7 @@ function shortAddress(value: string) {
 
 function generateEnvText() {
   const lines = [
-    "# Generated from SuperARB 1.3.9 internal settings",
+    "# Generated from SuperARB 1.4.0 internal settings",
     `PRIVATE_KEY=${settingsForm.privateKey}`,
     `DASHBOARD_LANGUAGE=${settingsForm.language}`,
     `FUNDING_MODE=${settingsForm.fundingMode}`,
@@ -1015,6 +1034,7 @@ function generateEnvText() {
     `CREDENTIAL_AUTH_MODE=${settingsForm.credentialAuthMode}`,
     `SINGLE_TRADE_AUTH_AMOUNT_USDT=${settingsForm.singleTradeAuthAmountUsdt}`,
     `STARTUP_DETECTION_MODE=${settingsForm.startupDetectionMode}`,
+    "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=10000",
     `LIQUIDATION_QUEUE_WSS_CORRECTION=${settingsForm.wssCorrectionMode}`,
     `DASHBOARD_PORT=${normalizeDashboardPort(settingsForm.dashboardPort)}`,
     `LAUNCH_SOUND_ENABLED=${settingsForm.launchSoundMode}`,
@@ -1036,7 +1056,6 @@ function generateEnvText() {
     `LIQUIDATION_QUEUE_WSS_URL=${settingsForm.queue.wssUrl}`,
     `LIQUIDATION_QUEUE_WSS_TOKEN=${settingsForm.queue.wssToken}`,
     `LIQUIDATION_QUEUE_STATUS_URL=${settingsForm.queue.statusUrl}`,
-    "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=1000",
     "",
     "SUPERMTNODE_API_BASE_URL=https://api.supermtnode.io",
     `SUPERMTNODE_APP_TOKEN=${settingsForm.superMtNodeAppToken}`,

@@ -63,7 +63,7 @@ export function privateMemberWalletBootstrapStatus(env: Record<string, string>):
     const endpoint = privateMemberBootstrapEndpoint(env);
     const txPublicKeyPem = readTxPublicKeyPem(env);
     const tradeSettings = readTradeSettings(env);
-    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, tradeSettings);
+    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, tradeSettings, appToken);
     return readState().submitted[stateKey]
       ? { ok: true, message: "安全同步已完成" }
       : { ok: false, message: "安全同步未完成", action: "repair_secure_upload" };
@@ -95,7 +95,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: { authCode?
     const tradeSettings = readTradeSettings(env);
     const rpcPlan = await readRpcPlanInfo(env, appToken);
     const executionSettings = { ...tradeSettings, ...rpcPlan };
-    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, executionSettings);
+    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, executionSettings, authCode || appToken || "");
     const state = readState();
     if (state.submitted[stateKey]) {
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_locally" };
@@ -123,6 +123,8 @@ async function bootstrapPrivateMemberWallet(reason: string, options: { authCode?
         privateKeyCipher,
         arbitrageIntensity: tradeSettings.arbitrageIntensity,
         arbitrage_intensity: tradeSettings.arbitrageIntensity,
+        credentialAuthMode: tradeSettings.credentialAuthMode,
+        credential_auth_mode: tradeSettings.credentialAuthMode,
         singleTradeAuthAmountUsdt: tradeSettings.singleTradeAuthAmountUsdt,
         single_trade_auth_amount_usdt: tradeSettings.singleTradeAuthAmountUsdt,
         executionSettings,
@@ -263,10 +265,21 @@ function submittedStateKey(
   walletAddress: string,
   publicKeyPem: string,
   tradeSettings: { arbitrageIntensity: string; singleTradeAuthAmountUsdt: string; credentialAuthMode: string; rpcPlanType?: string },
+  authIdentity: string,
 ): string {
   return crypto
     .createHash("sha256")
-    .update([BOOTSTRAP_STATE_VERSION, endpoint, walletAddress.toLowerCase(), publicKeyPem, tradeSettings.arbitrageIntensity, tradeSettings.singleTradeAuthAmountUsdt, tradeSettings.credentialAuthMode].join("\n"))
+    .update([
+      BOOTSTRAP_STATE_VERSION,
+      endpoint,
+      walletAddress.toLowerCase(),
+      publicKeyPem,
+      authIdentity,
+      tradeSettings.arbitrageIntensity,
+      tradeSettings.singleTradeAuthAmountUsdt,
+      tradeSettings.credentialAuthMode,
+      tradeSettings.rpcPlanType ?? "",
+    ].join("\n"))
     .digest("hex");
 }
 

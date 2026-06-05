@@ -1,6 +1,6 @@
 # SuperARB Client
 
-Version: 1.3.9
+Version: 1.4.0
 
 SuperARB Client is a local liquidation dashboard and execution console. It reads liquidation snapshots, live WSS queue state, wallet balances, RPC usage, and contract ledger data from the official SuperARB/SuperMT services.
 
@@ -32,7 +32,7 @@ npm run dashboard
 http://127.0.0.1:4310/
 ```
 
-如果 `4310` 端口被占用，可以在设置页保存“端口设置”，或直接编辑 `.env`：
+如果 `4310` 端口被占用，`npm run dashboard` 会自动尝试下一个可用端口，例如 `4311`。也可以在设置页保存“端口设置”，或直接编辑 `.env`：
 
 ```dotenv
 DASHBOARD_PORT=4311
@@ -124,9 +124,9 @@ liq2 会向 `LIQUIDATION_QUEUE_TX_EVENTS_URL` 提交：
 
 这是正常的安全入口。需要有效授权码才能进入控制台。
 
-#### `npm run dashboard` 报 `Port 4310 is already in use`
+#### `npm run dashboard` 遇到端口占用
 
-说明本机端口已被占用。在设置页保存“端口设置”，或编辑 `.env` 后重启：
+开发服务会自动尝试下一个可用端口。如果想固定端口，可以在设置页保存“端口设置”，或编辑 `.env` 后重启：
 
 ```dotenv
 DASHBOARD_PORT=4311
@@ -216,7 +216,7 @@ Default URL:
 http://127.0.0.1:4310/
 ```
 
-If port `4310` is already in use, save a different port in Settings or edit `.env`:
+If port `4310` is already in use, `npm run dashboard` automatically tries the next available port, for example `4311`. You can also save a different port in Settings or edit `.env`:
 
 ```dotenv
 DASHBOARD_PORT=4311
@@ -310,9 +310,9 @@ If no ledger rows are returned for a wallet, that wallet may show `0 USDT` or an
 
 This is expected. A valid authorization code is required to enter the dashboard.
 
-#### `npm run dashboard` fails with `Port 4310 is already in use`
+#### `npm run dashboard` finds the port already in use
 
-Another process is using the default port. Set a different port in Settings or `.env`, then restart:
+The dev server automatically tries the next available port. To pin a specific port, set a different port in Settings or `.env`, then restart:
 
 ```dotenv
 DASHBOARD_PORT=4311

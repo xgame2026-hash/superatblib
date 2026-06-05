@@ -61,10 +61,34 @@
 .topic-summary-head span,
 .topic-kicker,
 .topic-panel-heading > span,
+.topic-heading-actions span,
 .node-card span {
   color: #a99fc0;
   font-size: 11px;
   font-weight: 800;
+}
+
+.topic-heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topic-heading-actions button {
+  border: 1px solid rgba(174, 126, 255, 0.36);
+  border-radius: 999px;
+  background: rgba(36, 26, 59, 0.68);
+  color: #dfd6ff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.topic-heading-actions button:disabled {
+  cursor: default;
+  opacity: 0.62;
 }
 
 .topic-summary-card strong {

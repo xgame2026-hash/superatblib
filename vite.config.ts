@@ -41,7 +41,7 @@ export default defineConfig(({ mode }) => {
   server: {
     host: "127.0.0.1",
     port: dashboardPort,
-    strictPort: true,
+    strictPort: false,
     proxy: {
       "/api/license/check": {
         target: "https://api.supermtnode.io",
@@ -53,7 +53,7 @@ export default defineConfig(({ mode }) => {
   preview: {
     host: "127.0.0.1",
     port: dashboardPort,
-    strictPort: true,
+    strictPort: false,
   },
   build: {
     rollupOptions: {

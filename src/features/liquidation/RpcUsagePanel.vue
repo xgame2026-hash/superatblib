@@ -10,7 +10,11 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+
+const props = withDefaults(defineProps<{ active?: boolean }>(), {
+  active: true,
+});
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -20,6 +24,7 @@ type RpcUsageMetric = {
   requestCount: number | null;
   requestLimit: number | null;
   remainingRequests: number | null;
+  creditBurnPerSecond?: number | null;
   status: "ok" | "missing_rpc" | "missing_credentials" | "unmatched" | "error";
   message?: string;
 };
@@ -29,19 +34,47 @@ const error = ref("");
 const rpcUsage = ref<Record<ChainKey, RpcUsageMetric>>(createEmptyRpcUsage());
 const AUTH_CODE_KEY = "liq2-auth-code";
 const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const RPC_USAGE_REFRESH_INTERVAL_MS = 60_000;
+const RPC_USAGE_TICK_INTERVAL_MS = 1_000;
 let refreshTimer = 0;
+let tickTimer = 0;
 
 onMounted(() => {
-  void refresh();
-  refreshTimer = window.setInterval(() => {
-    void refresh();
-  }, RPC_USAGE_REFRESH_INTERVAL_MS);
+  if (props.active) startRpcUsagePolling();
 });
 
+watch(
+  () => props.active,
+  (active) => {
+    if (active) {
+      startRpcUsagePolling();
+      return;
+    }
+    stopRpcUsagePolling();
+  },
+);
+
 onBeforeUnmount(() => {
-  if (refreshTimer) window.clearInterval(refreshTimer);
+  stopRpcUsagePolling();
 });
+
+function startRpcUsagePolling() {
+  void refresh();
+  if (!refreshTimer) {
+    refreshTimer = window.setInterval(() => {
+      void refresh();
+    }, RPC_USAGE_REFRESH_INTERVAL_MS);
+  }
+  if (!tickTimer) tickTimer = window.setInterval(tickRpcUsage, RPC_USAGE_TICK_INTERVAL_MS);
+}
+
+function stopRpcUsagePolling() {
+  if (refreshTimer) window.clearInterval(refreshTimer);
+  if (tickTimer) window.clearInterval(tickTimer);
+  refreshTimer = 0;
+  tickTimer = 0;
+}
 
 async function refresh() {
   loading.value = true;
@@ -82,8 +115,48 @@ function createEmptyRpcUsageMetric(chain: ChainKey): RpcUsageMetric {
     requestCount: null,
     requestLimit: null,
     remainingRequests: null,
+    creditBurnPerSecond: null,
     status: "missing_rpc",
   };
+}
+
+function tickRpcUsage() {
+  const runningChain = readRunningChain();
+  if (!runningChain) return;
+  const nextUsage = { ...rpcUsage.value };
+  let changed = false;
+  for (const chain of Object.keys(nextUsage) as ChainKey[]) {
+    if (chain !== runningChain) continue;
+    const metric = nextUsage[chain];
+    const burn = typeof metric.creditBurnPerSecond === "number" && Number.isFinite(metric.creditBurnPerSecond) ? metric.creditBurnPerSecond : 0;
+    if (metric.status !== "ok" || burn <= 0 || typeof metric.requestCount !== "number") continue;
+    const nextRequestCount = metric.requestCount + burn;
+    const nextRemaining =
+      typeof metric.remainingRequests === "number" ? Math.max(0, metric.remainingRequests - burn) : metric.remainingRequests;
+    nextUsage[chain] = {
+      ...metric,
+      requestCount: nextRequestCount,
+      remainingRequests: nextRemaining,
+    };
+    changed = true;
+  }
+  if (changed) rpcUsage.value = nextUsage;
+}
+
+function readRunningChain(): ChainKey | null {
+  const raw = localStorage.getItem(RUNNING_MARKET_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const saved = JSON.parse(raw) as { queueState?: string; chain?: unknown; option?: { chain?: unknown; disabled?: boolean } };
+    if (saved.queueState === "paused" || saved.option?.disabled) return null;
+    const value = String(saved.chain || saved.option?.chain || "").toLowerCase();
+    if (value.includes("bnb")) return "bnb";
+    if (value.includes("arb")) return "arbitrum";
+    if (value.includes("eth")) return "ethereum";
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function formatRpcUsage(metric: RpcUsageMetric): string {

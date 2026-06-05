@@ -1,8 +1,8 @@
 <template>
   <section class="liquidation-page">
     <div class="liquidation-left">
-      <RpcUsagePanel v-slot="{ metrics, formatRpcUsage, formatRpcStatus, refresh: refreshRpcUsage }">
-        <WalletAssetsPanel @refresh="handleWalletAssetsRefresh(refreshRpcUsage)">
+      <RpcUsagePanel :active="props.active" v-slot="{ metrics, formatRpcUsage, formatRpcStatus, refresh: refreshRpcUsage }">
+        <WalletAssetsPanel :active="props.active" @refresh="handleWalletAssetsRefresh(refreshRpcUsage)">
           <template #rpc-usage="{ chain }">
             {{ formatRpcUsageDisplay(metrics[chain], formatRpcUsage, formatRpcStatus) }}
           </template>
@@ -126,7 +126,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CopyDocument, VideoPause, VideoPlay } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import runIcon from "../../img/run.svg";
@@ -136,9 +136,11 @@ import RpcUsagePanel from "./RpcUsagePanel.vue";
 import WalletAssetsPanel from "./WalletAssetsPanel.vue";
 
 const props = withDefaults(defineProps<{
+  active?: boolean;
   startupDetectionMode?: string;
 }>(), {
-  startupDetectionMode: "auto",
+  active: true,
+  startupDetectionMode: "manual",
 });
 
 const emit = defineEmits<{
@@ -167,6 +169,8 @@ type RunningMarketSnapshot = {
   option: MarketOption;
   updatedAt: string;
   walletAddress?: string;
+  endpointSlug?: string;
+  creditBurnPerSecond?: number | null;
 };
 type CandidateRow = {
   market: MarketValue;
@@ -338,7 +342,6 @@ const monitorMessages = computed(() => {
 });
 const candidateQueueStatusText = computed(() => (candidateQueueRows.value.length > 0 ? `${candidateQueueRows.value.length} 个候选` : queueStateText.value));
 const candidateRows = computed<CandidateRow[]>(() => candidateQueueRows.value.map(queueToCandidateRow));
-const startupDetectionAuto = computed(() => !["manual", "手动"].includes(props.startupDetectionMode.trim().toLowerCase()));
 const filteredCandidates = computed(() => {
   return candidateRows.value.filter((item) => {
     if (source.value !== "全部" && item.source !== source.value) return false;
@@ -385,38 +388,65 @@ let candidateQueueRefreshTimer = 0;
 let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
+let rpcBurnTimer = 0;
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
-const MARKET_HEARTBEAT_INTERVAL_MS = 1_000;
+const MARKET_HEARTBEAT_INTERVAL_MS = 10_000;
+const RPC_BURN_INTERVAL_MS = 1_000;
+let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
+const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 
 onMounted(() => {
-  if (startupDetectionAuto.value) restoreRunningMarketState();
-  else flushStaleRunningMarketState();
-  void loadQueueMonitorStatus();
-  void loadCandidateQueueSnapshot();
+  flushStaleRunningMarketState();
+  if (props.active) startVisiblePolling();
   void nextTick(updateOpportunitiesPanelHeight);
   window.addEventListener("resize", updateOpportunitiesPanelHeight);
   window.addEventListener("pagehide", handleClientStop);
   window.addEventListener("pageshow", handleClientResume);
   window.addEventListener("beforeunload", handleClientStop);
   window.addEventListener("offline", handleClientOffline);
-  queueMonitorRefreshTimer = window.setInterval(loadQueueMonitorStatus, 30_000);
-  candidateQueueRefreshTimer = window.setInterval(loadCandidateQueueSnapshot, 30_000);
-  startSnapshotProgressTimer();
 });
 
+watch(
+  () => props.active,
+  (active) => {
+    if (active) {
+      startVisiblePolling();
+      void nextTick(updateOpportunitiesPanelHeight);
+      return;
+    }
+    stopVisiblePolling();
+  },
+);
+
 onBeforeUnmount(() => {
-  if (queueMonitorRefreshTimer) window.clearInterval(queueMonitorRefreshTimer);
-  if (candidateQueueRefreshTimer) window.clearInterval(candidateQueueRefreshTimer);
-  if (snapshotProgressTimer) window.clearInterval(snapshotProgressTimer);
+  stopVisiblePolling();
   handleClientStop();
   stopMarketHeartbeat();
+  stopRpcBurnLoop();
   window.removeEventListener("resize", updateOpportunitiesPanelHeight);
   window.removeEventListener("pagehide", handleClientStop);
   window.removeEventListener("pageshow", handleClientResume);
   window.removeEventListener("beforeunload", handleClientStop);
   window.removeEventListener("offline", handleClientOffline);
 });
+
+function startVisiblePolling() {
+  void loadQueueMonitorStatus();
+  void loadCandidateQueueSnapshot();
+  if (!queueMonitorRefreshTimer) queueMonitorRefreshTimer = window.setInterval(loadQueueMonitorStatus, 30_000);
+  if (!candidateQueueRefreshTimer) candidateQueueRefreshTimer = window.setInterval(loadCandidateQueueSnapshot, 30_000);
+  if (!snapshotProgressTimer) startSnapshotProgressTimer();
+}
+
+function stopVisiblePolling() {
+  if (queueMonitorRefreshTimer) window.clearInterval(queueMonitorRefreshTimer);
+  if (candidateQueueRefreshTimer) window.clearInterval(candidateQueueRefreshTimer);
+  if (snapshotProgressTimer) window.clearInterval(snapshotProgressTimer);
+  queueMonitorRefreshTimer = 0;
+  candidateQueueRefreshTimer = 0;
+  snapshotProgressTimer = 0;
+}
 
 async function startMarketExecution() {
   queueState.value = "waiting";
@@ -439,18 +469,20 @@ async function startMarketExecution() {
       appendTerminal(`wss fallback: ${payload.transportWarning}`);
     }
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
-    persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined);
-    startMarketHeartbeat();
+    persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
+    startMarketHeartbeat(payload.heartbeatIntervalMs);
+    startRpcBurnLoop();
     emit("launch-sound", "launched");
     await loadQueueMonitorStatus();
     await loadCandidateQueueSnapshot();
   } catch (error) {
     queueState.value = "idle";
     marketRunning.value = false;
+    stopRpcBurnLoop();
     clearRunningMarketState();
     const message = error instanceof Error ? error.message : "启动队列上报失败";
     appendTerminal(`queue register failed: ${message}`);
-    ElMessage.error(message);
+    notifyQueueError(message);
     emit("launch-sound", "not-launched");
   }
 }
@@ -460,6 +492,7 @@ async function pauseMarketExecution() {
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
+  stopRpcBurnLoop();
   clearRunningMarketState();
   emit("launch-sound", "not-launched");
   if (!runningMarket.disabled) {
@@ -486,13 +519,16 @@ function setTerminalLines(lines: string[]) {
   terminalLines.value = lines.map((line) => `$ ${line}`);
 }
 
-function startMarketHeartbeat() {
+function startMarketHeartbeat(intervalMs: unknown = marketHeartbeatIntervalMs) {
   stopMarketHeartbeat();
+  marketHeartbeatIntervalMs = normalizeHeartbeatIntervalMs(intervalMs);
   marketHeartbeatTimer = window.setInterval(() => {
     if (!marketRunning.value || currentMarket.value.disabled) return;
     void registerMarketQueueStart(currentMarket.value, "heartbeat")
       .then((payload) => {
         persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined);
+        const nextInterval = normalizeHeartbeatIntervalMs(payload.heartbeatIntervalMs);
+        if (nextInterval !== marketHeartbeatIntervalMs) startMarketHeartbeat(nextInterval);
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : "unknown error";
@@ -501,12 +537,18 @@ function startMarketHeartbeat() {
           marketRunning.value = false;
           queueState.value = "idle";
           stopMarketHeartbeat();
+          stopRpcBurnLoop();
           clearRunningMarketState();
-          ElMessage.error(message);
+          notifyQueueError(message);
           emit("launch-sound", "not-launched");
         }
       });
-  }, MARKET_HEARTBEAT_INTERVAL_MS);
+  }, marketHeartbeatIntervalMs);
+}
+
+function normalizeHeartbeatIntervalMs(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 5_000 ? Math.min(parsed, 60_000) : MARKET_HEARTBEAT_INTERVAL_MS;
 }
 
 function stopMarketHeartbeat() {
@@ -515,24 +557,80 @@ function stopMarketHeartbeat() {
   marketHeartbeatTimer = 0;
 }
 
+function startRpcBurnLoop() {
+  stopRpcBurnLoop();
+  void burnRunningRpcOnce();
+  rpcBurnTimer = window.setInterval(() => {
+    void burnRunningRpcOnce();
+  }, RPC_BURN_INTERVAL_MS);
+}
+
+function stopRpcBurnLoop() {
+  if (!rpcBurnTimer) return;
+  window.clearInterval(rpcBurnTimer);
+  rpcBurnTimer = 0;
+}
+
+async function burnRunningRpcOnce() {
+  if (!marketRunning.value || currentMarket.value.disabled) return;
+  try {
+    const authCode = readAuthCode();
+    const response = await fetch("/api/liquidation-queue/rpc-burn", {
+      method: "POST",
+      headers: authHeaders(authCode),
+      body: JSON.stringify(queueRequestBody(currentMarket.value, "rpc-burn")),
+    });
+    const payload = (await response.json().catch(() => ({}))) as Record<string, any>;
+    if (!response.ok || payload.ok === false) {
+      throw new Error(typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    appendTerminal(`rpc burn failed: ${message}`);
+    if (isFatalQueueRuntimeError(message)) {
+      marketRunning.value = false;
+      queueState.value = "idle";
+      stopMarketHeartbeat();
+      stopRpcBurnLoop();
+      clearRunningMarketState();
+      notifyQueueError(message);
+      emit("launch-sound", "not-launched");
+    }
+  }
+}
+
 async function unregisterMarketQueue(item: MarketOption): Promise<Record<string, any>> {
   return registerMarketQueueStart(item, "stop");
 }
 
-function persistRunningMarketState(walletAddress?: string) {
+function persistRunningMarketState(walletAddress?: string, runtime?: Record<string, any>) {
   const option = currentMarket.value;
   if (option.disabled) return;
   const previous = readRunningMarketState();
+  const nextState = {
+    market: market.value,
+    queueState: queueState.value,
+    option,
+    walletAddress: walletAddress || previous?.walletAddress || "",
+    endpointSlug: typeof runtime?.endpointSlug === "string" ? runtime.endpointSlug : previous?.endpointSlug || "",
+    creditBurnPerSecond: runtimeCreditBurn(runtime) ?? previous?.creditBurnPerSecond ?? null,
+    updatedAt: new Date().toISOString(),
+  };
   localStorage.setItem(
     RUNNING_MARKET_STORAGE_KEY,
-    JSON.stringify({
-      market: market.value,
-      queueState: queueState.value,
-      option,
-      walletAddress: walletAddress || previous?.walletAddress || "",
-      updatedAt: new Date().toISOString(),
-    }),
+    JSON.stringify(nextState),
   );
+  window.dispatchEvent(new CustomEvent(OVERVIEW_REFRESH_EVENT, { detail: nextState }));
+}
+
+function runtimeCreditBurn(runtime?: Record<string, any>): number | null {
+  if (typeof runtime?.creditBurnPerSecond === "number" && runtime.creditBurnPerSecond > 0) return runtime.creditBurnPerSecond;
+  const plan = String(runtime?.rpcPlanType || "").toLowerCase();
+  if (plan === "build") return 25;
+  if (plan === "accelerate") return 50;
+  if (plan === "scale") return 75;
+  if (plan === "business") return 500;
+  return null;
 }
 
 function restoreRunningMarketState() {
@@ -543,17 +641,30 @@ function restoreRunningMarketState() {
   marketRunning.value = true;
   setTerminalLines([`queue restored: ${saved.market}`, "startup detection: auto reconnect enabled"]);
   startMarketHeartbeat();
+  startRpcBurnLoop();
   void registerMarketQueueStart(saved.option, "heartbeat")
     .then((payload) => {
       persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined);
       void loadQueueMonitorStatus();
       void loadCandidateQueueSnapshot();
     })
-    .catch((error) => appendTerminal(`auto reconnect failed: ${error instanceof Error ? error.message : "unknown error"}`));
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : "unknown error";
+      appendTerminal(`auto reconnect failed: ${message}`);
+      if (isFatalQueueRuntimeError(message)) {
+        marketRunning.value = false;
+        queueState.value = "idle";
+        stopMarketHeartbeat();
+        stopRpcBurnLoop();
+        clearRunningMarketState();
+        emit("launch-sound", "not-launched");
+      }
+    });
 }
 
 function clearRunningMarketState() {
   localStorage.removeItem(RUNNING_MARKET_STORAGE_KEY);
+  window.dispatchEvent(new CustomEvent(OVERVIEW_REFRESH_EVENT, { detail: { stopped: true } }));
 }
 
 function readRunningMarketState(): RunningMarketSnapshot | null {
@@ -585,6 +696,7 @@ function handleClientOffline() {
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
+  stopRpcBurnLoop();
   clearRunningMarketState();
   appendTerminal("network offline: queue exit requested");
   emit("launch-sound", "not-launched");
@@ -592,21 +704,16 @@ function handleClientOffline() {
 
 function handleClientStop() {
   if (!marketRunning.value || currentMarket.value.disabled) return;
-  if (startupDetectionAuto.value) {
-    persistRunningMarketState();
-    stopMarketHeartbeat();
-    return;
-  }
   sendQueueStopBeacon(currentMarket.value);
   marketRunning.value = false;
   queueState.value = "paused";
   stopMarketHeartbeat();
+  stopRpcBurnLoop();
   clearRunningMarketState();
 }
 
 function handleClientResume() {
-  if (!startupDetectionAuto.value || !readRunningMarketState()) return;
-  restoreRunningMarketState();
+  clearRunningMarketState();
 }
 
 function sendQueueStopBeacon(item: MarketOption) {
@@ -689,7 +796,16 @@ function authHeaders(authCode = readAuthCode()): Record<string, string> {
 }
 
 function isFatalQueueRuntimeError(message: string): boolean {
-  return /SUPERMTNODE_APP_TOKEN|credits|RPC 未绑定|不能启动|已用完|exhausted|token/i.test(message);
+  return /SUPERMTNODE_APP_TOKEN|授权码|license|credits|RPC 未绑定|不能启动|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|token/i.test(message);
+}
+
+function notifyQueueError(message: string) {
+  if (isCredentialQueueRuntimeError(message)) return;
+  ElMessage.error(message);
+}
+
+function isCredentialQueueRuntimeError(message: string): boolean {
+  return /SUPERMTNODE_APP_TOKEN|授权码|license|token has been rotated|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|token/i.test(message);
 }
 
 async function loadCandidateQueueSnapshot(): Promise<void> {

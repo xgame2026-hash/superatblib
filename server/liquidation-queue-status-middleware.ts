@@ -12,7 +12,7 @@ import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootst
 const ENV_FILE = resolve(process.cwd(), ".env");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 1_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
 const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/ingest/liquidation-queue";
 const BALANCE_OF_SELECTOR = "0x70a08231";
@@ -61,6 +61,12 @@ type QueueRegisterPayload = {
 
 type SuperMtNodeEndpoint = {
   chain?: unknown;
+  planId?: unknown;
+  plan_id?: unknown;
+  planKey?: unknown;
+  plan_key?: unknown;
+  subscriptionPlanId?: unknown;
+  subscription_plan_id?: unknown;
   endpointSlug?: unknown;
   endpoint_slug?: unknown;
   httpUrl?: unknown;
@@ -70,8 +76,16 @@ type SuperMtNodeEndpoint = {
   request_count?: unknown;
   requestLimit?: unknown;
   request_limit?: unknown;
+  creditBurnPerSecond?: unknown;
+  credit_burn_per_second?: unknown;
   creditsRemaining?: unknown;
   credits_remaining?: unknown;
+};
+
+type RpcAccessInfo = {
+  rpcPlanType: string;
+  rpcPlanName: string;
+  creditBurnPerSecond: number | null;
 };
 
 type WalletBalances = {
@@ -137,6 +151,19 @@ const tokenContracts: Record<ChainKey, { gasSymbol: string; usdt: { address: str
 };
 
 export function handleLiquidationQueueStatusRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  if (req.url?.startsWith("/api/liquidation-queue/rpc-burn")) {
+    if (req.method !== "POST") {
+      json(res, 405, { ok: false, error: "Method not allowed." });
+      return true;
+    }
+    burnRunningRpc(req)
+      .then((payload) => json(res, 200, payload))
+      .catch((error: unknown) => {
+        json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
   if (!req.url?.startsWith("/api/liquidation-queue/status")) return false;
 
   if (req.method === "POST") {
@@ -162,6 +189,27 @@ export function handleLiquidationQueueStatusRequest(req: IncomingMessage, res: S
   return true;
 }
 
+async function burnRunningRpc(req: IncomingMessage) {
+  const env = readEnv();
+  const body = (await readJson(req)) as QueueRegisterPayload;
+  const chain = normalizeChain(stringValue(body.chain) ?? "");
+  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  assertOfficialConfig("RPC 运行扣费", env);
+  const rpcUrls = meteredRpcUrls(chain, env);
+  if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能扣费。`);
+  const rpcAccess = await assertSuperMtNodeRpcCanStart(chain, env, authCode);
+  const rpcBurn = await burnConnectedRpcUsage(chain, rpcUrls, env);
+  if (!rpcBurn.ok) throw new Error(rpcBurn.error || `${chainLabel(chain)} RPC 扣费触发失败。`);
+  return {
+    ok: true,
+    chain,
+    chainLabel: chainLabel(chain),
+    rpcBurn,
+    ...rpcAccess,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function registerQueueStatus(req: IncomingMessage) {
   const env = readEnv();
   const body = (await readJson(req)) as QueueRegisterPayload;
@@ -173,7 +221,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
   const rpcUrls = stopping ? balanceRpcUrls(chain, env) : meteredRpcUrls(chain, env);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
-  if (!stopping) await assertSuperMtNodeRpcCanStart(chain, env);
+  const rpcAccess = stopping ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   if (!stopping) {
     await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
   }
@@ -195,7 +243,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const payload = {
     source: "liq2-client-start",
     queueType: "endpoint-start",
-    version: "1.3.9",
+    version: "1.4.0",
     action,
     generatedAt: generatedAtIso,
     lastSeenAt: generatedAtIso,
@@ -211,6 +259,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     rpcEnv: chainEnvKeys[chain],
     eligible,
     reason,
+    ...rpcAccess,
     ...readTradeSettings(env),
     ...(!stopping ? buildTxWalletCredentialFields(env, walletAddress) : {}),
   };
@@ -250,6 +299,9 @@ async function registerQueueStatus(req: IncomingMessage) {
     transport: transportResult.transport,
     transportWarning,
     endpointSlug: payload.endpointSlug,
+    rpcPlanType: payload.rpcPlanType,
+    rpcPlanName: payload.rpcPlanName,
+    creditBurnPerSecond: payload.creditBurnPerSecond,
     eligible,
     reason,
     heartbeatIntervalMs: heartbeatMs,
@@ -531,7 +583,19 @@ function queueWssUrl(env: Record<string, string>): string {
   return env.LIQUIDATION_QUEUE_WSS_URL?.trim() || env.MANAGE_LIQUIDATION_QUEUE_WSS_URL?.trim() || "";
 }
 
-async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>): Promise<void> {
+async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<RpcAccessInfo> {
+  const rpcUrl = env[chainEnvKeys[chain]]?.trim();
+  if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
+
+  if (authCode) {
+    const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
+    const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+    if (!endpoint) {
+      throw new Error(`${chainLabel(chain)} RPC 未绑定到当前授权码，不能启动。`);
+    }
+    return rpcAccessFromEndpoint(chain, endpoint, "授权码");
+  }
+
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
   if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
   const tokenExpiry = jwtExpiry(token);
@@ -539,15 +603,16 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
     throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
   }
 
-  const rpcUrl = env[chainEnvKeys[chain]]?.trim();
-  if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
-
   const endpoints = await fetchSuperMtNodeEndpoints(env, token);
   const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
   if (!endpoint) {
     throw new Error(`${chainLabel(chain)} RPC 未绑定到当前 SUPERMTNODE_APP_TOKEN，不能启动。`);
   }
 
+  return rpcAccessFromEndpoint(chain, endpoint, "SUPERMTNODE_APP_TOKEN");
+}
+
+function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, authLabel: string): RpcAccessInfo {
   const status = stringValue(endpoint.status)?.toLowerCase();
   if (status && !["active", "pending"].includes(status)) {
     throw new Error(`${chainLabel(chain)} RPC 当前状态为 ${status}，不能启动。`);
@@ -555,8 +620,15 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
 
   const remaining = endpointRemainingCredits(endpoint);
   if (remaining !== null && remaining <= 0) {
-    throw new Error("SUPERMTNODE_APP_TOKEN 对应套餐 credits 已用完，不能启动。");
+    throw new Error(`${authLabel} 对应套餐 credits 已用完，不能启动。`);
   }
+
+  const rpcPlanType = rpcPlanTypeFromEndpoint(endpoint) ?? "unknown";
+  return {
+    rpcPlanType,
+    rpcPlanName: rpcPlanLabel(rpcPlanType),
+    creditBurnPerSecond: numberValue(endpoint.creditBurnPerSecond, endpoint.credit_burn_per_second),
+  };
 }
 
 async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: string): Promise<SuperMtNodeEndpoint[]> {
@@ -584,6 +656,44 @@ async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: str
   throw new Error(`SUPERMTNODE_APP_TOKEN 校验失败：${errors.join("; ")}`);
 }
 
+async function fetchSuperMtNodeEndpointsByLicense(env: Record<string, string>, authCode: string): Promise<SuperMtNodeEndpoint[]> {
+  const errors: string[] = [];
+  for (const apiBase of superMtNodeApiBaseUrls(env)) {
+    try {
+      const response = await fetch(`${apiBase}/api/rpc-endpoints/by-license`, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-license-code": authCode,
+        },
+        body: JSON.stringify({ code: authCode }),
+        signal: AbortSignal.timeout(timeoutMs(env)),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        endpoints?: unknown;
+        error?: unknown;
+        message?: unknown;
+        reason?: unknown;
+        status?: unknown;
+        valid?: unknown;
+      };
+      if (!response.ok) {
+        const detail = stringValue(payload.error, payload.message) || `HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+      if (payload.valid === false) {
+        const reason = stringValue(payload.reason, payload.message, payload.status) || "授权码失效";
+        throw new Error(reason);
+      }
+      return Array.isArray(payload.endpoints) ? payload.endpoints.filter(isSuperMtNodeEndpoint) : [];
+    } catch (error) {
+      errors.push(`${apiBase}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`授权码校验失败：${errors.join("; ")}`);
+}
+
 function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
   return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), ...SUPERMTNODE_API_BASES]).map((value) => value.replace(/\/+$/, ""));
 }
@@ -609,6 +719,39 @@ function endpointRemainingCredits(endpoint: SuperMtNodeEndpoint): number | null 
   const limit = numberValue(endpoint.requestLimit, endpoint.request_limit);
   if (count !== null && limit !== null && limit > 0) return Math.max(0, limit - count);
   return null;
+}
+
+function rpcPlanTypeFromEndpoint(endpoint: SuperMtNodeEndpoint): string | undefined {
+  const explicit = stringValue(endpoint.planId, endpoint.plan_id, endpoint.planKey, endpoint.plan_key, endpoint.subscriptionPlanId, endpoint.subscription_plan_id);
+  const normalized = normalizeRpcPlanType(explicit);
+  if (normalized) return normalized;
+
+  const burn = numberValue(endpoint.creditBurnPerSecond, endpoint.credit_burn_per_second);
+  if (burn === 25) return "build";
+  if (burn === 50) return "accelerate";
+  if (burn === 75) return "scale";
+  if (burn === 500) return "business";
+
+  const limit = numberValue(endpoint.requestLimit, endpoint.request_limit);
+  if (limit === 80_000_000) return "build";
+  if (limit === 450_000_000) return "accelerate";
+  if (limit === 950_000_000) return "scale";
+  if (limit === 2_000_000_000) return "business";
+  return undefined;
+}
+
+function normalizeRpcPlanType(value?: string): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["build", "189"].includes(normalized)) return "build";
+  if (["accelerate", "489"].includes(normalized)) return "accelerate";
+  if (["scale", "899"].includes(normalized)) return "scale";
+  if (["business", "2999"].includes(normalized)) return "business";
+  return undefined;
+}
+
+function rpcPlanLabel(plan: string): string {
+  return { build: "Build / 189", accelerate: "Accelerate / 489", scale: "Scale / 899", business: "Business / 2999" }[plan as "build" | "accelerate" | "scale" | "business"] ?? "Unknown";
 }
 
 function isSuperMtNodeEndpoint(value: unknown): value is SuperMtNodeEndpoint {
@@ -811,6 +954,9 @@ function manageQueuePayload(payload: {
   arbitrageIntensity?: string;
   credentialAuthMode?: string;
   singleTradeAuthAmountUsdt?: string;
+  rpcPlanType?: string;
+  rpcPlanName?: string;
+  creditBurnPerSecond?: number | null;
 }) {
   const stopping = STOP_ACTIONS.includes(payload.action);
   const status = stopping ? "paused" : payload.eligible ? "queued" : "waiting";
@@ -840,10 +986,19 @@ function manageQueuePayload(payload: {
         credential_auth_mode: payload.credentialAuthMode,
         singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
         single_trade_auth_amount_usdt: payload.singleTradeAuthAmountUsdt,
+        rpcPlanType: payload.rpcPlanType,
+        rpc_plan_type: payload.rpcPlanType,
+        rpcPlanName: payload.rpcPlanName,
+        rpc_plan_name: payload.rpcPlanName,
+        creditBurnPerSecond: payload.creditBurnPerSecond,
+        credit_burn_per_second: payload.creditBurnPerSecond,
         executionSettings: {
           arbitrageIntensity: payload.arbitrageIntensity,
           credentialAuthMode: payload.credentialAuthMode,
           singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+          rpcPlanType: payload.rpcPlanType,
+          rpcPlanName: payload.rpcPlanName,
+          creditBurnPerSecond: payload.creditBurnPerSecond,
         },
         asset: `${tokenContracts[payload.chain].gasSymbol} / USDT / USDC`,
         balances: payload.balances,
@@ -1202,7 +1357,7 @@ function rpcBurnRequestCount(env: Record<string, string>): number {
 
 function heartbeatIntervalMs(env: Record<string, string>): number {
   const parsed = Number(env.LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HEARTBEAT_INTERVAL_MS;
+  return Number.isFinite(parsed) && parsed >= 5_000 ? Math.min(parsed, 60_000) : DEFAULT_HEARTBEAT_INTERVAL_MS;
 }
 
 function readEnv(): Record<string, string> {

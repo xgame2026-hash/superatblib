@@ -42,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import arbIcon from "../../img/arb.svg";
 import bnbIcon from "../../img/bnb.svg";
 import ethIcon from "../../img/eth.svg";
@@ -66,6 +66,10 @@ const emit = defineEmits<{
   refresh: [];
 }>();
 
+const props = withDefaults(defineProps<{ active?: boolean }>(), {
+  active: true,
+});
+
 const chains: ChainMeta[] = [
   { key: "ethereum", label: "Ethereum", icon: ethIcon },
   { key: "bnb", label: "BNB", icon: bnbIcon },
@@ -73,6 +77,7 @@ const chains: ChainMeta[] = [
 ];
 
 const loading = ref(false);
+let loadedOnce = false;
 const skeletonRows = [1, 2, 3];
 const walletAssets = ref<WalletAssetRow[]>(
   chains.map((chain) => ({
@@ -91,8 +96,15 @@ const chainRows = computed(() =>
 );
 
 onMounted(() => {
-  void refresh();
+  if (props.active) void refreshOnce();
 });
+
+watch(
+  () => props.active,
+  (active) => {
+    if (active) void refreshOnce();
+  },
+);
 
 async function fetchWalletAssets() {
   const response = await fetch("/api/wallet-assets");
@@ -107,9 +119,17 @@ async function refresh() {
   loading.value = true;
   try {
     await fetchWalletAssets();
+    loadedOnce = true;
+  } catch {
+    loadedOnce = false;
   } finally {
     loading.value = false;
   }
+}
+
+async function refreshOnce() {
+  if (loadedOnce) return;
+  await refresh();
 }
 </script>
 

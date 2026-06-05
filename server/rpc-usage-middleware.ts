@@ -12,6 +12,7 @@ type RpcUsageMetric = {
   requestCount: number | null;
   requestLimit: number | null;
   remainingRequests: number | null;
+  creditBurnPerSecond: number | null;
   tokenExpiresAt?: string;
   status: "ok" | "missing_rpc" | "missing_credentials" | "unmatched" | "error";
   message?: string;
@@ -27,6 +28,8 @@ type SuperMtNodeEndpoint = {
   request_count?: unknown;
   requestLimit?: unknown;
   request_limit?: unknown;
+  creditBurnPerSecond?: unknown;
+  credit_burn_per_second?: unknown;
 };
 
 type EndpointFetchResult = {
@@ -118,10 +121,18 @@ function applyEndpointMetrics(metrics: Record<ChainKey, RpcUsageMetric>, env: Re
   for (const chain of chainKeys()) {
     const rpcUrl = env[chainEnvKeys[chain]]?.trim();
     if (!rpcUrl) continue;
-    const endpoint = endpoints.find((item) => matchEndpoint(item, chain, rpcUrl)) ?? endpoints.find((item) => matchChain(item, chain));
+    const endpoint = endpoints.find((item) => matchEndpoint(item, chain, rpcUrl));
+    const sameChainCount = endpoints.filter((item) => matchChain(item, chain)).length;
     metrics[chain] = endpoint
       ? buildMetric(chain, env, endpoint)
-      : emptyMetric(chain, env, "unmatched", "Configured RPC URL was not found in SuperMT Node rpc_endpoints.");
+      : emptyMetric(
+          chain,
+          env,
+          "unmatched",
+          sameChainCount > 0
+            ? "Configured RPC URL did not exactly match this token/license endpoint; usage display was stopped to avoid cross-endpoint data."
+            : "Configured RPC URL was not found in SuperMT Node rpc_endpoints.",
+        );
   }
 }
 
@@ -151,6 +162,7 @@ function emptyMetric(chain: ChainKey, env: Record<string, string>, status: RpcUs
     requestCount: null,
     requestLimit: null,
     remainingRequests: null,
+    creditBurnPerSecond: null,
     status,
     message,
   };
@@ -159,6 +171,7 @@ function emptyMetric(chain: ChainKey, env: Record<string, string>, status: RpcUs
 function buildMetric(chain: ChainKey, env: Record<string, string>, endpoint: SuperMtNodeEndpoint): RpcUsageMetric {
   const requestCount = parseUsageCount(endpointValue(endpoint, "requestCount", "request_count"));
   const requestLimit = parseUsageCount(endpointValue(endpoint, "requestLimit", "request_limit"));
+  const creditBurnPerSecond = parseUsageCount(endpointValue(endpoint, "creditBurnPerSecond", "credit_burn_per_second"));
   const tokenExpiry = jwtExpiry(env.SUPERMTNODE_APP_TOKEN?.trim() ?? "");
   return {
     chain,
@@ -166,6 +179,7 @@ function buildMetric(chain: ChainKey, env: Record<string, string>, endpoint: Sup
     requestCount,
     requestLimit,
     remainingRequests: requestCount !== null && requestLimit !== null && requestLimit > 0 ? Math.max(0, requestLimit - requestCount) : null,
+    creditBurnPerSecond,
     ...(tokenExpiry ? { tokenExpiresAt: tokenExpiry.toISOString() } : {}),
     status: "ok",
   };
