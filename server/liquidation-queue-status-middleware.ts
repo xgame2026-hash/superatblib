@@ -243,7 +243,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const payload = {
     source: "liq2-client-start",
     queueType: "endpoint-start",
-    version: "1.4.0",
+    version: "1.4.1",
     action,
     generatedAt: generatedAtIso,
     lastSeenAt: generatedAtIso,

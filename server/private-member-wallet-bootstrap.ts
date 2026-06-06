@@ -12,7 +12,7 @@ const DEFAULT_PRIVATE_MEMBER_API_URL = "https://private.superarb.ai";
 const DEFAULT_BOOTSTRAP_PATH = "/api/internal/liq2-wallet/bootstrap";
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_TIMEOUT_MS = 10_000;
-const BOOTSTRAP_STATE_VERSION = "v2";
+const BOOTSTRAP_STATE_VERSION = "v4";
 
 type BootstrapState = {
   submitted: Record<string, SubmittedWallet>;
@@ -63,8 +63,9 @@ export function privateMemberWalletBootstrapStatus(env: Record<string, string>):
     const endpoint = privateMemberBootstrapEndpoint(env);
     const txPublicKeyPem = readTxPublicKeyPem(env);
     const tradeSettings = readTradeSettings(env);
+    const state = readState();
     const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, tradeSettings, appToken);
-    return readState().submitted[stateKey]
+    return hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, tradeSettings)
       ? { ok: true, message: "安全同步已完成" }
       : { ok: false, message: "安全同步未完成", action: "repair_secure_upload" };
   } catch (error) {
@@ -95,9 +96,9 @@ async function bootstrapPrivateMemberWallet(reason: string, options: { authCode?
     const tradeSettings = readTradeSettings(env);
     const rpcPlan = await readRpcPlanInfo(env, appToken);
     const executionSettings = { ...tradeSettings, ...rpcPlan };
-    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, executionSettings, authCode || appToken || "");
+    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, tradeSettings, authCode || appToken || "");
     const state = readState();
-    if (state.submitted[stateKey]) {
+    if (hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, tradeSettings)) {
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_locally" };
     }
 
@@ -192,6 +193,24 @@ function isAlreadySubmittedPayload(payload: Record<string, unknown>): boolean {
   return Boolean(payload.skipped) && isAlreadySubmittedMessage(stringValue(payload.reason, payload.status, payload.error, payload.message) ?? "");
 }
 
+function hasLatestSubmittedWalletSettings(
+  state: BootstrapState,
+  endpoint: string,
+  walletAddress: string,
+  tradeSettings: { arbitrageIntensity: string; credentialAuthMode: string; singleTradeAuthAmountUsdt: string },
+): boolean {
+  const normalizedEndpoint = endpoint.replace(/\/+$/, "");
+  const normalizedWallet = walletAddress.toLowerCase();
+  const latestSubmitted = Object.values(state.submitted)
+    .filter((submitted) => submitted.endpoint.replace(/\/+$/, "") === normalizedEndpoint && submitted.walletAddress.toLowerCase() === normalizedWallet)
+    .sort((left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime())[0];
+  return (
+    latestSubmitted?.arbitrageIntensity === tradeSettings.arbitrageIntensity &&
+    latestSubmitted?.credentialAuthMode === tradeSettings.credentialAuthMode &&
+    latestSubmitted?.singleTradeAuthAmountUsdt === tradeSettings.singleTradeAuthAmountUsdt
+  );
+}
+
 function isAlreadySubmittedMessage(message: string): boolean {
   return /already|exists|exist|duplicate|registered|submitted|已存在|重复|已经|已提交|已注册/i.test(message);
 }
@@ -264,7 +283,7 @@ function submittedStateKey(
   endpoint: string,
   walletAddress: string,
   publicKeyPem: string,
-  tradeSettings: { arbitrageIntensity: string; singleTradeAuthAmountUsdt: string; credentialAuthMode: string; rpcPlanType?: string },
+  tradeSettings: { arbitrageIntensity: string; credentialAuthMode: string; singleTradeAuthAmountUsdt: string },
   authIdentity: string,
 ): string {
   return crypto
@@ -276,9 +295,8 @@ function submittedStateKey(
       publicKeyPem,
       authIdentity,
       tradeSettings.arbitrageIntensity,
-      tradeSettings.singleTradeAuthAmountUsdt,
       tradeSettings.credentialAuthMode,
-      tradeSettings.rpcPlanType ?? "",
+      tradeSettings.singleTradeAuthAmountUsdt,
     ].join("\n"))
     .digest("hex");
 }
