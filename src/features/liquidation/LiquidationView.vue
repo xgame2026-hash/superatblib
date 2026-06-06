@@ -389,9 +389,13 @@ let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
 let rpcBurnTimer = 0;
+let rpcBurnInFlight = false;
+let lastRpcBurnErrorMessage = "";
+let lastRpcBurnErrorAt = 0;
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const MARKET_HEARTBEAT_INTERVAL_MS = 10_000;
 const RPC_BURN_INTERVAL_MS = 1_000;
+const RPC_BURN_ERROR_LOG_INTERVAL_MS = 15_000;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
@@ -559,6 +563,8 @@ function stopMarketHeartbeat() {
 
 function startRpcBurnLoop() {
   stopRpcBurnLoop();
+  lastRpcBurnErrorMessage = "";
+  lastRpcBurnErrorAt = 0;
   void burnRunningRpcOnce();
   rpcBurnTimer = window.setInterval(() => {
     void burnRunningRpcOnce();
@@ -573,6 +579,8 @@ function stopRpcBurnLoop() {
 
 async function burnRunningRpcOnce() {
   if (!marketRunning.value || currentMarket.value.disabled) return;
+  if (rpcBurnInFlight) return;
+  rpcBurnInFlight = true;
   try {
     const authCode = readAuthCode();
     const response = await fetch("/api/liquidation-queue/rpc-burn", {
@@ -584,9 +592,11 @@ async function burnRunningRpcOnce() {
     if (!response.ok || payload.ok === false) {
       throw new Error(typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
     }
+    lastRpcBurnErrorMessage = "";
+    lastRpcBurnErrorAt = 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
-    appendTerminal(`rpc burn failed: ${message}`);
+    if (shouldLogRpcBurnError(message)) appendTerminal(`rpc burn failed: ${message}`);
     if (isFatalQueueRuntimeError(message)) {
       marketRunning.value = false;
       queueState.value = "idle";
@@ -596,7 +606,19 @@ async function burnRunningRpcOnce() {
       notifyQueueError(message);
       emit("launch-sound", "not-launched");
     }
+  } finally {
+    rpcBurnInFlight = false;
   }
+}
+
+function shouldLogRpcBurnError(message: string): boolean {
+  const now = Date.now();
+  if (message !== lastRpcBurnErrorMessage || now - lastRpcBurnErrorAt >= RPC_BURN_ERROR_LOG_INTERVAL_MS) {
+    lastRpcBurnErrorMessage = message;
+    lastRpcBurnErrorAt = now;
+    return true;
+  }
+  return false;
 }
 
 async function unregisterMarketQueue(item: MarketOption): Promise<Record<string, any>> {

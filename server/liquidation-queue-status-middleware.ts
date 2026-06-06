@@ -1246,7 +1246,7 @@ async function burnConnectedRpcUsage(
       }
       return { chain, rpcUrl, requestCount: completed, ok: true };
     } catch (error) {
-      lastError = error;
+      lastError = normalizeRpcBurnError(chain, error);
       if (completed > 0) return { chain, rpcUrl, requestCount: completed, ok: true };
     }
   }
@@ -1257,6 +1257,15 @@ async function burnConnectedRpcUsage(
     ok: false,
     error: lastError instanceof Error ? lastError.message : String(lastError),
   };
+}
+
+function normalizeRpcBurnError(chain: ChainKey, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timeout|aborted/i.test(message)) return `${chainLabel(chain)} RPC 请求超时，请检查 ${chainEnvKeys[chain]} 或 RPC 服务可用性。`;
+  if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|network/i.test(message)) {
+    return `${chainLabel(chain)} RPC 连接失败，请检查 ${chainEnvKeys[chain]} 或 RPC 服务可用性。`;
+  }
+  return message;
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
