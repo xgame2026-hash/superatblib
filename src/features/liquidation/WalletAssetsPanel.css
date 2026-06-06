@@ -36,6 +36,26 @@
   border-radius: 7px;
   color: #dcd3f5;
   font-size: 12px;
+  table-layout: fixed;
+}
+
+.wallet-table th:nth-child(1),
+.wallet-table td:nth-child(1) {
+  width: 72px;
+}
+
+.wallet-table th:nth-child(2),
+.wallet-table td:nth-child(2),
+.wallet-table th:nth-child(3),
+.wallet-table td:nth-child(3),
+.wallet-table th:nth-child(4),
+.wallet-table td:nth-child(4) {
+  width: 21%;
+}
+
+.wallet-table th:nth-child(5),
+.wallet-table td:nth-child(5) {
+  width: 23%;
 }
 
 .wallet-table th {
@@ -49,6 +69,18 @@
 .wallet-table td {
   border-bottom: 1px solid rgba(174, 126, 255, 0.1);
   padding: 11px 12px;
+}
+
+.wallet-numeric {
+  overflow: hidden;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet-numeric.is-rpc {
+  min-width: 96px;
 }
 
 .wallet-table img {

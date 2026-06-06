@@ -30,10 +30,10 @@
         <template v-else>
           <tr v-for="item in chainRows" :key="item.key">
             <td><img :src="item.icon" :alt="item.label" /></td>
-            <td>{{ item.asset.gas }}</td>
-            <td>{{ item.asset.usdc }}</td>
-            <td>{{ item.asset.usdt }}</td>
-            <td><slot name="rpc-usage" :chain="item.key">--</slot></td>
+            <td class="wallet-numeric">{{ item.asset.gas }}</td>
+            <td class="wallet-numeric">{{ item.asset.usdc }}</td>
+            <td class="wallet-numeric">{{ item.asset.usdt }}</td>
+            <td class="wallet-numeric is-rpc"><slot name="rpc-usage" :chain="item.key">--</slot></td>
           </tr>
         </template>
       </tbody>
