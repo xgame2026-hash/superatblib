@@ -387,16 +387,14 @@ const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const MARKET_HEARTBEAT_INTERVAL_MS = 10_000;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
+const RUNNING_MARKET_RESTORE_WINDOW_MS = 5 * 60_000;
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 
 onMounted(() => {
-  flushStaleRunningMarketState();
+  restoreRecentRunningMarketState();
   if (props.active) startVisiblePolling();
   void nextTick(updateOpportunitiesPanelHeight);
   window.addEventListener("resize", updateOpportunitiesPanelHeight);
-  window.addEventListener("pagehide", handleClientStop);
-  window.addEventListener("pageshow", handleClientResume);
-  window.addEventListener("beforeunload", handleClientStop);
   window.addEventListener("offline", handleClientOffline);
 });
 
@@ -414,12 +412,8 @@ watch(
 
 onBeforeUnmount(() => {
   stopVisiblePolling();
-  handleClientStop();
   stopMarketHeartbeat();
   window.removeEventListener("resize", updateOpportunitiesPanelHeight);
-  window.removeEventListener("pagehide", handleClientStop);
-  window.removeEventListener("pageshow", handleClientResume);
-  window.removeEventListener("beforeunload", handleClientStop);
   window.removeEventListener("offline", handleClientOffline);
 });
 
@@ -629,10 +623,23 @@ function readRunningMarketState(): RunningMarketSnapshot | null {
   }
 }
 
-function flushStaleRunningMarketState() {
+function restoreRecentRunningMarketState() {
   const saved = readRunningMarketState();
-  if (saved) sendQueueStopBeacon(saved.option);
-  clearRunningMarketState();
+  if (!saved) {
+    clearRunningMarketState();
+    return;
+  }
+  if (!isRecentRunningMarketState(saved)) {
+    sendQueueStopBeacon(saved.option);
+    clearRunningMarketState();
+    return;
+  }
+  restoreRunningMarketState();
+}
+
+function isRecentRunningMarketState(saved: RunningMarketSnapshot) {
+  const updatedAt = Date.parse(saved.updatedAt);
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt <= RUNNING_MARKET_RESTORE_WINDOW_MS;
 }
 
 function handleClientOffline() {
@@ -643,19 +650,6 @@ function handleClientOffline() {
   clearRunningMarketState();
   appendTerminal("network offline: queue exit requested");
   emit("launch-sound", "not-launched");
-}
-
-function handleClientStop() {
-  if (!marketRunning.value || currentMarket.value.disabled) return;
-  sendQueueStopBeacon(currentMarket.value);
-  marketRunning.value = false;
-  queueState.value = "paused";
-  stopMarketHeartbeat();
-  clearRunningMarketState();
-}
-
-function handleClientResume() {
-  clearRunningMarketState();
 }
 
 function sendQueueStopBeacon(item: MarketOption) {
