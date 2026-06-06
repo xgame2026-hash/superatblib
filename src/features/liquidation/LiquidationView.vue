@@ -388,6 +388,7 @@ const MARKET_HEARTBEAT_INTERVAL_MS = 10_000;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const RUNNING_MARKET_RESTORE_WINDOW_MS = 5 * 60_000;
+const QUEUE_REQUEST_TIMEOUT_MS = 12_000;
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 
 onMounted(() => {
@@ -678,11 +679,20 @@ function sendQueueStopBeacon(item: MarketOption) {
 
 async function registerMarketQueueStart(item: MarketOption, action = "start"): Promise<Record<string, any>> {
   const authCode = readAuthCode();
-  const response = await fetch("/api/liquidation-queue/status", {
-    method: "POST",
-    headers: authHeaders(authCode),
-    body: JSON.stringify(queueRequestBody(item, action)),
-  });
+  let response: Response;
+  try {
+    response = await fetch("/api/liquidation-queue/status", {
+      method: "POST",
+      headers: authHeaders(authCode),
+      body: JSON.stringify(queueRequestBody(item, action)),
+      signal: AbortSignal.timeout(QUEUE_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error("队列服务请求超时，请检查授权、网络端点和服务可用性。");
+    }
+    throw error;
+  }
   const payload = (await response.json().catch(() => ({}))) as Record<string, any>;
   if (!response.ok || payload.ok === false) {
     throw new Error(typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
@@ -732,7 +742,7 @@ function authHeaders(authCode = readAuthCode()): Record<string, string> {
 }
 
 function isFatalQueueRuntimeError(message: string): boolean {
-  return /SUPERMTNODE_APP_TOKEN|授权码|license|credits|RPC 未绑定|不能启动|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|token/i.test(message);
+  return /SUPERMTNODE_APP_TOKEN|PRIVATE_KEY|授权码|license|credits|RPC 未绑定|未配置|格式不正确|不能启动|请求超时|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|not configured|invalid|timeout|token/i.test(message);
 }
 
 function notifyQueueError(message: string) {
