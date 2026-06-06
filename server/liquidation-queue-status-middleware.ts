@@ -1369,7 +1369,7 @@ function rpcTimeoutMs(env: Record<string, string>): number {
 
 function rpcBurnRequestCount(env: Record<string, string>): number {
   const parsed = Number(env.LIQUIDATION_QUEUE_RPC_BURN_COUNT ?? env.RPC_KEEPALIVE_BURN_COUNT);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(20, Math.floor(parsed)) : 3;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(3, Math.floor(parsed)) : 1;
 }
 
 function heartbeatIntervalMs(env: Record<string, string>): number {

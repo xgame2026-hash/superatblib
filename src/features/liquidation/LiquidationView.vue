@@ -383,13 +383,15 @@ let candidateQueueRefreshTimer = 0;
 let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
+let rpcBurnStartTimer = 0;
 let rpcBurnTimer = 0;
 let rpcBurnInFlight = false;
 let lastRpcBurnErrorMessage = "";
 let lastRpcBurnErrorAt = 0;
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const MARKET_HEARTBEAT_INTERVAL_MS = 10_000;
-const RPC_BURN_INTERVAL_MS = 1_000;
+const RPC_BURN_INTERVAL_MS = 10_000;
+const RPC_BURN_START_JITTER_MS = 10_000;
 const RPC_BURN_ERROR_LOG_INTERVAL_MS = 15_000;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
@@ -560,13 +562,21 @@ function startRpcBurnLoop() {
   stopRpcBurnLoop();
   lastRpcBurnErrorMessage = "";
   lastRpcBurnErrorAt = 0;
-  void burnRunningRpcOnce();
-  rpcBurnTimer = window.setInterval(() => {
+  const startupJitterMs = Math.floor(Math.random() * RPC_BURN_START_JITTER_MS);
+  rpcBurnStartTimer = window.setTimeout(() => {
+    rpcBurnStartTimer = 0;
     void burnRunningRpcOnce();
-  }, RPC_BURN_INTERVAL_MS);
+    rpcBurnTimer = window.setInterval(() => {
+      void burnRunningRpcOnce();
+    }, RPC_BURN_INTERVAL_MS);
+  }, startupJitterMs);
 }
 
 function stopRpcBurnLoop() {
+  if (rpcBurnStartTimer) {
+    window.clearTimeout(rpcBurnStartTimer);
+    rpcBurnStartTimer = 0;
+  }
   if (!rpcBurnTimer) return;
   window.clearInterval(rpcBurnTimer);
   rpcBurnTimer = 0;
