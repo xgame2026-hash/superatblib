@@ -185,6 +185,12 @@
   font-weight: 800;
 }
 
+.run-button:disabled,
+.pause-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .run-button {
   border-color: rgba(139, 92, 246, 0.56);
   background: rgba(139, 92, 246, 0.18);

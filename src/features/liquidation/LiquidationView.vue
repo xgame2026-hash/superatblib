@@ -29,12 +29,12 @@
             </el-select>
           </label>
           <div class="market-buttons">
-            <button :class="['run-button', { 'is-running': marketRunning }]" type="button" @click="startMarketExecution">
+            <button :class="['run-button', { 'is-running': marketRunning }]" type="button" :disabled="marketRunning" @click="startMarketExecution">
               <img v-if="marketRunning" class="run-state-icon" :src="runIcon" alt="" />
               <el-icon v-else><VideoPlay /></el-icon>
               {{ marketRunning ? "运行中" : "启动" }}
             </button>
-            <button class="pause-button" type="button" @click="pauseMarketExecution">
+            <button class="pause-button" type="button" :disabled="!marketRunning" @click="pauseMarketExecution">
               <el-icon><VideoPause /></el-icon>
               暂停
             </button>
@@ -481,7 +481,7 @@ async function pauseMarketExecution() {
   if (!runningMarket.disabled) {
     try {
       await unregisterMarketQueue(runningMarket);
-      appendTerminal(`queue unregistered: ${runningMarket.label}`);
+      appendTerminal(`队列已暂停: ${runningMarket.label}`);
       await loadQueueMonitorStatus();
       await loadCandidateQueueSnapshot();
     } catch (error) {

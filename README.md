@@ -1,8 +1,8 @@
 # SuperARB Client
 
-Version: 1.4.2
+Version: 1.4.3
 
-SuperARB Client is a local liquidation dashboard and execution console. It reads liquidation snapshots, live WSS queue state, wallet balances, service status, and contract ledger data from the official SuperARB/SuperMT services.
+SuperARB Client is a local liquidation dashboard and execution console. It reads liquidation snapshots, live WSS queue state, asset status, service status, and contract ledger data from the official SuperARB/SuperMT services.
 
 > This repository contains the local client. It is not a standalone indexer or liquidation engine. Some dashboard sections require a valid authorization code and official service tokens.
 
@@ -10,9 +10,9 @@ SuperARB Client is a local liquidation dashboard and execution console. It reads
 
 ### 功能范围
 
-- 最新清算排行榜与排队钱包列表
-- WSS 队列连接状态、排队钱包数量、订阅者数量
-- 钱包 USDT 余额与今日增加金额
+- 最新清算排行榜与排队地址列表
+- WSS 队列连接状态、排队地址数量、订阅者数量
+- 资产状态与今日增加金额
 - 清算策略、服务状态、交易图谱、新闻与设置面板
 - 本地 `.env` 配置管理
 
@@ -61,7 +61,7 @@ SMT-XXXX-XXXX-XXXX-XXXX
 | 数据 | 默认环境变量 | 用途 |
 | --- | --- | --- |
 | 清算快照 | `LIQUIDATION_SNAPSHOT_API_URL` | 排行榜、策略候选、基础队列数据 |
-| WSS 队列状态 | `LIQUIDATION_QUEUE_WSS_STATUS_URL` 或 `LIQ2_PRIVATE_MEMBER_API_URL` | 当前排队钱包、连接状态、钱包数量 |
+| WSS 队列状态 | `LIQUIDATION_QUEUE_WSS_STATUS_URL` | 当前排队地址、连接状态、队列数量 |
 | 今日合约流水 | `LIQUIDATION_QUEUE_TX_EVENTS_URL` | 计算“今日增加” |
 | WSS 授权 | `LIQUIDATION_QUEUE_WSS_TOKEN` | 访问队列与合约流水服务 |
 | 服务授权 | `SUPERMTNODE_APP_TOKEN` | 官方服务校验 |
@@ -69,9 +69,9 @@ SMT-XXXX-XXXX-XXXX-XXXX
 如果只执行 `cp .env.example .env`：
 
 - 有效授权码仍然是必需的。
-- 如果官方公开服务在线，排行榜和排队钱包可能正常显示。
+- 如果官方公开服务在线，排行榜和排队地址可能正常显示。
 - 如果 `LIQUIDATION_QUEUE_WSS_TOKEN` 缺失、过期或被服务端撤销，“今日增加”可能显示为 `--` 或 `0 USDT`。
-- 如果远端 WSS 队列没有在线钱包，列表会显示空状态。
+- 如果远端 WSS 队列没有在线地址，列表会显示空状态。
 
 ### 配置说明
 
@@ -92,7 +92,7 @@ DASHBOARD_PORT=4310
 
 字段说明：
 
-- `BNB_RPC_URL` / `ARBITRUM_RPC_URL` / `ETHEREUM_RPC_URL`：链上查询与钱包资产读取使用。
+- `BNB_RPC_URL` / `ARBITRUM_RPC_URL` / `ETHEREUM_RPC_URL`：网络访问端点，用于读取公开链上状态。
 - `SUPERMTNODE_APP_TOKEN`：官方 SuperMT Node 服务授权。
 - `LIQUIDATION_QUEUE_WSS_TOKEN`：WSS 队列与今日流水授权。
 - `LIQUIDATION_SNAPSHOT_API_URL`：最新清算快照数据源。
@@ -101,22 +101,9 @@ DASHBOARD_PORT=4310
 
 ### “今日增加”如何计算
 
-liq2 会向 `LIQUIDATION_QUEUE_TX_EVENTS_URL` 提交：
+客户端通过官方安全服务读取今日记录，并在页面展示净变化。正数显示绿色，负数显示红色。
 
-```json
-{
-  "chain": "bnb",
-  "wallets": ["0x..."],
-  "date": "YYYY-MM-DD",
-  "from": "local day start",
-  "to": "local day end",
-  "token": "USDT"
-}
-```
-
-服务返回合约流水后，客户端按钱包计算净变化。正数显示绿色，负数显示红色。
-
-如果服务没有返回某个钱包的流水，该钱包会显示 `0 USDT` 或空值，取决于接口返回和本地缓存状态。
+如果官方服务暂时没有返回记录，页面会显示 `0 USDT`、`--` 或空值，取决于接口返回和本地缓存状态。
 
 ### 常见问题
 
@@ -132,14 +119,14 @@ liq2 会向 `LIQUIDATION_QUEUE_TX_EVENTS_URL` 提交：
 DASHBOARD_PORT=4311
 ```
 
-#### “最新清算”没有钱包列表
+#### “最新清算”没有地址列表
 
 检查：
 
 - 是否已经通过授权码登录
 - `LIQUIDATION_SNAPSHOT_API_URL` 是否可访问
-- `LIQ2_PRIVATE_MEMBER_API_URL` 或 WSS 队列状态接口是否可访问
-- 当前官方 WSS 队列是否真的有在线钱包
+- WSS 队列状态接口是否可访问
+- 当前官方 WSS 队列是否真的有在线地址
 
 #### “今日增加”没有显示
 
@@ -148,22 +135,22 @@ DASHBOARD_PORT=4311
 - `LIQUIDATION_QUEUE_TX_EVENTS_URL` 是否配置
 - `LIQUIDATION_QUEUE_WSS_TOKEN` 是否有效
 - 官方合约流水服务是否已返回今日记录
-- 今日是否真的存在该钱包的 USDT 合约流水
+- 今日是否真的存在相关 USDT 合约流水
 
-#### RPC 数据或钱包资产异常
+#### 网络数据或资产状态异常
 
-检查对应链的 RPC：
+检查对应链的网络端点：
 
 - `BNB_RPC_URL`
 - `ARBITRUM_RPC_URL`
 - `ETHEREUM_RPC_URL`
-- fallback RPC 是否还能访问
+- fallback 端点是否还能访问
 
 ### 安全说明
 
 - 不要提交 `.env`。
 - 不要把 `SUPERMTNODE_APP_TOKEN`、`LIQUIDATION_QUEUE_WSS_TOKEN` 发布到公开仓库。
-- `.env.example` 应只作为模板。生产部署应使用自己的授权码、服务 token 和 RPC。
+- `.env.example` 应只作为模板。生产部署应使用自己的授权码、服务 token 和网络端点。
 - 仅在可信环境中运行客户端，并妥善保护本地配置文件。
 
 ### 构建
@@ -188,15 +175,15 @@ DASHBOARD_PORT=4311
 
 ### Overview
 
-SuperARB Client is a local dashboard and execution console for liquidation monitoring. It consumes official SuperARB/SuperMT services for liquidation snapshots, live WSS queue status, wallet balances, service status, and contract ledger data.
+SuperARB Client is a local dashboard and execution console for liquidation monitoring. It consumes official SuperARB/SuperMT services for liquidation snapshots, live WSS queue status, asset status, service status, and contract ledger data.
 
 This client is not a standalone indexer or liquidation backend. A valid authorization code and official service tokens are required for some sections.
 
 ### Features
 
-- Latest liquidation rankings and queued wallet table
+- Latest liquidation rankings and queued address table
 - WSS queue status, participant count, and subscriber count
-- Wallet USDT balances and today's net change
+- Asset status and today's net change
 - Strategy, service status, transaction graph, news, and settings views
 - Local `.env` based configuration
 
@@ -247,7 +234,7 @@ The Latest Liquidations view depends on these official services:
 | Data | Default env var | Purpose |
 | --- | --- | --- |
 | Liquidation snapshot | `LIQUIDATION_SNAPSHOT_API_URL` | Rankings, strategy candidates, base queue data |
-| WSS queue status | `LIQUIDATION_QUEUE_WSS_STATUS_URL` or `LIQ2_PRIVATE_MEMBER_API_URL` | Active queued wallets, connection status, participant count |
+| WSS queue status | `LIQUIDATION_QUEUE_WSS_STATUS_URL` | Active queued addresses, connection status, participant count |
 | Today's contract ledger | `LIQUIDATION_QUEUE_TX_EVENTS_URL` | Computes today's net change |
 | WSS authorization | `LIQUIDATION_QUEUE_WSS_TOKEN` | Access to queue and contract ledger services |
 | Service authorization | `SUPERMTNODE_APP_TOKEN` | Official service validation |
@@ -255,9 +242,9 @@ The Latest Liquidations view depends on these official services:
 With only `cp .env.example .env`:
 
 - A valid authorization code is still required.
-- Rankings and queued wallets may display if the official public services are online.
+- Rankings and queued addresses may display if the official public services are online.
 - Today's net change may display as `--` or `0 USDT` if `LIQUIDATION_QUEUE_WSS_TOKEN` is missing, expired, or revoked.
-- The queue table can be empty when there are no active wallets in the remote WSS queue.
+- The queue table can be empty when there are no active addresses in the remote WSS queue.
 
 ### Configuration
 
@@ -278,7 +265,7 @@ DASHBOARD_PORT=4310
 
 Field notes:
 
-- `BNB_RPC_URL` / `ARBITRUM_RPC_URL` / `ETHEREUM_RPC_URL`: used for chain reads and wallet asset checks.
+- `BNB_RPC_URL` / `ARBITRUM_RPC_URL` / `ETHEREUM_RPC_URL`: network access endpoints used to read public chain state.
 - `SUPERMTNODE_APP_TOKEN`: official SuperMT Node service token.
 - `LIQUIDATION_QUEUE_WSS_TOKEN`: authorization token for WSS queue and today's ledger services.
 - `LIQUIDATION_SNAPSHOT_API_URL`: liquidation snapshot source.
@@ -287,22 +274,9 @@ Field notes:
 
 ### How Today's Net Change Is Calculated
 
-liq2 posts a wallet batch to `LIQUIDATION_QUEUE_TX_EVENTS_URL`:
+The client reads today's records through the official secure service and displays the net change. Positive values are shown in green. Negative values are shown in red.
 
-```json
-{
-  "chain": "bnb",
-  "wallets": ["0x..."],
-  "date": "YYYY-MM-DD",
-  "from": "local day start",
-  "to": "local day end",
-  "token": "USDT"
-}
-```
-
-The service returns contract ledger rows, and the client calculates the net wallet change. Positive values are shown in green. Negative values are shown in red.
-
-If no ledger rows are returned for a wallet, that wallet may show `0 USDT` or an empty value depending on the response and local cache state.
+If the official service has no record available yet, the page may show `0 USDT`, `--`, or an empty value depending on the response and local cache state.
 
 ### Troubleshooting
 
@@ -324,8 +298,8 @@ Check:
 
 - You are logged in with a valid authorization code.
 - `LIQUIDATION_SNAPSHOT_API_URL` is reachable.
-- `LIQ2_PRIVATE_MEMBER_API_URL` or the WSS queue status endpoint is reachable.
-- The official WSS queue currently has active wallets.
+- The WSS queue status endpoint is reachable.
+- The official WSS queue currently has active addresses.
 
 #### Today's net change is missing
 
@@ -334,22 +308,22 @@ Check:
 - `LIQUIDATION_QUEUE_TX_EVENTS_URL` is configured.
 - `LIQUIDATION_QUEUE_WSS_TOKEN` is valid.
 - The official contract ledger service is returning today's records.
-- The wallet has USDT contract events for the current local day.
+- Related USDT contract events exist for the current local day.
 
-#### RPC or wallet asset data looks wrong
+#### Network data or asset status looks wrong
 
-Check the RPC endpoints for the target chain:
+Check the network endpoints for the target chain:
 
 - `BNB_RPC_URL`
 - `ARBITRUM_RPC_URL`
 - `ETHEREUM_RPC_URL`
-- fallback RPC availability
+- fallback endpoint availability
 
 ### Security
 
 - Do not commit `.env`.
 - Do not publish `SUPERMTNODE_APP_TOKEN` or `LIQUIDATION_QUEUE_WSS_TOKEN`.
-- `.env.example` should be treated as a template. Production deployments should use their own authorization code, service tokens, and RPC endpoints.
+- `.env.example` should be treated as a template. Production deployments should use their own authorization code, service tokens, and network endpoints.
 - Run the client only in trusted environments and protect local configuration files carefully.
 
 ### Build
