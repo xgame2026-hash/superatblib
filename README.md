@@ -1,6 +1,6 @@
 # SuperARB Client
 
-Version: 1.4.3
+Version: 1.4.31
 
 SuperARB Client is a local liquidation dashboard and execution console. It reads liquidation snapshots, live WSS queue state, asset status, service status, and contract ledger data from the official SuperARB/SuperMT services.
 
