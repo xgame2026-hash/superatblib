@@ -301,21 +301,16 @@ const snapshotRefreshProgress = ref(0);
 const fallbackExecuteStrategies: SnapshotStrategyRow[] = [
   createFallbackExecuteStrategy("bnb-aave-v3-liquidation", "bnb", "BNB", "Aave V3", "BNB_RPC_URL"),
   createFallbackExecuteStrategy("bnb-venus-liquidation", "bnb", "BNB", "Venus", "BNB_RPC_URL"),
-  createFallbackExecuteStrategy("arb-aave-v3-liquidation", "arbitrum", "ARB", "Aave V3", "ARBITRUM_RPC_URL"),
-  createFallbackExecuteStrategy("arb-morpho-blue-liquidation", "arbitrum", "ARB", "Morpho Blue", "ARBITRUM_RPC_URL"),
-  createFallbackMonitorStrategy("eth-aave-v3-monitor", "ethereum", "ETH", "Aave V3", "ETHEREUM_RPC_URL"),
-  createFallbackMonitorStrategy("eth-morpho-blue-monitor", "ethereum", "ETH", "Morpho Blue", "ETHEREUM_RPC_URL"),
-  createFallbackMonitorStrategy("eth-spark-monitor", "ethereum", "ETH", "Spark", "ETHEREUM_RPC_URL"),
-  createFallbackMonitorStrategy("arb-spark-monitor", "arbitrum", "ARB", "Spark", "ARBITRUM_RPC_URL"),
 ];
 
 const marketOptions = computed<MarketOption[]>(() => {
-  const options = snapshotStrategyRows.value.filter(isDisplayedMarketStrategy).map((strategy) => strategyToMarketOption(strategy));
+  const options = snapshotStrategyRows.value.filter(isDisplayedMarketStrategy).filter(isBnbQueueStrategy).map((strategy) => strategyToMarketOption(strategy));
   return options.length > 0 ? options : fallbackExecuteStrategies.map((strategy) => strategyToMarketOption(strategy));
 });
 const currentMarket = computed(() => marketOptions.value.find((item) => item.value === market.value) ?? marketOptions.value[0] ?? unconfiguredMarket);
 const currentMarketLabel = computed(() => currentMarket.value.label);
-const allMarketSnapshotSummary = computed(() => `${candidateRows.value.length} 个候选 / ${marketOptions.value.filter((item) => item.value !== "unconfigured").length} 个市场`);
+const snapshotMarketCount = computed(() => snapshotStrategyRows.value.filter(isDisplayedMarketStrategy).length || fallbackExecuteStrategies.length);
+const allMarketSnapshotSummary = computed(() => `${candidateRows.value.length} 个候选 / ${snapshotMarketCount.value} 个市场`);
 const queueStateText = computed(() => {
   if (queueState.value === "queued") return "已入队";
   if (queueState.value === "waiting") return "等待清算";
@@ -353,7 +348,7 @@ const currentMarketSnapshotStats = computed<MarketSnapshotStat[]>(() => {
   const liquidationCount = snapshotStrategyRows.value.reduce((total, row) => total + (row.liquidationCount ?? 0), 0);
   const latestUpdatedAt = snapshotStrategyRows.value.map((row) => row.updatedAt).filter(Boolean).sort().at(-1);
   return [
-    { label: "市场", value: `${marketOptions.value.filter((item) => item.value !== "unconfigured").length}` },
+    { label: "市场", value: `${snapshotMarketCount.value}` },
     { label: "候选", value: `${queueCount}` },
     { label: "清算", value: `${liquidationCount}` },
     { label: "更新", value: latestUpdatedAt ? formatSnapshotTime(latestUpdatedAt) : "--" },
@@ -927,23 +922,6 @@ function createFallbackExecuteStrategy(id: string, chain: string, chainLabel: st
   };
 }
 
-function createFallbackMonitorStrategy(id: string, chain: string, chainLabel: string, protocol: string, rpc: string): SnapshotStrategyRow {
-  return {
-    id,
-    chain,
-    chainLabel,
-    protocol,
-    strategy: "本地监听市场",
-    mode: "monitor",
-    rpc,
-    status: "监听待接入",
-    statusTone: "standby",
-    queueCount: 0,
-    liquidationCount: 0,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
 function isCandidateStrategy(strategy: SnapshotStrategyRow) {
   const status = strategy.status || "";
   if ((strategy.queueCount ?? 0) > 0 || /候选|可执行|运行|ready/i.test(status)) return true;
@@ -953,6 +931,10 @@ function isCandidateStrategy(strategy: SnapshotStrategyRow) {
 function isDisplayedMarketStrategy(strategy: SnapshotStrategyRow) {
   if (isCandidateStrategy(strategy)) return true;
   return /aave|morpho|spark|venus|compound|liquity/i.test(strategy.protocol);
+}
+
+function isBnbQueueStrategy(strategy: SnapshotStrategyRow) {
+  return normalizeChainKey(strategy.chain) === "bnb" && strategy.mode === "execute";
 }
 
 function strategyToMarketOption(strategy: SnapshotStrategyRow): MarketOption {

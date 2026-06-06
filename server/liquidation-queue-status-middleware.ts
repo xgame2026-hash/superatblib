@@ -17,6 +17,7 @@ const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liqu
 const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/ingest/liquidation-queue";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
+const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -193,6 +194,7 @@ async function burnRunningRpc(req: IncomingMessage) {
   const env = readEnv();
   const body = (await readJson(req)) as QueueRegisterPayload;
   const chain = normalizeChain(stringValue(body.chain) ?? "");
+  assertQueueChainEnabled(chain);
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   assertOfficialConfig("RPC 运行扣费", env);
   const rpcUrls = meteredRpcUrls(chain, env);
@@ -214,6 +216,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const env = readEnv();
   const body = (await readJson(req)) as QueueRegisterPayload;
   const chain = normalizeChain(stringValue(body.chain) ?? "");
+  assertQueueChainEnabled(chain);
   const action = stringValue(body.action)?.toLowerCase() ?? "start";
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const stopping = STOP_ACTIONS.includes(action);
@@ -243,7 +246,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const payload = {
     source: "liq2-client-start",
     queueType: "endpoint-start",
-    version: "1.4.1",
+    version: "1.4.2",
     action,
     generatedAt: generatedAtIso,
     lastSeenAt: generatedAtIso,
@@ -1266,6 +1269,11 @@ function normalizeRpcBurnError(chain: ChainKey, error: unknown): string {
     return `${chainLabel(chain)} RPC 连接失败，请检查 ${chainEnvKeys[chain]} 或 RPC 服务可用性。`;
   }
   return message;
+}
+
+function assertQueueChainEnabled(chain: ChainKey) {
+  if (ENABLED_QUEUE_CHAINS.includes(chain)) return;
+  throw new Error(`当前版本只运行 BNB 队列，已忽略 ${chainLabel(chain)} 队列请求。`);
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
