@@ -2,7 +2,7 @@
 
 Version: 1.4.2
 
-SuperARB Client is a local liquidation dashboard and execution console. It reads liquidation snapshots, live WSS queue state, wallet balances, RPC usage, and contract ledger data from the official SuperARB/SuperMT services.
+SuperARB Client is a local liquidation dashboard and execution console. It reads liquidation snapshots, live WSS queue state, wallet balances, service status, and contract ledger data from the official SuperARB/SuperMT services.
 
 > This repository contains the local client. It is not a standalone indexer or liquidation engine. Some dashboard sections require a valid authorization code and official service tokens.
 
@@ -13,7 +13,7 @@ SuperARB Client is a local liquidation dashboard and execution console. It reads
 - 最新清算排行榜与排队钱包列表
 - WSS 队列连接状态、排队钱包数量、订阅者数量
 - 钱包 USDT 余额与今日增加金额
-- 清算策略、RPC 使用量、交易图谱、新闻与设置面板
+- 清算策略、服务状态、交易图谱、新闻与设置面板
 - 本地 `.env` 配置管理
 
 ### 快速启动
@@ -64,7 +64,7 @@ SMT-XXXX-XXXX-XXXX-XXXX
 | WSS 队列状态 | `LIQUIDATION_QUEUE_WSS_STATUS_URL` 或 `LIQ2_PRIVATE_MEMBER_API_URL` | 当前排队钱包、连接状态、钱包数量 |
 | 今日合约流水 | `LIQUIDATION_QUEUE_TX_EVENTS_URL` | 计算“今日增加” |
 | WSS 授权 | `LIQUIDATION_QUEUE_WSS_TOKEN` | 访问队列与合约流水服务 |
-| 服务授权 | `SUPERMTNODE_APP_TOKEN` | RPC 使用量与部分官方服务校验 |
+| 服务授权 | `SUPERMTNODE_APP_TOKEN` | 官方服务校验 |
 
 如果只执行 `cp .env.example .env`：
 
@@ -188,7 +188,7 @@ DASHBOARD_PORT=4311
 
 ### Overview
 
-SuperARB Client is a local dashboard and execution console for liquidation monitoring. It consumes official SuperARB/SuperMT services for liquidation snapshots, live WSS queue status, wallet balances, RPC usage, and contract ledger data.
+SuperARB Client is a local dashboard and execution console for liquidation monitoring. It consumes official SuperARB/SuperMT services for liquidation snapshots, live WSS queue status, wallet balances, service status, and contract ledger data.
 
 This client is not a standalone indexer or liquidation backend. A valid authorization code and official service tokens are required for some sections.
 
@@ -197,7 +197,7 @@ This client is not a standalone indexer or liquidation backend. A valid authoriz
 - Latest liquidation rankings and queued wallet table
 - WSS queue status, participant count, and subscriber count
 - Wallet USDT balances and today's net change
-- Strategy, RPC usage, transaction graph, news, and settings views
+- Strategy, service status, transaction graph, news, and settings views
 - Local `.env` based configuration
 
 ### Quick Start
@@ -250,7 +250,7 @@ The Latest Liquidations view depends on these official services:
 | WSS queue status | `LIQUIDATION_QUEUE_WSS_STATUS_URL` or `LIQ2_PRIVATE_MEMBER_API_URL` | Active queued wallets, connection status, participant count |
 | Today's contract ledger | `LIQUIDATION_QUEUE_TX_EVENTS_URL` | Computes today's net change |
 | WSS authorization | `LIQUIDATION_QUEUE_WSS_TOKEN` | Access to queue and contract ledger services |
-| Service authorization | `SUPERMTNODE_APP_TOKEN` | RPC usage and official service validation |
+| Service authorization | `SUPERMTNODE_APP_TOKEN` | Official service validation |
 
 With only `cp .env.example .env`:
 
