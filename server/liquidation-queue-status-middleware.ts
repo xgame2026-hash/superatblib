@@ -222,8 +222,10 @@ async function registerQueueStatus(req: IncomingMessage) {
   const stopping = STOP_ACTIONS.includes(action);
   assertOfficialConfig("执行队列上报", env);
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
-  const rpcUrls = stopping ? balanceRpcUrls(chain, env) : meteredRpcUrls(chain, env);
-  if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
+  const meteredRpcUrl = env[chainEnvKeys[chain]]?.trim();
+  const rpcUrls = balanceRpcUrls(chain, env);
+  if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
+  if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能读取钱包余额。`);
   const rpcAccess = stopping ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   if (!stopping) {
     await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
@@ -233,7 +235,6 @@ async function registerQueueStatus(req: IncomingMessage) {
   const balanceResult = await readQueueBalances(chain, walletAddress, rpcUrls, env, action);
   const balances = balanceResult.balances;
   const gasBalance = balances ? Number(balances.gas.formatted) : null;
-  const rpcBurn = stopping ? undefined : await burnConnectedRpcUsage(chain, rpcUrls, env);
   const wssEndpoint = queueWssUrl(env);
   const httpFallbackEndpoint = manageQueueIngestUrl(env);
   const endpoint = wssEndpoint || httpFallbackEndpoint;
@@ -258,7 +259,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     wallet: { address: walletAddress, balances },
     balances,
     assets: balances,
-    endpointSlug: rpcEndpointSlugFromUrl(balanceResult.rpcUrl ?? rpcUrls[0]),
+    endpointSlug: rpcEndpointSlugFromUrl(meteredRpcUrl),
     rpcEnv: chainEnvKeys[chain],
     eligible,
     reason,
@@ -297,7 +298,6 @@ async function registerQueueStatus(req: IncomingMessage) {
     walletAddress,
     balances,
     balanceStatus: balances ? "ok" : "skipped",
-    rpcBurn,
     endpoint: transportResult.endpoint,
     transport: transportResult.transport,
     transportWarning,

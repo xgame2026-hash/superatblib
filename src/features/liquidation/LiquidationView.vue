@@ -383,16 +383,8 @@ let candidateQueueRefreshTimer = 0;
 let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
-let rpcBurnStartTimer = 0;
-let rpcBurnTimer = 0;
-let rpcBurnInFlight = false;
-let lastRpcBurnErrorMessage = "";
-let lastRpcBurnErrorAt = 0;
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const MARKET_HEARTBEAT_INTERVAL_MS = 10_000;
-const RPC_BURN_INTERVAL_MS = 10_000;
-const RPC_BURN_START_JITTER_MS = 10_000;
-const RPC_BURN_ERROR_LOG_INTERVAL_MS = 15_000;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
@@ -424,7 +416,6 @@ onBeforeUnmount(() => {
   stopVisiblePolling();
   handleClientStop();
   stopMarketHeartbeat();
-  stopRpcBurnLoop();
   window.removeEventListener("resize", updateOpportunitiesPanelHeight);
   window.removeEventListener("pagehide", handleClientStop);
   window.removeEventListener("pageshow", handleClientResume);
@@ -472,14 +463,12 @@ async function startMarketExecution() {
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
     persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
     startMarketHeartbeat(payload.heartbeatIntervalMs);
-    startRpcBurnLoop();
     emit("launch-sound", "launched");
     await loadQueueMonitorStatus();
     await loadCandidateQueueSnapshot();
   } catch (error) {
     queueState.value = "idle";
     marketRunning.value = false;
-    stopRpcBurnLoop();
     clearRunningMarketState();
     const message = error instanceof Error ? error.message : "启动队列上报失败";
     appendTerminal(`queue register failed: ${message}`);
@@ -493,7 +482,6 @@ async function pauseMarketExecution() {
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
-  stopRpcBurnLoop();
   clearRunningMarketState();
   emit("launch-sound", "not-launched");
   if (!runningMarket.disabled) {
@@ -538,7 +526,6 @@ function startMarketHeartbeat(intervalMs: unknown = marketHeartbeatIntervalMs) {
           marketRunning.value = false;
           queueState.value = "idle";
           stopMarketHeartbeat();
-          stopRpcBurnLoop();
           clearRunningMarketState();
           notifyQueueError(message);
           emit("launch-sound", "not-launched");
@@ -556,74 +543,6 @@ function stopMarketHeartbeat() {
   if (!marketHeartbeatTimer) return;
   window.clearInterval(marketHeartbeatTimer);
   marketHeartbeatTimer = 0;
-}
-
-function startRpcBurnLoop() {
-  stopRpcBurnLoop();
-  lastRpcBurnErrorMessage = "";
-  lastRpcBurnErrorAt = 0;
-  const startupJitterMs = Math.floor(Math.random() * RPC_BURN_START_JITTER_MS);
-  rpcBurnStartTimer = window.setTimeout(() => {
-    rpcBurnStartTimer = 0;
-    void burnRunningRpcOnce();
-    rpcBurnTimer = window.setInterval(() => {
-      void burnRunningRpcOnce();
-    }, RPC_BURN_INTERVAL_MS);
-  }, startupJitterMs);
-}
-
-function stopRpcBurnLoop() {
-  if (rpcBurnStartTimer) {
-    window.clearTimeout(rpcBurnStartTimer);
-    rpcBurnStartTimer = 0;
-  }
-  if (!rpcBurnTimer) return;
-  window.clearInterval(rpcBurnTimer);
-  rpcBurnTimer = 0;
-}
-
-async function burnRunningRpcOnce() {
-  if (!marketRunning.value || currentMarket.value.disabled) return;
-  if (rpcBurnInFlight) return;
-  rpcBurnInFlight = true;
-  try {
-    const authCode = readAuthCode();
-    const response = await fetch("/api/liquidation-queue/rpc-burn", {
-      method: "POST",
-      headers: authHeaders(authCode),
-      body: JSON.stringify(queueRequestBody(currentMarket.value, "rpc-burn")),
-    });
-    const payload = (await response.json().catch(() => ({}))) as Record<string, any>;
-    if (!response.ok || payload.ok === false) {
-      throw new Error(typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
-    }
-    lastRpcBurnErrorMessage = "";
-    lastRpcBurnErrorAt = 0;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
-    if (shouldLogRpcBurnError(message)) appendTerminal(`rpc burn failed: ${message}`);
-    if (isFatalQueueRuntimeError(message)) {
-      marketRunning.value = false;
-      queueState.value = "idle";
-      stopMarketHeartbeat();
-      stopRpcBurnLoop();
-      clearRunningMarketState();
-      notifyQueueError(message);
-      emit("launch-sound", "not-launched");
-    }
-  } finally {
-    rpcBurnInFlight = false;
-  }
-}
-
-function shouldLogRpcBurnError(message: string): boolean {
-  const now = Date.now();
-  if (message !== lastRpcBurnErrorMessage || now - lastRpcBurnErrorAt >= RPC_BURN_ERROR_LOG_INTERVAL_MS) {
-    lastRpcBurnErrorMessage = message;
-    lastRpcBurnErrorAt = now;
-    return true;
-  }
-  return false;
 }
 
 async function unregisterMarketQueue(item: MarketOption): Promise<Record<string, any>> {
@@ -668,7 +587,6 @@ function restoreRunningMarketState() {
   marketRunning.value = true;
   setTerminalLines([`queue restored: ${saved.market}`, "startup detection: auto reconnect enabled"]);
   startMarketHeartbeat();
-  startRpcBurnLoop();
   void registerMarketQueueStart(saved.option, "heartbeat")
     .then((payload) => {
       persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined);
@@ -682,7 +600,6 @@ function restoreRunningMarketState() {
         marketRunning.value = false;
         queueState.value = "idle";
         stopMarketHeartbeat();
-        stopRpcBurnLoop();
         clearRunningMarketState();
         emit("launch-sound", "not-launched");
       }
@@ -723,7 +640,6 @@ function handleClientOffline() {
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
-  stopRpcBurnLoop();
   clearRunningMarketState();
   appendTerminal("network offline: queue exit requested");
   emit("launch-sound", "not-launched");
@@ -735,7 +651,6 @@ function handleClientStop() {
   marketRunning.value = false;
   queueState.value = "paused";
   stopMarketHeartbeat();
-  stopRpcBurnLoop();
   clearRunningMarketState();
 }
 
