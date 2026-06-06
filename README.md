@@ -84,7 +84,7 @@ BNB_RPC_URL=
 ARBITRUM_RPC_URL=
 ETHEREUM_RPC_URL=
 SUPERMTNODE_APP_TOKEN=
-LIQUIDATION_QUEUE_WSS_TOKEN=
+LIQUIDATION_QUEUE_WSS_TOKEN=325cd936fa62340f8080a95c2d430a394ecc659a011d9f455b1d6d2f197f37b5
 LIQUIDATION_SNAPSHOT_API_URL=https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot
 LIQUIDATION_QUEUE_TX_EVENTS_URL=https://private.superarb.ai/api/liquidation-queue/contract-events/today
 DASHBOARD_PORT=4310
@@ -149,7 +149,7 @@ DASHBOARD_PORT=4311
 ### 安全说明
 
 - 不要提交 `.env`。
-- 不要把 `SUPERMTNODE_APP_TOKEN`、`LIQUIDATION_QUEUE_WSS_TOKEN` 发布到公开仓库。
+- 不要把 `SUPERMTNODE_APP_TOKEN` 发布到公开仓库。
 - `.env.example` 应只作为模板。生产部署应使用自己的授权码、服务 token 和网络端点。
 - 仅在可信环境中运行客户端，并妥善保护本地配置文件。
 
@@ -257,7 +257,7 @@ BNB_RPC_URL=
 ARBITRUM_RPC_URL=
 ETHEREUM_RPC_URL=
 SUPERMTNODE_APP_TOKEN=
-LIQUIDATION_QUEUE_WSS_TOKEN=
+LIQUIDATION_QUEUE_WSS_TOKEN=325cd936fa62340f8080a95c2d430a394ecc659a011d9f455b1d6d2f197f37b5
 LIQUIDATION_SNAPSHOT_API_URL=https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot
 LIQUIDATION_QUEUE_TX_EVENTS_URL=https://private.superarb.ai/api/liquidation-queue/contract-events/today
 DASHBOARD_PORT=4310
@@ -322,7 +322,7 @@ Check the network endpoints for the target chain:
 ### Security
 
 - Do not commit `.env`.
-- Do not publish `SUPERMTNODE_APP_TOKEN` or `LIQUIDATION_QUEUE_WSS_TOKEN`.
+- Do not publish `SUPERMTNODE_APP_TOKEN`.
 - `.env.example` should be treated as a template. Production deployments should use their own authorization code, service tokens, and network endpoints.
 - Run the client only in trusted environments and protect local configuration files carefully.
 
