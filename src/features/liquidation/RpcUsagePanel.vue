@@ -121,14 +121,17 @@ function createEmptyRpcUsageMetric(chain: ChainKey): RpcUsageMetric {
 }
 
 function tickRpcUsage() {
-  const runningChain = readRunningChain();
-  if (!runningChain) return;
+  const runningMarket = readRunningMarket();
+  if (!runningMarket) return;
   const nextUsage = { ...rpcUsage.value };
   let changed = false;
   for (const chain of Object.keys(nextUsage) as ChainKey[]) {
-    if (chain !== runningChain) continue;
+    if (chain !== runningMarket.chain) continue;
     const metric = nextUsage[chain];
-    const burn = typeof metric.creditBurnPerSecond === "number" && Number.isFinite(metric.creditBurnPerSecond) ? metric.creditBurnPerSecond : 0;
+    const burn =
+      typeof metric.creditBurnPerSecond === "number" && Number.isFinite(metric.creditBurnPerSecond)
+        ? metric.creditBurnPerSecond
+        : runningMarket.creditBurnPerSecond;
     if (metric.status !== "ok" || burn <= 0 || typeof metric.requestCount !== "number") continue;
     const nextRequestCount = metric.requestCount + burn;
     const nextRemaining =
@@ -143,16 +146,23 @@ function tickRpcUsage() {
   if (changed) rpcUsage.value = nextUsage;
 }
 
-function readRunningChain(): ChainKey | null {
+function readRunningMarket(): { chain: ChainKey; creditBurnPerSecond: number } | null {
   const raw = localStorage.getItem(RUNNING_MARKET_STORAGE_KEY);
   if (!raw) return null;
   try {
-    const saved = JSON.parse(raw) as { queueState?: string; chain?: unknown; option?: { chain?: unknown; disabled?: boolean } };
+    const saved = JSON.parse(raw) as {
+      queueState?: string;
+      chain?: unknown;
+      creditBurnPerSecond?: unknown;
+      option?: { chain?: unknown; disabled?: boolean };
+    };
     if (saved.queueState === "paused" || saved.option?.disabled) return null;
     const value = String(saved.chain || saved.option?.chain || "").toLowerCase();
-    if (value.includes("bnb")) return "bnb";
-    if (value.includes("arb")) return "arbitrum";
-    if (value.includes("eth")) return "ethereum";
+    const creditBurnPerSecond =
+      typeof saved.creditBurnPerSecond === "number" && Number.isFinite(saved.creditBurnPerSecond) ? saved.creditBurnPerSecond : 0;
+    if (value.includes("bnb")) return { chain: "bnb", creditBurnPerSecond };
+    if (value.includes("arb")) return { chain: "arbitrum", creditBurnPerSecond };
+    if (value.includes("eth")) return { chain: "ethereum", creditBurnPerSecond };
     return null;
   } catch {
     return null;
