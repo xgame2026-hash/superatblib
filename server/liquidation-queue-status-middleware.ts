@@ -830,9 +830,15 @@ async function sendQueuePayloadOverWss(
   queuePayload: ReturnType<typeof manageQueuePayload>,
 ): Promise<Record<string, unknown>> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
-  const token = env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim();
-  if (!token) {
-    throw new Error("队列 WSS Token 本地未配置，请先在设置中保存官方配置。");
+  const token = firstUsableToken(
+    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
+    env.LIQUIDATION_SNAPSHOT_TOKEN,
+    env.MANAGE_INGEST_TOKEN,
+  );
+  if (!token && !authCode) {
+    throw new Error("队列 WSS 授权未配置，请先登录授权码或在设置中保存官方配置。");
   }
   const ws = new WebSocket(correctWssEndpoint(endpoint, env));
   const timeout = timeoutMs(env);
@@ -890,7 +896,7 @@ async function sendQueuePayloadOverWss(
         messageId: authMessageId,
         requestId: authMessageId,
         clientMessageId: authMessageId,
-        token,
+        token: token || authCode,
         authCode,
         source: "liq2-client",
         queueIdentities,

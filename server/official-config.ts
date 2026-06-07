@@ -184,7 +184,7 @@ export function checkOfficialConfig(scope: string, env: Record<string, string>):
 
 export async function checkRuntimeSettings(scope: string, env: Record<string, string>, authCode = ""): Promise<SecurityCheckItem[]> {
   const wallet = checkWallet(scope, env);
-  const queueToken = checkQueueWssToken(scope, env);
+  const queueToken = checkQueueWssToken(scope, env, authCode);
   const tokenPromise = checkSuperMtNodeToken(scope, env);
   const licensePromise = authCode ? checkLicenseEndpoints(env, authCode) : Promise.resolve({ endpoints: [], error: "" });
   const [token, license] = await Promise.all([tokenPromise, licensePromise]);
@@ -298,15 +298,18 @@ function checkWallet(scope: string, env: Record<string, string>): SecurityCheckI
   };
 }
 
-function checkQueueWssToken(scope: string, env: Record<string, string>): SecurityCheckItem {
+function checkQueueWssToken(scope: string, env: Record<string, string>, authCode = ""): SecurityCheckItem {
   const token = env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() ?? "";
+  const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
+  const ok = Boolean(token || appToken || authCode);
+  const message = token ? "队列授权已配置" : appToken ? "使用服务授权 Token" : authCode ? "使用登录授权码" : "本地未配置";
   return {
     scope,
     key: "LIQUIDATION_QUEUE_WSS_TOKEN",
     label: "队列 WSS Token",
-    value: token ? "已配置" : "",
-    ok: Boolean(token),
-    message: token ? "队列授权已配置" : "本地未配置",
+    value: token ? "已配置" : appToken ? "使用服务授权 Token" : authCode ? "使用登录授权码" : "",
+    ok,
+    message,
   };
 }
 
@@ -550,6 +553,13 @@ function jwtExpiry(token: string): Date | null {
   } catch {
     return null;
   }
+}
+
+function usableToken(value: string | undefined): string {
+  const token = value?.trim() ?? "";
+  if (!token) return "";
+  const expiry = jwtExpiry(token);
+  return expiry && expiry.getTime() <= Date.now() ? "" : token;
 }
 
 function numberValue(...values: unknown[]): number | null {
