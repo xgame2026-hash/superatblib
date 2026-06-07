@@ -1103,6 +1103,11 @@ function isMatchingRemoteQueueRow(row: Record<string, unknown>, payload: { chain
   if (wallet.toLowerCase() !== payload.walletAddress.toLowerCase()) return false;
   const rowChain = stringValue(row.chain, row.network, row.chainKey, row.chain_key);
   if (rowChain && normalizeChain(rowChain) !== payload.chain) return false;
+  const payloadEndpointSlug = normalizeEndpointSlug(payload.endpointSlug);
+  const rowEndpointSlug = normalizeEndpointSlug(stringValue(row.endpointSlug, row.endpoint_slug, row.rpcEndpointSlug, row.rpc_endpoint_slug));
+  if (payloadEndpointSlug && rowEndpointSlug && rowEndpointSlug !== payloadEndpointSlug) return false;
+  const rowParticipantKey = stringValue(row.participantId, row.participant_id, row.queueMemberKey, row.queue_member_key, row.dedupeKey, row.dedupe_key, row.id);
+  if (payloadEndpointSlug && rowParticipantKey?.startsWith("endpoint-start:") && !rowParticipantKey.includes(`:${payloadEndpointSlug}:`)) return false;
   const action = (stringValue(row.action) ?? "").toLowerCase();
   const status = (stringValue(row.status) ?? "").toLowerCase();
   if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister"].includes(status)) return false;
@@ -1185,7 +1190,7 @@ function manageQueuePayload(payload: {
   const stopping = STOP_ACTIONS.includes(payload.action);
   const status = stopping ? "paused" : payload.eligible ? "queued" : "waiting";
   const queueMemberKey = buildQueueMemberKey(payload.chain, payload.walletAddress, payload.market, payload.endpointSlug);
-  const queueItemId = `endpoint-start:${payload.chain}:${payload.walletAddress.toLowerCase()}:${payload.market}`;
+  const queueItemId = queueMemberKey;
   return {
     chain: payload.chain,
     source: `${chainLabel(payload.chain).toLowerCase()}-rpc-queue`,
