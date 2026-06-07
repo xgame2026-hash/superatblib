@@ -280,7 +280,15 @@ async function registerQueueStatus(req: IncomingMessage) {
     transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
   }
 
-  const remoteQueue = !stopping && remoteQueueVerifyEnabled(env) ? await verifyRemoteQueueRegistration(env, req, payload) : undefined;
+  let remoteQueue: { verified: true; participantId?: string } | undefined;
+  let remoteQueueWarning: string | undefined;
+  if (!stopping && remoteQueueVerifyEnabled(env)) {
+    try {
+      remoteQueue = await verifyRemoteQueueRegistration(env, req, payload);
+    } catch (error) {
+      remoteQueueWarning = error instanceof Error ? error.message : String(error);
+    }
+  }
 
   try {
     if (!stopping) updateLocalQueueState(payload);
@@ -312,6 +320,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     queue: isRecord(transportResult.payload.queue) ? transportResult.payload.queue : null,
     remoteQueueVerified: remoteQueue?.verified ?? false,
     remoteQueueParticipantId: remoteQueue?.participantId,
+    remoteQueueWarning,
     remote: transportResult.payload,
     remoteAvailable: true,
     updatedAt: new Date().toISOString(),
@@ -1081,8 +1090,8 @@ function remoteQueueStatusUrl(env: Record<string, string>): string {
 function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const token = firstUsableToken(
-    env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,
@@ -1105,7 +1114,18 @@ function readRemoteQueueRows(payload: Record<string, unknown>): Record<string, u
   const source = payload.items ?? payload.queue ?? payload.queues ?? payload.rows;
   if (Array.isArray(source)) return source.filter(isRecord);
   if (isRecord(source)) return Object.values(source).flatMap((value) => (Array.isArray(value) ? value.filter(isRecord) : isRecord(value) ? [value] : []));
-  return [];
+  const nested = [payload.chainQueues, payload.chain_queues, payload.markets, payload.data].filter(isRecord);
+  return nested.flatMap((record) => Object.values(record).flatMap(readRemoteQueueRowsFromUnknown));
+}
+
+function readRemoteQueueRowsFromUnknown(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.flatMap(readRemoteQueueRowsFromUnknown);
+  if (!isRecord(value)) return [];
+  const direct = value.items ?? value.queue ?? value.queues ?? value.rows ?? value.members;
+  if (Array.isArray(direct)) return direct.filter(isRecord);
+  if (isRecord(direct)) return Object.values(direct).flatMap(readRemoteQueueRowsFromUnknown);
+  if (remoteQueueWallet(value) || stringValue(value.participantId, value.participant_id, value.queueMemberKey, value.queue_member_key, value.dedupeKey, value.dedupe_key, value.id)) return [value];
+  return Object.values(value).flatMap(readRemoteQueueRowsFromUnknown);
 }
 
 function isMatchingRemoteQueueRow(row: Record<string, unknown>, payload: { chain: ChainKey; market: string; walletAddress: string; endpointSlug?: string }): boolean {
@@ -1126,10 +1146,12 @@ function isMatchingRemoteQueueRow(row: Record<string, unknown>, payload: { chain
 }
 
 function remoteQueueWallet(row: Record<string, unknown>): string {
-  const direct = stringValue(row.walletAddress, row.wallet_address, row.address, row.account, row.user, row.borrower);
+  const direct = stringValue(row.walletAddress, row.wallet_address, row.address, row.account, row.user, row.borrower, row.owner, row.wallet_id, row.walletId);
   if (direct) return direct;
   if (typeof row.wallet === "string") return row.wallet.trim();
   if (isRecord(row.wallet)) return stringValue(row.wallet.address, row.wallet.walletAddress, row.wallet.wallet_address) ?? "";
+  if (isRecord(row.member)) return stringValue(row.member.walletAddress, row.member.wallet_address, row.member.wallet, row.member.address) ?? "";
+  if (isRecord(row.participant)) return stringValue(row.participant.walletAddress, row.participant.wallet_address, row.participant.wallet, row.participant.address) ?? "";
   return "";
 }
 
