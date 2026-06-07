@@ -328,8 +328,8 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
 
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
   const token = firstUsableToken(
-    env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,

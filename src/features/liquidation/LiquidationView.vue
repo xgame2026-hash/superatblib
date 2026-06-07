@@ -225,6 +225,7 @@ type SnapshotQueueRow = {
   queueType?: string;
   endpointSlug?: string;
   endpointId?: string;
+  balances?: unknown;
 };
 
 type SnapshotSourceRow = {
@@ -291,6 +292,7 @@ const queueState = ref<QueueState>("idle");
 const marketRunning = ref(false);
 const queueMonitorRows = ref<ClientQueueStatusRow[]>(createEmptyClientQueueRows());
 const candidateQueueRows = ref<SnapshotQueueRow[]>([]);
+const queuedWalletRows = ref<SnapshotQueueRow[]>([]);
 const snapshotSourceRows = ref<SnapshotSourceRow[]>([]);
 const snapshotStrategyRows = ref<SnapshotStrategyRow[]>([]);
 const queueMonitorParticipantCount = ref(0);
@@ -310,7 +312,7 @@ const marketOptions = computed<MarketOption[]>(() => {
 const currentMarket = computed(() => marketOptions.value.find((item) => item.value === market.value) ?? marketOptions.value[0] ?? unconfiguredMarket);
 const currentMarketLabel = computed(() => currentMarket.value.label);
 const snapshotMarketCount = computed(() => snapshotStrategyRows.value.filter(isDisplayedMarketStrategy).length || fallbackExecuteStrategies.length);
-const allMarketSnapshotSummary = computed(() => `${candidateRows.value.length} 个候选 / ${snapshotMarketCount.value} 个市场`);
+const allMarketSnapshotSummary = computed(() => `${candidateQueueRows.value.length} 个候选 / ${queuedWalletRows.value.length} 个运行节点 / ${snapshotMarketCount.value} 个市场`);
 const queueStateText = computed(() => {
   if (queueState.value === "queued") return "已入队";
   if (queueState.value === "waiting") return "等待清算";
@@ -323,6 +325,11 @@ const queueTone = computed(() => {
   return "neutral";
 });
 const monitorMessages = computed(() => {
+  const walletMessages = queuedWalletRows.value.slice(0, 4).map((row) => {
+    const wallet = row.walletShort || shortAddress(row.wallet) || "--";
+    const chain = row.chainLabel || normalizeChainLabel(row.chain);
+    return `运行节点 ${chain}: ${wallet} / ${row.protocol || "--"} / ${row.status || "已入队"}`;
+  });
   const candidateMessages = candidateQueueRows.value.slice(0, 8).map((row) => {
     const wallet = row.walletShort || shortAddress(row.wallet) || "--";
     const chain = row.chainLabel || normalizeChainLabel(row.chain);
@@ -332,13 +339,17 @@ const monitorMessages = computed(() => {
     const chain = row.chainLabel || normalizeChainLabel(row.chain);
     return `策略快照 ${chain}: ${row.source || "--"} / 候选 ${row.queueCount ?? 0} / 清算 ${row.liquidationCount ?? 0} / ${row.status || "--"}`;
   });
-  const messages = [...candidateMessages, ...sourceMessages];
+  const messages = [...walletMessages, ...candidateMessages, ...sourceMessages];
   return messages.length > 0 ? messages : [`${currentMarketLabel.value} 策略快照: 等待后端返回候选账户`];
 });
-const candidateQueueStatusText = computed(() => (candidateQueueRows.value.length > 0 ? `${candidateQueueRows.value.length} 个候选` : queueStateText.value));
-const candidateRows = computed<CandidateRow[]>(() => candidateQueueRows.value.map(queueToCandidateRow));
+const candidateQueueStatusText = computed(() => {
+  if (queuedWalletRows.value.length || candidateQueueRows.value.length) return `${queuedWalletRows.value.length} 个运行节点 / ${candidateQueueRows.value.length} 个候选`;
+  return queueStateText.value;
+});
+const candidateRows = computed<CandidateRow[]>(() => [...queuedWalletRows.value.map(queueToNodeRow), ...candidateQueueRows.value.map(queueToCandidateRow)]);
 const filteredCandidates = computed(() => {
   return candidateRows.value.filter((item) => {
+    if (item.source === "运行节点") return true;
     if (source.value !== "全部" && item.source !== source.value) return false;
     return true;
   });
@@ -762,13 +773,15 @@ async function loadCandidateQueueSnapshot(): Promise<void> {
       headers: authHeaders(),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = (await response.json()) as { queue?: SnapshotQueueRow[]; sources?: SnapshotSourceRow[]; strategies?: SnapshotStrategyRow[] };
+    const payload = (await response.json()) as { queue?: SnapshotQueueRow[]; queuedWallets?: SnapshotQueueRow[]; sources?: SnapshotSourceRow[]; strategies?: SnapshotStrategyRow[] };
     candidateQueueRows.value = Array.isArray(payload.queue) ? payload.queue.filter(isCandidateAccountRow) : [];
+    queuedWalletRows.value = Array.isArray(payload.queuedWallets) ? payload.queuedWallets.filter(isQueuedWalletRow) : [];
     snapshotSourceRows.value = Array.isArray(payload.sources) ? payload.sources : [];
     snapshotStrategyRows.value = Array.isArray(payload.strategies) ? payload.strategies.map(normalizeStrategyRow) : [];
     syncSelectedMarket();
   } catch {
     candidateQueueRows.value = [];
+    queuedWalletRows.value = [];
     snapshotSourceRows.value = [];
     snapshotStrategyRows.value = [];
     syncSelectedMarket();
@@ -939,6 +952,44 @@ function queueToCandidateRow(row: SnapshotQueueRow): CandidateRow {
   };
 }
 
+function queueToNodeRow(row: SnapshotQueueRow): CandidateRow {
+  const accountFull = row.wallet || row.walletShort || "--";
+  const marketId = strategyIdForQueue(row);
+  const gas = formattedBalance(row.balances, "gas");
+  const usdt = formattedBalance(row.balances, "usdt");
+  return {
+    market: marketId,
+    marketLabel: marketLabelForQueue(row, marketId),
+    source: "运行节点",
+    account: row.walletShort || shortAddress(row.wallet) || "--",
+    accountFull,
+    hf: "节点",
+    hfTone: "neutral",
+    status: statusLabelForQueuedWallet(row.status),
+    statusTone: "review",
+    action: "运行中",
+    debt: usdt && usdt !== "--" ? `${usdt} USDT` : "--",
+    collateral: gas && gas !== "--" ? `${gas} ${row.chainLabel || normalizeChainLabel(row.chain)}` : row.asset || "--",
+    gross: "--",
+    net: "--",
+  };
+}
+
+function statusLabelForQueuedWallet(status?: string) {
+  const normalized = (status || "").toLowerCase();
+  if (["queued", "active", "running"].includes(normalized)) return "已入队";
+  if (["waiting", "pending"].includes(normalized)) return "等待";
+  if (["paused", "stopped"].includes(normalized)) return "已暂停";
+  return status || "已入队";
+}
+
+function formattedBalance(balances: unknown, key: string): string {
+  if (!balances || typeof balances !== "object") return "--";
+  const value = (balances as Record<string, any>)[key];
+  if (value && typeof value === "object" && typeof value.formatted === "string") return value.formatted;
+  return typeof value === "string" ? value : "--";
+}
+
 function isCandidateAccountRow(row: SnapshotQueueRow) {
   const source = (row.source || "").toLowerCase();
   const queueType = (row.queueType || "").toLowerCase();
@@ -948,6 +999,13 @@ function isCandidateAccountRow(row: SnapshotQueueRow) {
   if (id.startsWith("endpoint-start:")) return false;
   if (row.endpointSlug || row.endpointId) return false;
   return Boolean(row.healthFactor && row.healthFactor !== "--") || /scanner|strategy|scan|策略/i.test(row.source || "");
+}
+
+function isQueuedWalletRow(row: SnapshotQueueRow) {
+  const source = (row.source || "").toLowerCase();
+  const queueType = (row.queueType || "").toLowerCase();
+  const id = (row.id || "").toLowerCase();
+  return source.includes("rpc-queue") || source.includes("client-queue") || source.includes("endpoint-queue") || queueType.includes("endpoint") || id.startsWith("endpoint-start:");
 }
 
 async function copyAccountAddress(address: string) {
