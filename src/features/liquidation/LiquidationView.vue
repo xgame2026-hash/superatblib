@@ -394,8 +394,11 @@ let candidateQueueRefreshTimer = 0;
 let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
+let marketRpcBurnTimer = 0;
+let marketRpcBurnInFlight = false;
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const MARKET_HEARTBEAT_INTERVAL_MS = 10_000;
+const MARKET_RPC_BURN_INTERVAL_MS = 1_000;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const RUNNING_MARKET_RESTORE_WINDOW_MS = 5 * 60_000;
@@ -425,6 +428,7 @@ watch(
 onBeforeUnmount(() => {
   stopVisiblePolling();
   stopMarketHeartbeat();
+  stopMarketRpcBurn();
   window.removeEventListener("resize", updateOpportunitiesPanelHeight);
   window.removeEventListener("offline", handleClientOffline);
 });
@@ -470,12 +474,14 @@ async function startMarketExecution() {
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
     persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
     startMarketHeartbeat(payload.heartbeatIntervalMs);
+    startMarketRpcBurn();
     emit("launch-sound", "launched");
     await loadQueueMonitorStatus();
     await loadCandidateQueueSnapshot();
   } catch (error) {
     queueState.value = "idle";
     marketRunning.value = false;
+    stopMarketRpcBurn();
     clearRunningMarketState();
     const message = error instanceof Error ? error.message : "启动队列上报失败";
     appendTerminal(`queue register failed: ${message}`);
@@ -489,6 +495,7 @@ async function pauseMarketExecution() {
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
+  stopMarketRpcBurn();
   clearRunningMarketState();
   emit("launch-sound", "not-launched");
   if (!runningMarket.disabled) {
@@ -533,6 +540,7 @@ function startMarketHeartbeat(intervalMs: unknown = marketHeartbeatIntervalMs) {
           marketRunning.value = false;
           queueState.value = "idle";
           stopMarketHeartbeat();
+          stopMarketRpcBurn();
           clearRunningMarketState();
           notifyQueueError(message);
           emit("launch-sound", "not-launched");
@@ -552,8 +560,70 @@ function stopMarketHeartbeat() {
   marketHeartbeatTimer = 0;
 }
 
+function startMarketRpcBurn() {
+  stopMarketRpcBurn();
+  void burnRunningMarketRpc();
+  marketRpcBurnTimer = window.setInterval(() => {
+    void burnRunningMarketRpc();
+  }, MARKET_RPC_BURN_INTERVAL_MS);
+}
+
+function stopMarketRpcBurn() {
+  if (marketRpcBurnTimer) window.clearInterval(marketRpcBurnTimer);
+  marketRpcBurnTimer = 0;
+  marketRpcBurnInFlight = false;
+}
+
+async function burnRunningMarketRpc() {
+  if (marketRpcBurnInFlight || !marketRunning.value || currentMarket.value.disabled) return;
+  marketRpcBurnInFlight = true;
+  try {
+    const payload = await burnMarketRpc(currentMarket.value);
+    persistRunningMarketState(
+      typeof payload.walletAddress === "string" ? payload.walletAddress : undefined,
+      payload,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "RPC 运行扣费失败";
+    appendTerminal(`rpc burn failed: ${message}`);
+    sendQueueStopBeacon(currentMarket.value);
+    marketRunning.value = false;
+    queueState.value = "idle";
+    stopMarketHeartbeat();
+    stopMarketRpcBurn();
+    clearRunningMarketState();
+    notifyQueueError(message);
+    emit("launch-sound", "not-launched");
+  } finally {
+    marketRpcBurnInFlight = false;
+  }
+}
+
 async function unregisterMarketQueue(item: MarketOption): Promise<Record<string, any>> {
   return registerMarketQueueStart(item, "stop");
+}
+
+async function burnMarketRpc(item: MarketOption): Promise<Record<string, any>> {
+  const authCode = readAuthCode();
+  let response: Response;
+  try {
+    response = await fetch("/api/liquidation-queue/rpc-burn", {
+      method: "POST",
+      headers: authHeaders(authCode),
+      body: JSON.stringify(queueRequestBody(item, "burn")),
+      signal: AbortSignal.timeout(QUEUE_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error("RPC 运行扣费请求超时，请检查授权、网络端点和 RPC 服务可用性。");
+    }
+    throw error;
+  }
+  const payload = (await response.json().catch(() => ({}))) as Record<string, any>;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
+  }
+  return payload;
 }
 
 function persistRunningMarketState(walletAddress?: string, runtime?: Record<string, any>) {
@@ -594,6 +664,7 @@ function restoreRunningMarketState() {
   marketRunning.value = true;
   setTerminalLines([`queue restored: ${saved.market}`, "startup detection: auto reconnect enabled"]);
   startMarketHeartbeat();
+  startMarketRpcBurn();
   void registerMarketQueueStart(saved.option, "heartbeat")
     .then((payload) => {
       persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined);
@@ -607,6 +678,7 @@ function restoreRunningMarketState() {
         marketRunning.value = false;
         queueState.value = "idle";
         stopMarketHeartbeat();
+        stopMarketRpcBurn();
         clearRunningMarketState();
         emit("launch-sound", "not-launched");
       }
@@ -629,6 +701,8 @@ function readRunningMarketState(): RunningMarketSnapshot | null {
       queueState: saved.queueState === "waiting" ? "waiting" : "queued",
       option: saved.option,
       walletAddress: typeof saved.walletAddress === "string" ? saved.walletAddress : "",
+      endpointSlug: typeof saved.endpointSlug === "string" ? saved.endpointSlug : "",
+      creditBurnPerSecond: typeof saved.creditBurnPerSecond === "number" ? saved.creditBurnPerSecond : null,
       updatedAt: saved.updatedAt || new Date().toISOString(),
     };
   } catch {
@@ -660,6 +734,7 @@ function handleClientOffline() {
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
+  stopMarketRpcBurn();
   clearRunningMarketState();
   appendTerminal("network offline: queue exit requested");
   emit("launch-sound", "not-launched");

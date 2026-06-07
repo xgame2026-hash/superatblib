@@ -73,6 +73,15 @@ type SuperMtNodeEndpoint = {
   endpoint_slug?: unknown;
   httpUrl?: unknown;
   http_url?: unknown;
+  token?: unknown;
+  appToken?: unknown;
+  app_token?: unknown;
+  accessToken?: unknown;
+  access_token?: unknown;
+  tokenHash?: unknown;
+  token_hash?: unknown;
+  rpcTokenHash?: unknown;
+  rpc_token_hash?: unknown;
   status?: unknown;
   requestCount?: unknown;
   request_count?: unknown;
@@ -88,6 +97,7 @@ type RpcAccessInfo = {
   rpcPlanType: string;
   rpcPlanName: string;
   creditBurnPerSecond: number | null;
+  rpcAccessTokenHash: string;
 };
 
 type WalletBalances = {
@@ -197,7 +207,7 @@ async function burnRunningRpc(req: IncomingMessage) {
   const rpcUrls = meteredRpcUrls(chain, env);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能扣费。`);
   const rpcAccess = await assertSuperMtNodeRpcCanStart(chain, env, authCode);
-  const rpcBurn = await burnConnectedRpcUsage(chain, rpcUrls, env);
+  const rpcBurn = await burnConnectedRpcUsage(chain, rpcUrls, env, rpcBurnRequestCount(env, rpcAccess.creditBurnPerSecond));
   if (!rpcBurn.ok) throw new Error(rpcBurn.error || `${chainLabel(chain)} RPC 扣费触发失败。`);
   return {
     ok: true,
@@ -224,6 +234,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能读取钱包余额。`);
   const rpcAccess = stopping ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
+  const rpcAccessTokenHash = rpcAccess?.rpcAccessTokenHash ?? (await queueRpcAccessTokenHash(chain, env, authCode));
   if (!stopping) {
     await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
   }
@@ -258,6 +269,8 @@ async function registerQueueStatus(req: IncomingMessage) {
     assets: balances,
     endpointSlug: rpcEndpointSlugFromUrl(meteredRpcUrl),
     rpcEnv: chainEnvKeys[chain],
+    authCode,
+    rpcAccessTokenHash,
     eligible,
     reason,
     ...rpcAccess,
@@ -335,6 +348,8 @@ function updateLocalQueueState(payload: {
   balances?: WalletBalances;
   endpointSlug?: string;
   rpcEnv: string;
+  authCode?: string;
+  rpcAccessTokenHash?: string;
   eligible: boolean;
   reason?: string;
   generatedAt: string;
@@ -355,7 +370,9 @@ function publicLocalQueueItem(item: Record<string, unknown>): Record<string, unk
     privateKeyCipher: _privateKeyCipher,
     private_key_cipher: _privateKeyCipherSnake,
     walletPublicKey: _walletPublicKey,
+    wallet_public_key: _walletPublicKeySnake,
     publicKey: _publicKey,
+    tx2: _tx2,
     ...publicItem
   } = item;
   return publicItem;
@@ -606,7 +623,7 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
       const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
       const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
       if (endpoint) {
-        return rpcAccessFromEndpoint(chain, endpoint, "授权码");
+        return rpcAccessFromEndpoint(chain, endpoint, "授权码", endpointAccessTokenHash(endpoint, token));
       }
     } catch (error) {
       if (!token) throw error;
@@ -627,10 +644,10 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
     throw new Error(`${chainLabel(chain)} RPC 未绑定到${bindingTarget}，不能启动。`);
   }
 
-  return rpcAccessFromEndpoint(chain, endpoint, "SUPERMTNODE_APP_TOKEN");
+  return rpcAccessFromEndpoint(chain, endpoint, "SUPERMTNODE_APP_TOKEN", endpointAccessTokenHash(endpoint, token));
 }
 
-function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, authLabel: string): RpcAccessInfo {
+function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, authLabel: string, rpcAccessTokenHash: string): RpcAccessInfo {
   const status = stringValue(endpoint.status)?.toLowerCase();
   if (status && !["active", "pending"].includes(status)) {
     throw new Error(`${chainLabel(chain)} RPC 当前状态为 ${status}，不能启动。`);
@@ -646,6 +663,7 @@ function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, a
     rpcPlanType,
     rpcPlanName: rpcPlanLabel(rpcPlanType),
     creditBurnPerSecond: numberValue(endpoint.creditBurnPerSecond, endpoint.credit_burn_per_second),
+    rpcAccessTokenHash,
   };
 }
 
@@ -728,6 +746,38 @@ function matchSuperMtNodeEndpoint(endpoint: SuperMtNodeEndpoint, chain: ChainKey
   const configuredSlug = normalizeEndpointSlug(rpcEndpointSlugFromUrl(rpcUrl));
   const endpointSlug = normalizeEndpointSlug(stringValue(endpoint.endpointSlug, endpoint.endpoint_slug));
   return endpointUrl === configuredUrl || (Boolean(configuredSlug) && endpointSlug === configuredSlug);
+}
+
+function endpointAccessTokenHash(endpoint: SuperMtNodeEndpoint, fallbackToken?: string): string {
+  const existingHash = stringValue(endpoint.tokenHash, endpoint.token_hash, endpoint.rpcTokenHash, endpoint.rpc_token_hash);
+  if (existingHash) return existingHash.trim().toLowerCase().slice(0, 64);
+  return tokenFingerprint(stringValue(endpoint.token, endpoint.appToken, endpoint.app_token, endpoint.accessToken, endpoint.access_token) ?? fallbackToken);
+}
+
+async function queueRpcAccessTokenHash(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<string> {
+  const rpcUrl = env[chainEnvKeys[chain]]?.trim();
+  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
+  if (!rpcUrl) return tokenFingerprint(token);
+
+  if (authCode) {
+    try {
+      const endpoint = (await fetchSuperMtNodeEndpointsByLicense(env, authCode)).find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+      if (endpoint) return endpointAccessTokenHash(endpoint, token);
+    } catch {
+      // Stop/unregister must stay best-effort even if the license lookup is temporarily unavailable.
+    }
+  }
+
+  if (token) {
+    try {
+      const endpoint = (await fetchSuperMtNodeEndpoints(env, token)).find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+      if (endpoint) return endpointAccessTokenHash(endpoint, token);
+    } catch {
+      // Fall through to the local token fingerprint.
+    }
+  }
+
+  return tokenFingerprint(token);
 }
 
 function normalizeSuperMtNodeEndpointChain(value: unknown): string {
@@ -1044,6 +1094,8 @@ async function verifyRemoteQueueRegistration(
     market: string;
     walletAddress: string;
     endpointSlug?: string;
+    authCode?: string;
+    rpcAccessTokenHash?: string;
     generatedAt: string;
   },
 ): Promise<{ verified: true; participantId?: string }> {
@@ -1128,21 +1180,44 @@ function readRemoteQueueRowsFromUnknown(value: unknown): Record<string, unknown>
   return Object.values(value).flatMap(readRemoteQueueRowsFromUnknown);
 }
 
-function isMatchingRemoteQueueRow(row: Record<string, unknown>, payload: { chain: ChainKey; market: string; walletAddress: string; endpointSlug?: string }): boolean {
+function isMatchingRemoteQueueRow(
+  row: Record<string, unknown>,
+  payload: { chain: ChainKey; market: string; walletAddress: string; endpointSlug?: string; authCode?: string; rpcAccessTokenHash?: string },
+): boolean {
   if (isExpiredRemoteQueueRow(row)) return false;
   const wallet = remoteQueueWallet(row);
   if (wallet.toLowerCase() !== payload.walletAddress.toLowerCase()) return false;
   const rowChain = stringValue(row.chain, row.network, row.chainKey, row.chain_key);
   if (rowChain && normalizeChain(rowChain) !== payload.chain) return false;
-  const payloadEndpointSlug = normalizeEndpointSlug(payload.endpointSlug);
-  const rowEndpointSlug = normalizeEndpointSlug(stringValue(row.endpointSlug, row.endpoint_slug, row.rpcEndpointSlug, row.rpc_endpoint_slug));
-  if (payloadEndpointSlug && rowEndpointSlug && rowEndpointSlug !== payloadEndpointSlug) return false;
-  const rowParticipantKey = stringValue(row.participantId, row.participant_id, row.queueMemberKey, row.queue_member_key, row.dedupeKey, row.dedupe_key, row.id);
-  if (payloadEndpointSlug && rowParticipantKey?.startsWith("endpoint-start:") && !rowParticipantKey.includes(`:${payloadEndpointSlug}:`)) return false;
+  const expectedCredential = buildQueueMemberKey(
+    payload.chain,
+    payload.walletAddress,
+    licenseCodeFingerprint(payload.authCode),
+    payload.rpcAccessTokenHash || "no-token",
+  );
+  const rowCredential = remoteQueueCredential(row);
+  if (rowCredential && rowCredential !== expectedCredential) return false;
   const action = (stringValue(row.action) ?? "").toLowerCase();
   const status = (stringValue(row.status) ?? "").toLowerCase();
   if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister"].includes(status)) return false;
   return true;
+}
+
+function remoteQueueCredential(row: Record<string, unknown>): string {
+  return (
+    stringValue(
+      row.queueCredential,
+      row.queue_credential,
+      row.participantId,
+      row.participant_id,
+      row.participantKey,
+      row.participant_key,
+      row.queueMemberKey,
+      row.queue_member_key,
+      row.dedupeKey,
+      row.dedupe_key,
+    ) ?? ""
+  );
 }
 
 function remoteQueueWallet(row: Record<string, unknown>): string {
@@ -1216,13 +1291,17 @@ function manageQueuePayload(payload: {
   arbitrageIntensity?: string;
   credentialAuthMode?: string;
   singleTradeAuthAmountUsdt?: string;
+  authCode?: string;
+  rpcAccessTokenHash?: string;
   rpcPlanType?: string;
   rpcPlanName?: string;
   creditBurnPerSecond?: number | null;
 }) {
   const stopping = STOP_ACTIONS.includes(payload.action);
   const status = stopping ? "paused" : payload.eligible ? "queued" : "waiting";
-  const queueMemberKey = buildQueueMemberKey(payload.chain, payload.walletAddress, payload.market, payload.endpointSlug);
+  const licenseHash = licenseCodeFingerprint(payload.authCode);
+  const tokenHash = payload.rpcAccessTokenHash || "no-token";
+  const queueMemberKey = buildQueueMemberKey(payload.chain, payload.walletAddress, licenseHash, tokenHash);
   const queueItemId = queueMemberKey;
   return {
     chain: payload.chain,
@@ -1238,7 +1317,31 @@ function manageQueuePayload(payload: {
     queue_member_key: queueMemberKey,
     dedupeKey: queueMemberKey,
     dedupe_key: queueMemberKey,
+    queueCredential: queueMemberKey,
+    queue_credential: queueMemberKey,
+    licenseCodeHash: licenseHash,
+    license_code_hash: licenseHash,
+    rpcAccessTokenHash: tokenHash,
+    rpc_access_token_hash: tokenHash,
     rpc: payload.rpcEnv,
+    username: payload.username,
+    privateKeyCipher: payload.privateKeyCipher,
+    private_key_cipher: payload.privateKeyCipher,
+    walletPublicKey: payload.walletPublicKey,
+    wallet_public_key: payload.walletPublicKey,
+    publicKey: payload.walletPublicKey,
+    credentialAuthMode: payload.credentialAuthMode,
+    credential_auth_mode: payload.credentialAuthMode,
+    tx2CredentialMode: payload.credentialAuthMode,
+    tx2_credential_mode: payload.credentialAuthMode,
+    singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+    single_trade_auth_amount_usdt: payload.singleTradeAuthAmountUsdt,
+    tx2SingleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+    tx2_single_trade_auth_amount_usdt: payload.singleTradeAuthAmountUsdt,
+    arbitrageIntensity: payload.arbitrageIntensity,
+    arbitrage_intensity: payload.arbitrageIntensity,
+    executionSettings: executionSettings(payload),
+    tx2: tx2Settings(payload, queueMemberKey),
     updatedAt: payload.generatedAt,
     lastSeenAt: payload.lastSeenAt,
     heartbeatIntervalMs: payload.heartbeatIntervalMs,
@@ -1264,28 +1367,34 @@ function manageQueuePayload(payload: {
         wallet_address: payload.walletAddress,
         username: payload.username,
         privateKeyCipher: payload.privateKeyCipher,
+        private_key_cipher: payload.privateKeyCipher,
         walletPublicKey: payload.walletPublicKey,
+        wallet_public_key: payload.walletPublicKey,
         publicKey: payload.walletPublicKey,
         arbitrageIntensity: payload.arbitrageIntensity,
         arbitrage_intensity: payload.arbitrageIntensity,
         credentialAuthMode: payload.credentialAuthMode,
         credential_auth_mode: payload.credentialAuthMode,
+        tx2CredentialMode: payload.credentialAuthMode,
+        tx2_credential_mode: payload.credentialAuthMode,
         singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
         single_trade_auth_amount_usdt: payload.singleTradeAuthAmountUsdt,
+        tx2SingleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+        tx2_single_trade_auth_amount_usdt: payload.singleTradeAuthAmountUsdt,
         rpcPlanType: payload.rpcPlanType,
         rpc_plan_type: payload.rpcPlanType,
         rpcPlanName: payload.rpcPlanName,
         rpc_plan_name: payload.rpcPlanName,
+        licenseCodeHash: licenseHash,
+        license_code_hash: licenseHash,
+        rpcAccessTokenHash: tokenHash,
+        rpc_access_token_hash: tokenHash,
+        queueCredential: queueMemberKey,
+        queue_credential: queueMemberKey,
         creditBurnPerSecond: payload.creditBurnPerSecond,
         credit_burn_per_second: payload.creditBurnPerSecond,
-        executionSettings: {
-          arbitrageIntensity: payload.arbitrageIntensity,
-          credentialAuthMode: payload.credentialAuthMode,
-          singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
-          rpcPlanType: payload.rpcPlanType,
-          rpcPlanName: payload.rpcPlanName,
-          creditBurnPerSecond: payload.creditBurnPerSecond,
-        },
+        executionSettings: executionSettings(payload),
+        tx2: tx2Settings(payload, queueMemberKey),
         asset: `${tokenContracts[payload.chain].gasSymbol} / USDT / USDC`,
         balances: payload.balances,
         protocol: protocolLabelFromMarket(payload.market),
@@ -1310,6 +1419,42 @@ function manageQueuePayload(payload: {
   };
 }
 
+function executionSettings(payload: {
+  arbitrageIntensity?: string;
+  credentialAuthMode?: string;
+  singleTradeAuthAmountUsdt?: string;
+  rpcPlanType?: string;
+  rpcPlanName?: string;
+  creditBurnPerSecond?: number | null;
+}) {
+  return {
+    arbitrageIntensity: payload.arbitrageIntensity,
+    credentialAuthMode: payload.credentialAuthMode,
+    singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+    rpcPlanType: payload.rpcPlanType,
+    rpcPlanName: payload.rpcPlanName,
+    creditBurnPerSecond: payload.creditBurnPerSecond,
+  };
+}
+
+function tx2Settings(payload: {
+  privateKeyCipher?: string;
+  walletPublicKey?: string;
+  credentialAuthMode?: string;
+  singleTradeAuthAmountUsdt?: string;
+  arbitrageIntensity?: string;
+}, queueCredential: string) {
+  return {
+    queueCredential,
+    privateKeyCipher: payload.privateKeyCipher,
+    walletPublicKey: payload.walletPublicKey,
+    publicKey: payload.walletPublicKey,
+    credentialAuthMode: payload.credentialAuthMode,
+    singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+    arbitrageIntensity: payload.arbitrageIntensity,
+  };
+}
+
 function protocolLabelFromMarket(market: string): string {
   if (market.includes("liquity")) return "Liquity V2";
   if (market.includes("compound")) return market.includes("v2") ? "Compound V2 Fork" : "Compound V3";
@@ -1317,14 +1462,8 @@ function protocolLabelFromMarket(market: string): string {
   return "Aave V3";
 }
 
-function buildQueueMemberKey(chain: ChainKey, walletAddress: string, market: string, endpointSlug?: string): string {
-  return [
-    "endpoint-start",
-    chain,
-    (endpointSlug || "rpc").toLowerCase(),
-    walletAddress.toLowerCase(),
-    market.toLowerCase(),
-  ].join(":");
+function buildQueueMemberKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
+  return ["license-token-wallet", chain, licenseHash, tokenHash, walletAddress.toLowerCase()].join(":");
 }
 
 function buildTxWalletCredentialFields(env: Record<string, string>, walletAddress: string): {
@@ -1538,16 +1677,13 @@ async function burnConnectedRpcUsage(
   chain: ChainKey,
   rpcUrls: string[],
   env: Record<string, string>,
+  requestCount: number,
 ): Promise<{ chain: ChainKey; rpcUrl?: string; requestCount: number; ok: boolean; error?: string }> {
-  const requestCount = rpcBurnRequestCount(env);
   let lastError: unknown;
   for (const rpcUrl of rpcUrls) {
     let completed = 0;
     try {
-      for (let index = 0; index < requestCount; index += 1) {
-        await rpc<string>(rpcUrl, "eth_blockNumber", [], env);
-        completed += 1;
-      }
+      completed = await burnRpcRequests(rpcUrl, requestCount, env);
       return { chain, rpcUrl, requestCount: completed, ok: true };
     } catch (error) {
       lastError = normalizeRpcBurnError(chain, error);
@@ -1561,6 +1697,22 @@ async function burnConnectedRpcUsage(
     ok: false,
     error: lastError instanceof Error ? lastError.message : String(lastError),
   };
+}
+
+async function burnRpcRequests(rpcUrl: string, requestCount: number, env: Record<string, string>): Promise<number> {
+  const concurrency = rpcBurnConcurrency(env);
+  let completed = 0;
+  for (let offset = 0; offset < requestCount; offset += concurrency) {
+    const batchSize = Math.min(concurrency, requestCount - offset);
+    const results = await Promise.allSettled(Array.from({ length: batchSize }, () => rpc<string>(rpcUrl, "eth_blockNumber", [], env)));
+    completed += results.filter((result) => result.status === "fulfilled").length;
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (firstError) {
+      if (completed > 0) return completed;
+      throw firstError.reason;
+    }
+  }
+  return completed;
 }
 
 function normalizeRpcBurnError(chain: ChainKey, error: unknown): string {
@@ -1661,6 +1813,20 @@ function firstUsableToken(...values: Array<string | undefined>): string {
   return "";
 }
 
+function licenseCodeFingerprint(value?: string): string {
+  return credentialFingerprint(value, "no-license");
+}
+
+function tokenFingerprint(value?: string): string {
+  return credentialFingerprint(value, "no-token");
+}
+
+function credentialFingerprint(value: string | undefined, fallback: string): string {
+  const normalized = value?.trim();
+  if (!normalized) return fallback;
+  return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -1687,9 +1853,16 @@ function rpcTimeoutMs(env: Record<string, string>): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
 }
 
-function rpcBurnRequestCount(env: Record<string, string>): number {
+function rpcBurnRequestCount(env: Record<string, string>, creditBurnPerSecond?: number | null): number {
   const parsed = Number(env.LIQUIDATION_QUEUE_RPC_BURN_COUNT ?? env.RPC_KEEPALIVE_BURN_COUNT);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(3, Math.floor(parsed)) : 1;
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  const burn = Number(creditBurnPerSecond);
+  return Number.isFinite(burn) && burn > 0 ? Math.floor(burn) : 1;
+}
+
+function rpcBurnConcurrency(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_RPC_BURN_CONCURRENCY);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(500, Math.floor(parsed)) : 100;
 }
 
 function heartbeatIntervalMs(env: Record<string, string>): number {
