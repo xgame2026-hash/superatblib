@@ -12,6 +12,11 @@ export type SecurityCheckItem = {
   action?: "repair_secure_upload";
 };
 
+type EndpointBindingSource = {
+  label: string;
+  endpoints: Array<Record<string, unknown>>;
+};
+
 type OfficialEndpointRule = {
   key: string;
   label: string;
@@ -188,10 +193,10 @@ export async function checkRuntimeSettings(scope: string, env: Record<string, st
   const tokenPromise = checkSuperMtNodeToken(scope, env);
   const licensePromise = authCode ? checkLicenseEndpoints(env, authCode) : Promise.resolve({ endpoints: [], error: "" });
   const [token, license] = await Promise.all([tokenPromise, licensePromise]);
-  const bindingEndpoints = license.endpoints.length ? license.endpoints : token.endpoints;
-  const bnbRpcResult = await checkBnbRpc(scope, env, bindingEndpoints, authCode ? "当前授权码" : bindingEndpoints.length ? "SUPERMTNODE_APP_TOKEN" : "");
-  const usage = bnbRpcResult.ok ? readEndpointUsage(bindingEndpoints, env.BNB_RPC_URL?.trim() ?? "") : "";
-  const bnbRpc = usage ? { ...bnbRpcResult, message: `${bnbRpcResult.message}；${usage}` } : bnbRpcResult;
+  const bindingSources: EndpointBindingSource[] = [];
+  if (license.endpoints.length) bindingSources.push({ label: "当前授权码", endpoints: license.endpoints });
+  if (token.endpoints.length) bindingSources.push({ label: "SUPERMTNODE_APP_TOKEN", endpoints: token.endpoints });
+  const bnbRpc = await checkBnbRpc(scope, env, bindingSources);
   const items = [wallet, token.item, bnbRpc, queueToken];
   if (license.error) {
     items.push({
@@ -371,8 +376,7 @@ async function checkSuperMtNodeToken(
 async function checkBnbRpc(
   scope: string,
   env: Record<string, string>,
-  endpoints: Array<Record<string, unknown>>,
-  bindingLabel: string,
+  bindingSources: EndpointBindingSource[],
 ): Promise<SecurityCheckItem> {
   const rpcUrl = env.BNB_RPC_URL?.trim() ?? "";
   if (!rpcUrl) return { scope, key: "BNB_RPC_URL", label: "BNB RPC", value: "", ok: false, message: "本地未配置" };
@@ -380,15 +384,18 @@ async function checkBnbRpc(
   try {
     const chainId = await rpc<string>(rpcUrl, "eth_chainId", []);
     const isBnb = chainId.toLowerCase() === "0x38";
-    const isBound = !bindingLabel || endpoints.some((item) => matchSuperMtNodeEndpoint(item, "bnb", rpcUrl));
-    const usage = readEndpointUsage(endpoints, rpcUrl);
+    const bindingSource = bindingSources.find((source) => source.endpoints.some((item) => matchSuperMtNodeEndpoint(item, "bnb", rpcUrl)));
+    const requiresBinding = bindingSources.length > 0;
+    const isBound = !requiresBinding || Boolean(bindingSource);
+    const usage = bindingSource ? readEndpointUsage(bindingSource.endpoints, rpcUrl) : "";
+    const bindingMessage = bindingSource ? `；绑定到${bindingSource.label}` : requiresBinding ? `；未绑定到${bindingSources.map((source) => source.label).join("或")}` : "";
     return {
       scope,
       key: "BNB_RPC_URL",
       label: "BNB RPC",
       value: maskUrl(rpcUrl),
       ok: isBnb && isBound,
-      message: `${isBnb ? "RPC 连接正常" : `链 ID 异常：${chainId}`}${isBound ? "" : `；未绑定到${bindingLabel}`}${usage ? `；${usage}` : ""}`,
+      message: `${isBnb ? "RPC 连接正常" : `链 ID 异常：${chainId}`}${bindingMessage}${usage ? `；${usage}` : ""}`,
     };
   } catch (error) {
     return {

@@ -167,7 +167,6 @@
             :current-settings-section="currentSettingsSection"
             :settings-form="settingsForm"
             v-model:settings-secrets-visible="settingsSecretsVisible"
-            :secret-input-type="secretInputType"
             :settings-save-dialog-visible="settingsSaveDialogVisible"
             :settings-save-state="settingsSaveState"
             :settings-security-checking="settingsSecurityChecking"
@@ -556,7 +555,6 @@ const currentSettingsSection = computed(() => {
   return settingsSections.find((section) => section.key === settingsSection.value) ?? settingsSections[0];
 });
 
-const secretInputType = computed(() => (settingsSecretsVisible.value ? "text" : "password"));
 const dashboardPort = computed(() => normalizeDashboardPort(settingsForm.dashboardPort));
 const runningDashboardPort = computed(() => window.location.port || dashboardPort.value);
 const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");

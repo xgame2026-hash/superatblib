@@ -99,7 +99,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           json(res, 400, { ok: false, error: "Missing SUPERMTNODE_APP_TOKEN." });
           return;
         }
-        const endpoints = authCode ? await fetchSuperMtNodeEndpointsByLicenseWithTokenFallback(authCode, appToken, env) : await fetchSuperMtNodeEndpointsByToken(appToken, env);
+        const endpoints = appToken ? await fetchSuperMtNodeEndpointsByToken(appToken, env) : await fetchSuperMtNodeEndpointsByLicense(authCode, env);
         const applied = applyLicenseEndpointsToEnv(endpoints);
         if (!Object.keys(applied).length) {
           json(res, 409, { ok: false, error: "SUPERMTNODE_APP_TOKEN 没有可用的 BNB/ETH/ARB RPC 端点，不能启动按 IP 计费。", endpoints });
@@ -286,15 +286,6 @@ async function fetchSuperMtNodeEndpointsByToken(appToken: string, env: Record<st
     }
   }
   throw new Error(errors.join("; "));
-}
-
-async function fetchSuperMtNodeEndpointsByLicenseWithTokenFallback(authCode: string, appToken: string, env: Record<string, string>): Promise<SuperMtNodeEndpoint[]> {
-  try {
-    return await fetchSuperMtNodeEndpointsByLicense(authCode, env);
-  } catch (error) {
-    if (!appToken) throw error;
-    return fetchSuperMtNodeEndpointsByToken(appToken, env);
-  }
 }
 
 async function fetchSuperMtNodeEndpointsByLicense(authCode: string, env: Record<string, string>): Promise<SuperMtNodeEndpoint[]> {

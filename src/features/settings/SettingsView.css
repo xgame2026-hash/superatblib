@@ -153,6 +153,10 @@
   border-radius: 999px;
 }
 
+.settings-secret-input.is-masked :deep(.el-input__inner) {
+  -webkit-text-security: disc;
+}
+
 .exchange-settings {
   display: grid;
   gap: 18px;

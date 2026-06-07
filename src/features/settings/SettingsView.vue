@@ -56,9 +56,12 @@
           <span>钱包私钥</span>
           <el-input
             v-model="settingsForm.privateKey"
-            :type="secretInputType"
+            class="settings-secret-input"
+            :class="{ 'is-masked': !settingsSecretsVisible }"
+            type="text"
+            name="settings-private-key"
             placeholder="0x..."
-            autocomplete="new-password"
+            autocomplete="off"
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
@@ -68,8 +71,11 @@
           <span>SUPERMTNODE_APP_TOKEN</span>
           <el-input
             v-model="settingsForm.superMtNodeAppToken"
-            :type="secretInputType"
-            autocomplete="new-password"
+            class="settings-secret-input"
+            :class="{ 'is-masked': !settingsSecretsVisible }"
+            type="text"
+            name="settings-supermtnode-app-token"
+            autocomplete="off"
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
@@ -92,7 +98,13 @@
         </label>
         <label class="settings-field">
           <span>授权金额</span>
-          <el-input v-model="settingsForm.singleTradeAuthAmountUsdt" inputmode="decimal" placeholder="100">
+          <el-input
+            v-model="settingsForm.singleTradeAuthAmountUsdt"
+            autocomplete="off"
+            inputmode="decimal"
+            name="settings-single-trade-auth-amount-usdt"
+            placeholder="100"
+          >
             <template #suffix>USDT</template>
           </el-input>
         </label>
@@ -112,7 +124,13 @@
         </label>
         <label class="settings-field">
           <span>端口设置</span>
-          <el-input v-model="settingsForm.dashboardPort" inputmode="numeric" placeholder="4310" />
+          <el-input
+            v-model="settingsForm.dashboardPort"
+            autocomplete="off"
+            inputmode="numeric"
+            name="settings-dashboard-port"
+            placeholder="4310"
+          />
         </label>
         <label class="settings-field">
           <span>启动音效</span>
@@ -147,7 +165,10 @@
           </span>
           <el-input
             v-model="settingsForm.rpc[field.key]"
-            :type="secretInputType"
+            class="settings-secret-input"
+            :class="{ 'is-masked': !settingsSecretsVisible }"
+            type="text"
+            :name="`settings-rpc-${field.key}`"
             placeholder="https://..."
             autocomplete="off"
             autocapitalize="off"
@@ -165,9 +186,11 @@
           </span>
           <el-input
             v-model="settingsForm.feeds[field.key]"
-            :type="field.secret ? secretInputType : 'text'"
+            :class="{ 'settings-secret-input': field.secret, 'is-masked': field.secret && !settingsSecretsVisible }"
+            type="text"
+            :name="`settings-feed-${field.key}`"
             :placeholder="field.placeholder ?? 'https://...'"
-            :autocomplete="field.secret ? 'new-password' : 'off'"
+            autocomplete="off"
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
@@ -183,9 +206,11 @@
           </span>
           <el-input
             v-model="settingsForm.queue[field.key]"
-            :type="field.secret ? secretInputType : 'text'"
+            :class="{ 'settings-secret-input': field.secret, 'is-masked': field.secret && !settingsSecretsVisible }"
+            type="text"
+            :name="`settings-queue-${field.key}`"
             :placeholder="field.placeholder"
-            :autocomplete="field.secret ? 'new-password' : 'off'"
+            autocomplete="off"
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
@@ -196,7 +221,12 @@
       <div v-else-if="settingsSection === 'cache'" class="settings-form-grid">
         <label v-for="field in cacheFields" :key="field.key" class="settings-field">
           <span>{{ field.env }}</span>
-          <el-input v-model="settingsForm.cache[field.key]" :placeholder="field.placeholder" />
+          <el-input
+            v-model="settingsForm.cache[field.key]"
+            autocomplete="off"
+            :name="`settings-cache-${field.key}`"
+            :placeholder="field.placeholder"
+          />
         </label>
       </div>
 
@@ -208,9 +238,12 @@
               <span>{{ exchange.apiEnv }}</span>
               <el-input
                 v-model="settingsForm.exchanges[exchange.key].apiKey"
-                :type="secretInputType"
+                class="settings-secret-input"
+                :class="{ 'is-masked': !settingsSecretsVisible }"
+                type="text"
+                :name="`settings-exchange-${exchange.key}-api-key`"
                 placeholder="public key"
-                autocomplete="new-password"
+                autocomplete="off"
                 autocapitalize="off"
                 autocorrect="off"
                 spellcheck="false"
@@ -220,9 +253,12 @@
               <span>{{ exchange.secretEnv }}</span>
               <el-input
                 v-model="settingsForm.exchanges[exchange.key].secretKey"
-                :type="secretInputType"
+                class="settings-secret-input"
+                :class="{ 'is-masked': !settingsSecretsVisible }"
+                type="text"
+                :name="`settings-exchange-${exchange.key}-secret-key`"
                 placeholder="secret key"
-                autocomplete="new-password"
+                autocomplete="off"
                 autocapitalize="off"
                 autocorrect="off"
                 spellcheck="false"
@@ -250,7 +286,6 @@ defineProps<{
   currentSettingsSection?: LooseRecord;
   settingsForm: LooseRecord;
   settingsSecretsVisible: boolean;
-  secretInputType: string;
   settingsSaveDialogVisible: boolean;
   settingsSaveState: string;
   settingsSecurityChecking: boolean;

@@ -590,17 +590,21 @@ function queueWssUrl(env: Record<string, string>): string {
 async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<RpcAccessInfo> {
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
+  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
 
   if (authCode) {
-    const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
-    const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-    if (!endpoint) {
-      throw new Error(`${chainLabel(chain)} RPC 未绑定到当前授权码，不能启动。`);
+    try {
+      const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
+      const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+      if (endpoint) {
+        return rpcAccessFromEndpoint(chain, endpoint, "授权码");
+      }
+    } catch (error) {
+      if (!token) throw error;
     }
-    return rpcAccessFromEndpoint(chain, endpoint, "授权码");
+    if (!token) throw new Error(`${chainLabel(chain)} RPC 未绑定到当前授权码，不能启动。`);
   }
 
-  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
   if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
   const tokenExpiry = jwtExpiry(token);
   if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
@@ -610,7 +614,8 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
   const endpoints = await fetchSuperMtNodeEndpoints(env, token);
   const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
   if (!endpoint) {
-    throw new Error(`${chainLabel(chain)} RPC 未绑定到当前 SUPERMTNODE_APP_TOKEN，不能启动。`);
+    const bindingTarget = authCode ? "当前授权码或 SUPERMTNODE_APP_TOKEN" : "当前 SUPERMTNODE_APP_TOKEN";
+    throw new Error(`${chainLabel(chain)} RPC 未绑定到${bindingTarget}，不能启动。`);
   }
 
   return rpcAccessFromEndpoint(chain, endpoint, "SUPERMTNODE_APP_TOKEN");
