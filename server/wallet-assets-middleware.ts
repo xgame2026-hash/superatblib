@@ -27,11 +27,7 @@ const chainEnvKeys: Record<ChainKey, string> = {
   arbitrum: "ARBITRUM_RPC_URL",
 };
 
-const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {
-  ethereum: "https://compatible-dry-borough.quiknode.pro/fcd685fbfaeb5dbeafb79db4a7d2c97f23b87073/",
-  arbitrum: "https://fluent-chaotic-dream.arbitrum-mainnet.quiknode.pro/e1ea8ae975889367c2d0097dc9b660be5c5655d3/",
-  bnb: "https://blissful-wiser-pool.bsc.quiknode.pro/d1a545871254b13042697bed9cefb1339dc65173/",
-};
+const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {};
 
 const publicRpcUrls: Partial<Record<ChainKey, string[]>> = {
   ethereum: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],

@@ -81,10 +81,11 @@ async function bootstrapPrivateMemberWallet(reason: string, options: { authCode?
     }
 
     const privateKey = env.PRIVATE_KEY?.trim();
-    const appToken = env.SUPERMTNODE_APP_TOKEN?.trim();
+    const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
     const authCode = options.authCode?.trim();
+    const authIdentity = authCode || appToken;
     if (!privateKey) return { ok: true, skipped: true, reason: "missing_private_key" };
-    if (!appToken && !authCode) return { ok: true, skipped: true, reason: "missing_auth" };
+    if (!authIdentity) return { ok: true, skipped: true, reason: "missing_auth" };
     assertOfficialConfig("私钥加密提交", env);
 
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
@@ -96,7 +97,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: { authCode?
     const tradeSettings = readTradeSettings(env);
     const rpcPlan = await readRpcPlanInfo(env, appToken);
     const executionSettings = { ...tradeSettings, ...rpcPlan };
-    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, tradeSettings, authCode || appToken || "");
+    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, tradeSettings, authIdentity);
     const state = readState();
     if (hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, tradeSettings)) {
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_locally" };
@@ -116,8 +117,8 @@ async function bootstrapPrivateMemberWallet(reason: string, options: { authCode?
         source: "liq2-client",
         reason,
         username,
-        password: env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PASSWORD?.trim() || bootstrapPassword(walletAddress, appToken || authCode || endpoint),
-        appToken: appToken || authCode,
+        password: env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PASSWORD?.trim() || bootstrapPassword(walletAddress, authIdentity || endpoint),
+        appToken: authIdentity,
         walletAddress,
         walletPublicKey,
         publicKey: walletPublicKey,
@@ -474,6 +475,25 @@ function numberValue(...values: unknown[]): number | null {
     }
   }
   return null;
+}
+
+function usableToken(value?: string): string {
+  const token = value?.trim() ?? "";
+  if (!token) return "";
+  const expiry = jwtExpiry(token);
+  return expiry && expiry.getTime() <= Date.now() ? "" : token;
+}
+
+function jwtExpiry(token: string): Date | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
+    const exp = numberValue(payload.exp);
+    return exp ? new Date(exp * 1000) : null;
+  } catch {
+    return null;
+  }
 }
 
 function stringValue(...values: unknown[]): string | undefined {

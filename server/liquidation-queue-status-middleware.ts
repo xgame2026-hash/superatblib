@@ -18,6 +18,7 @@ const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/inges
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
+const CLIENT_VERSION = "1.4.4";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -121,11 +122,7 @@ const superMtNodeChainKeys: Record<ChainKey, string> = {
 
 const SUPERMTNODE_API_BASES = ["https://supermtnode.io", "https://api.supermtnode.io"];
 
-const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {
-  ethereum: "https://compatible-dry-borough.quiknode.pro/fcd685fbfaeb5dbeafb79db4a7d2c97f23b87073/",
-  arbitrum: "https://fluent-chaotic-dream.arbitrum-mainnet.quiknode.pro/e1ea8ae975889367c2d0097dc9b660be5c5655d3/",
-  bnb: "https://blissful-wiser-pool.bsc.quiknode.pro/d1a545871254b13042697bed9cefb1339dc65173/",
-};
+const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {};
 
 const publicRpcUrls: Record<ChainKey, string[]> = {
   ethereum: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],
@@ -247,7 +244,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const payload = {
     source: "liq2-client-start",
     queueType: "endpoint-start",
-    version: "1.4.2",
+    version: CLIENT_VERSION,
     action,
     generatedAt: generatedAtIso,
     lastSeenAt: generatedAtIso,
@@ -283,6 +280,8 @@ async function registerQueueStatus(req: IncomingMessage) {
     transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
   }
 
+  const remoteQueue = !stopping && remoteQueueVerifyEnabled(env) ? await verifyRemoteQueueRegistration(env, req, payload) : undefined;
+
   try {
     if (!stopping) updateLocalQueueState(payload);
   } catch (error) {
@@ -311,6 +310,8 @@ async function registerQueueStatus(req: IncomingMessage) {
     lastSeenAt: generatedAtIso,
     expiresAt: payload.expiresAt,
     queue: isRecord(transportResult.payload.queue) ? transportResult.payload.queue : null,
+    remoteQueueVerified: remoteQueue?.verified ?? false,
+    remoteQueueParticipantId: remoteQueue?.participantId,
     remote: transportResult.payload,
     remoteAvailable: true,
     updatedAt: new Date().toISOString(),
@@ -706,13 +707,21 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 }
 
 function matchSuperMtNodeEndpoint(endpoint: SuperMtNodeEndpoint, chain: ChainKey, rpcUrl: string): boolean {
-  const endpointChain = stringValue(endpoint.chain)?.toLowerCase();
+  const endpointChain = normalizeSuperMtNodeEndpointChain(endpoint.chain);
   if (endpointChain !== superMtNodeChainKeys[chain]) return false;
   const endpointUrl = normalizeUrl(stringValue(endpoint.httpUrl, endpoint.http_url));
   const configuredUrl = normalizeUrl(rpcUrl);
-  const configuredSlug = rpcEndpointSlugFromUrl(rpcUrl);
-  const endpointSlug = stringValue(endpoint.endpointSlug, endpoint.endpoint_slug);
+  const configuredSlug = normalizeEndpointSlug(rpcEndpointSlugFromUrl(rpcUrl));
+  const endpointSlug = normalizeEndpointSlug(stringValue(endpoint.endpointSlug, endpoint.endpoint_slug));
   return endpointUrl === configuredUrl || (Boolean(configuredSlug) && endpointSlug === configuredSlug);
+}
+
+function normalizeSuperMtNodeEndpointChain(value: unknown): string {
+  const chain = stringValue(value)?.toLowerCase();
+  if (chain === "bsc" || chain === "binance" || chain === "bnb" || chain === "bnb chain") return "bnb";
+  if (chain === "arb" || chain === "arbitrum" || chain === "arbitrum one") return "arb";
+  if (chain === "eth" || chain === "ethereum" || chain === "mainnet") return "eth";
+  return chain ?? "";
 }
 
 function endpointRemainingCredits(endpoint: SuperMtNodeEndpoint): number | null {
@@ -762,7 +771,18 @@ function isSuperMtNodeEndpoint(value: unknown): value is SuperMtNodeEndpoint {
 }
 
 function normalizeUrl(value: string | undefined): string {
-  return (value ?? "").trim().replace(/\/+$/, "");
+  const raw = (value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    url.searchParams.sort();
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
 }
 
 async function sendManageQueuePayload(
@@ -819,12 +839,25 @@ async function sendQueuePayloadOverWss(
 
   return new Promise((resolvePayload, rejectPayload) => {
     let settled = false;
+    let eventSent = false;
+    let authAcked = false;
+    const authMessageId = `liq2-auth:${crypto.randomUUID()}`;
+    const eventMessageId = `liq2-queue-event:${crypto.randomUUID()}`;
     const timer = setTimeout(() => settle(new Error(`WSS 队列服务连接超时：${endpointHost(endpoint)}`)), timeout);
+    const authFallbackTimer = setTimeout(() => sendQueueEvent(), Math.min(1_000, Math.max(250, Math.floor(timeout / 4))));
+    const queueIdentities = queuePayload.items.filter(isRecord).map((item) => ({
+      chain: stringValue(item.chain),
+      market: stringValue(item.market),
+      walletAddress: stringValue(item.walletAddress, item.wallet, item.wallet_address),
+      endpointSlug: stringValue(item.endpointSlug, item.endpoint_slug, item.rpcEndpointSlug, item.rpc_endpoint_slug),
+      participantId: stringValue(item.participantId, item.participant_id, item.queueMemberKey, item.queue_member_key, item.dedupeKey, item.dedupe_key),
+    }));
 
     const settle = (value: Record<string, unknown> | Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(authFallbackTimer);
       try {
         ws.close();
       } catch {
@@ -834,24 +867,51 @@ async function sendQueuePayloadOverWss(
       else resolvePayload(value);
     };
 
+    const sendQueueEvent = () => {
+      if (eventSent || settled) return;
+      eventSent = true;
+      ws.send(JSON.stringify({
+        type: "liquidation_queue.event",
+        messageId: eventMessageId,
+        requestId: eventMessageId,
+        clientMessageId: eventMessageId,
+        source: "liq2-client",
+        queueIdentities,
+        walletAddresses: queueIdentities.map((item) => item.walletAddress).filter(Boolean),
+        participantIds: queueIdentities.map((item) => item.participantId).filter(Boolean),
+        data: queuePayload,
+        generatedAt: new Date().toISOString(),
+      }));
+    };
+
     ws.addEventListener("open", () => {
       ws.send(JSON.stringify({
         type: "auth",
+        messageId: authMessageId,
+        requestId: authMessageId,
+        clientMessageId: authMessageId,
         token,
         authCode,
         source: "liq2-client",
-        generatedAt: new Date().toISOString(),
-      }));
-      ws.send(JSON.stringify({
-        type: "liquidation_queue.event",
-        source: "liq2-client",
-        data: queuePayload,
+        queueIdentities,
+        walletAddresses: queueIdentities.map((item) => item.walletAddress).filter(Boolean),
+        participantIds: queueIdentities.map((item) => item.participantId).filter(Boolean),
         generatedAt: new Date().toISOString(),
       }));
     });
 
     ws.addEventListener("message", (event) => {
-      void handleWssResponseMessage(event.data, settle);
+      void handleWssResponseMessage(event.data, {
+        authAcked,
+        eventSent,
+        authMessageId,
+        eventMessageId,
+        onAuthAck: () => {
+          authAcked = true;
+          sendQueueEvent();
+        },
+        settle,
+      });
     });
 
     ws.addEventListener("error", () => settle(new Error(`WSS 队列服务暂时不可用：${endpointHost(endpoint)}`)));
@@ -868,18 +928,50 @@ function correctWssEndpoint(endpoint: string, env: Record<string, string>): stri
 
 async function handleWssResponseMessage(
   rawData: unknown,
-  settle: (value: Record<string, unknown> | Error) => void,
+  handlers: {
+    authAcked: boolean;
+    eventSent: boolean;
+    authMessageId: string;
+    eventMessageId: string;
+    onAuthAck: () => void;
+    settle: (value: Record<string, unknown> | Error) => void;
+  },
 ): Promise<void> {
   const data = await parseWssMessage(rawData);
   if (!data) return;
   const type = stringValue(data.type, data.event);
   if (data.ok === false) {
-    settle(new Error(stringValue(data.error, data.message) ?? "WSS 队列服务拒绝了上报。"));
+    handlers.settle(new Error(stringValue(data.error, data.message) ?? "WSS 队列服务拒绝了上报。"));
     return;
   }
-  if (type === "ack" || type === "liquidation_queue.ack") {
-    settle(data);
+  if (isQueueEventAck(data, handlers.eventSent, handlers.authAcked, handlers.eventMessageId)) {
+    handlers.settle(data);
+    return;
   }
+  if (isAuthAck(data, handlers.authMessageId)) {
+    handlers.onAuthAck();
+  }
+}
+
+function isAuthAck(data: Record<string, unknown>, authMessageId: string): boolean {
+  if (ackMessageId(data) === authMessageId) return true;
+  const type = (stringValue(data.type, data.event, data.kind) ?? "").toLowerCase();
+  const scope = (stringValue(data.scope, data.channel, data.subject) ?? "").toLowerCase();
+  return type === "auth.ack" || type === "authenticated" || (type === "ack" && /auth|login|session/.test(scope));
+}
+
+function isQueueEventAck(data: Record<string, unknown>, eventSent: boolean, authAcked: boolean, eventMessageId: string): boolean {
+  if (ackMessageId(data) === eventMessageId) return true;
+  const type = (stringValue(data.type, data.event, data.kind) ?? "").toLowerCase();
+  const scope = (stringValue(data.scope, data.channel, data.subject, data.action) ?? "").toLowerCase();
+  if (type === "liquidation_queue.ack" || type === "liquidation_queue.event.ack") return true;
+  if (/liquidation[_-]?queue|queue/.test(scope) && (type === "ack" || type.endsWith(".ack"))) return true;
+  if (!eventSent || !authAcked) return false;
+  return type === "ack";
+}
+
+function ackMessageId(data: Record<string, unknown>): string | undefined {
+  return stringValue(data.messageId, data.message_id, data.requestId, data.request_id, data.clientMessageId, data.client_message_id, data.ackId, data.ack_id);
 }
 
 async function parseWssMessage(data: unknown): Promise<Record<string, unknown> | null> {
@@ -906,16 +998,145 @@ function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): 
     headers["x-license-code"] = authCode;
     headers["x-auth-code"] = authCode;
   }
-  const token =
-    env.MANAGE_INGEST_TOKEN?.trim() ||
-    env.LIQUIDATION_QUEUE_ADMIN_TOKEN?.trim() ||
-    env.SUPERMTNODE_APP_TOKEN?.trim() ||
-    env.LIQUIDATION_SNAPSHOT_TOKEN?.trim();
+  const token = firstUsableToken(
+    env.MANAGE_INGEST_TOKEN,
+    env.LIQUIDATION_QUEUE_ADMIN_TOKEN,
+    env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_SNAPSHOT_TOKEN,
+  );
   if (token) {
     headers["x-ingest-token"] = token;
     headers.authorization = `Bearer ${token}`;
   }
   return headers;
+}
+
+function remoteQueueVerifyEnabled(env: Record<string, string>): boolean {
+  const configured = String(env.LIQUIDATION_QUEUE_VERIFY_REMOTE_STATUS ?? "enabled").trim().toLowerCase();
+  return !["0", "false", "off", "disabled", "关闭"].includes(configured);
+}
+
+async function verifyRemoteQueueRegistration(
+  env: Record<string, string>,
+  req: IncomingMessage,
+  payload: {
+    chain: ChainKey;
+    market: string;
+    walletAddress: string;
+    endpointSlug?: string;
+    generatedAt: string;
+  },
+): Promise<{ verified: true; participantId?: string }> {
+  const attempts = remoteQueueVerifyAttempts(env);
+  let lastError = "";
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await sleep(remoteQueueVerifyIntervalMs(env));
+    try {
+      const rows = await fetchRemoteQueueRows(env, req);
+      const match = rows.find((row) => isMatchingRemoteQueueRow(row, payload));
+      if (match) {
+        return {
+          verified: true,
+          participantId: stringValue(match.participantId, match.participant_id, match.queueMemberKey, match.queue_member_key, match.dedupeKey, match.dedupe_key, match.id),
+        };
+      }
+      lastError = `状态接口返回 ${rows.length} 条队列记录，但没有当前钱包 ${shortAddress(payload.walletAddress)}。`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  throw new Error(`远端队列未确认当前钱包：${lastError}`);
+}
+
+async function fetchRemoteQueueRows(env: Record<string, string>, req: IncomingMessage): Promise<Record<string, unknown>[]> {
+  const response = await fetch(remoteQueueStatusUrl(env), {
+    headers: remoteQueueStatusHeaders(env, req),
+    signal: AbortSignal.timeout(remoteQueueVerifyTimeoutMs(env)),
+  });
+  const payload = (await response.json().catch(() => ({}))) as unknown;
+  if (!response.ok) throw new Error(`privateMember 队列状态请求失败 (${response.status})`);
+  return readRemoteQueueRows(unwrapRemoteQueuePayload(payload));
+}
+
+function remoteQueueStatusUrl(env: Record<string, string>): string {
+  const privateMemberBase = env.LIQ2_PRIVATE_MEMBER_API_URL?.trim()?.replace(/\/+$/, "");
+  return (
+    env.LIQUIDATION_QUEUE_WSS_STATUS_URL?.trim() ||
+    env.PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL?.trim() ||
+    (privateMemberBase ? `${privateMemberBase}/api/liquidation-queue/status` : "https://private.superarb.ai/api/liquidation-queue/status")
+  );
+}
+
+function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
+  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const token = firstUsableToken(
+    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
+    env.LIQUIDATION_SNAPSHOT_TOKEN,
+    env.MANAGE_INGEST_TOKEN,
+  );
+  return {
+    accept: "application/json",
+    ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),
+    ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-token": token, "x-supermtnode-app-token": token } : {}),
+  };
+}
+
+function unwrapRemoteQueuePayload(payload: unknown): Record<string, unknown> {
+  if (Array.isArray(payload)) return { rows: payload };
+  if (!isRecord(payload)) return {};
+  if (isRecord(payload.data)) return payload.data;
+  return payload;
+}
+
+function readRemoteQueueRows(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const source = payload.items ?? payload.queue ?? payload.queues ?? payload.rows;
+  if (Array.isArray(source)) return source.filter(isRecord);
+  if (isRecord(source)) return Object.values(source).flatMap((value) => (Array.isArray(value) ? value.filter(isRecord) : isRecord(value) ? [value] : []));
+  return [];
+}
+
+function isMatchingRemoteQueueRow(row: Record<string, unknown>, payload: { chain: ChainKey; market: string; walletAddress: string; endpointSlug?: string }): boolean {
+  if (isExpiredRemoteQueueRow(row)) return false;
+  const wallet = remoteQueueWallet(row);
+  if (wallet.toLowerCase() !== payload.walletAddress.toLowerCase()) return false;
+  const rowChain = stringValue(row.chain, row.network, row.chainKey, row.chain_key);
+  if (rowChain && normalizeChain(rowChain) !== payload.chain) return false;
+  const action = (stringValue(row.action) ?? "").toLowerCase();
+  const status = (stringValue(row.status) ?? "").toLowerCase();
+  if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister"].includes(status)) return false;
+  return true;
+}
+
+function remoteQueueWallet(row: Record<string, unknown>): string {
+  const direct = stringValue(row.walletAddress, row.wallet_address, row.address, row.account, row.user, row.borrower);
+  if (direct) return direct;
+  if (typeof row.wallet === "string") return row.wallet.trim();
+  if (isRecord(row.wallet)) return stringValue(row.wallet.address, row.wallet.walletAddress, row.wallet.wallet_address) ?? "";
+  return "";
+}
+
+function isExpiredRemoteQueueRow(row: Record<string, unknown>): boolean {
+  const expiresAt = stringValue(row.expiresAt, row.expires_at);
+  if (!expiresAt) return false;
+  const timestamp = new Date(expiresAt).getTime();
+  return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function remoteQueueVerifyAttempts(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_VERIFY_ATTEMPTS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(10, Math.floor(parsed)) : 5;
+}
+
+function remoteQueueVerifyIntervalMs(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_VERIFY_INTERVAL_MS);
+  return Number.isFinite(parsed) && parsed >= 100 ? Math.min(3_000, Math.floor(parsed)) : 700;
+}
+
+function remoteQueueVerifyTimeoutMs(env: Record<string, string>): number {
+  const parsed = Number(env.LIQUIDATION_QUEUE_VERIFY_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(8_000, Math.floor(parsed)) : Math.min(timeoutMs(env), 3_000);
 }
 
 function balanceRpcUrls(chain: ChainKey, env: Record<string, string>): string[] {
@@ -963,9 +1184,22 @@ function manageQueuePayload(payload: {
 }) {
   const stopping = STOP_ACTIONS.includes(payload.action);
   const status = stopping ? "paused" : payload.eligible ? "queued" : "waiting";
+  const queueMemberKey = buildQueueMemberKey(payload.chain, payload.walletAddress, payload.market, payload.endpointSlug);
+  const queueItemId = `endpoint-start:${payload.chain}:${payload.walletAddress.toLowerCase()}:${payload.market}`;
   return {
     chain: payload.chain,
     source: `${chainLabel(payload.chain).toLowerCase()}-rpc-queue`,
+    action: payload.action,
+    market: payload.market,
+    wallet: payload.walletAddress,
+    walletAddress: payload.walletAddress,
+    endpointSlug: payload.endpointSlug,
+    participantId: queueMemberKey,
+    participantKey: queueMemberKey,
+    queueMemberKey,
+    queue_member_key: queueMemberKey,
+    dedupeKey: queueMemberKey,
+    dedupe_key: queueMemberKey,
     rpc: payload.rpcEnv,
     updatedAt: payload.generatedAt,
     lastSeenAt: payload.lastSeenAt,
@@ -973,12 +1207,23 @@ function manageQueuePayload(payload: {
     expiresAt: payload.expiresAt,
     items: [
       {
-        id: `endpoint-start:${payload.chain}:${payload.walletAddress.toLowerCase()}:${payload.market}`,
+        id: queueItemId,
+        queueId: queueItemId,
+        queue_id: queueItemId,
+        participantId: queueMemberKey,
+        participant_id: queueMemberKey,
+        participantKey: queueMemberKey,
+        participant_key: queueMemberKey,
+        queueMemberKey,
+        queue_member_key: queueMemberKey,
+        dedupeKey: queueMemberKey,
+        dedupe_key: queueMemberKey,
         source: `${chainLabel(payload.chain).toLowerCase()}-rpc-queue`,
         queueType: "endpoint-start",
         chain: payload.chain,
         wallet: payload.walletAddress,
         walletAddress: payload.walletAddress,
+        wallet_address: payload.walletAddress,
         username: payload.username,
         privateKeyCipher: payload.privateKeyCipher,
         walletPublicKey: payload.walletPublicKey,
@@ -1009,7 +1254,11 @@ function manageQueuePayload(payload: {
         market: payload.market,
         rpc: payload.rpcEnv,
         endpointSlug: payload.endpointSlug,
-        endpointId: payload.endpointSlug,
+        endpoint_slug: payload.endpointSlug,
+        endpointId: queueMemberKey,
+        endpoint_id: queueMemberKey,
+        rpcEndpointSlug: payload.endpointSlug,
+        rpc_endpoint_slug: payload.endpointSlug,
         status,
         startedAt: payload.generatedAt,
         joinedAt: stopping ? "" : payload.generatedAt,
@@ -1028,6 +1277,16 @@ function protocolLabelFromMarket(market: string): string {
   if (market.includes("compound")) return market.includes("v2") ? "Compound V2 Fork" : "Compound V3";
   if (market.includes("venus")) return "Venus";
   return "Aave V3";
+}
+
+function buildQueueMemberKey(chain: ChainKey, walletAddress: string, market: string, endpointSlug?: string): string {
+  return [
+    "endpoint-start",
+    chain,
+    (endpointSlug || "rpc").toLowerCase(),
+    walletAddress.toLowerCase(),
+    market.toLowerCase(),
+  ].join(":");
 }
 
 function buildTxWalletCredentialFields(env: Record<string, string>, walletAddress: string): {
@@ -1149,6 +1408,10 @@ function rpcEndpointSlugFromUrl(value: string): string | undefined {
   } catch {
     return value.split("/").filter(Boolean).pop();
   }
+}
+
+function normalizeEndpointSlug(value?: string): string {
+  return (value ?? "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
 }
 
 function privateKeyToAddress(privateKey: string): string {
@@ -1336,9 +1599,28 @@ function stringValue(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function shortAddress(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value.find((item) => item.trim())?.trim();
   return value?.trim() || undefined;
+}
+
+function firstUsableToken(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const token = value?.trim();
+    if (!token) continue;
+    const expiry = jwtExpiry(token);
+    if (expiry && expiry.getTime() <= Date.now()) continue;
+    return token;
+  }
+  return "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

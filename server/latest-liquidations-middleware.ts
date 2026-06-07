@@ -10,7 +10,6 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot";
 const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
 const DEFAULT_WSS_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liquidation-queue/status";
-const DEFAULT_BNB_FALLBACK_RPC_URL = "https://blissful-wiser-pool.bsc.quiknode.pro/d1a545871254b13042697bed9cefb1339dc65173/";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const ASSET_CHANGE_CACHE_MS = 10 * 60 * 1000;
@@ -224,7 +223,7 @@ const rpcEnvKeys: Record<ChainKey, string[]> = {
 
 const publicRpcUrls: Record<ChainKey, string[]> = {
   ethereum: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],
-  bnb: [DEFAULT_BNB_FALLBACK_RPC_URL, "https://bsc-rpc.publicnode.com", "https://bsc-dataseed.binance.org"],
+  bnb: ["https://bsc-rpc.publicnode.com", "https://bsc-dataseed.binance.org"],
   arbitrum: ["https://arbitrum-one-rpc.publicnode.com", "https://arb1.arbitrum.io/rpc"],
 };
 
@@ -255,7 +254,8 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
 
   const requestUrl = new URL(req.url, "http://localhost");
   const fast = requestUrl.searchParams.get("marketStatus") === "1";
-  fetchLiquidationSnapshot(req, { fast })
+  const queueOnly = requestUrl.searchParams.get("fast") === "1";
+  fetchLiquidationSnapshot(req, { fast, queueOnly })
     .then((payload) => json(res, 200, payload))
     .catch((error: unknown) => {
       json(res, 200, emptySnapshot(error instanceof Error ? error.message : String(error)));
@@ -264,15 +264,16 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
   return true;
 }
 
-async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: boolean } = {}) {
+async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: boolean; queueOnly?: boolean } = {}) {
   const env = readEnv();
   assertOfficialConfig("清算快照读取", env);
   const snapshotUrl = normalizeSnapshotUrl(env.LIQUIDATION_SNAPSHOT_API_URL?.trim() || DEFAULT_SNAPSHOT_API_URL);
-
-  const payload = await fetchSnapshotPayload(snapshotUrl, env, req);
+  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const wssQueue = options.fast ? emptyWssQueueSnapshot() : await fetchWssQueuedWallets(env, req).catch(() => emptyWssQueueSnapshot());
+  const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
   const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
-  response.queuedWallets = await enrichExactTodayContractChanges(dedupeEndpointQueueRows(response.queuedWallets), env);
+  const queuedWallets = dedupeEndpointQueueRows(response.queuedWallets);
+  response.queuedWallets = options.queueOnly ? queuedWallets : await enrichExactTodayContractChanges(queuedWallets, env, authCode);
   return response;
 }
 
@@ -312,10 +313,7 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
     (privateMemberBase ? `${privateMemberBase}/api/liquidation-queue/status` : DEFAULT_WSS_QUEUE_STATUS_API_URL);
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const response = await fetch(queueUrl, {
-    headers: {
-      accept: "application/json",
-      ...(authCode ? { "x-supermtnode-auth-code": authCode } : {}),
-    },
+    headers: privateMemberQueueStatusHeaders(env, authCode),
     signal: AbortSignal.timeout(timeoutMs(env)),
   });
   if (!response.ok) throw new Error(`WSS 队列状态请求失败 (${response.status})`);
@@ -325,6 +323,21 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
     ok: true,
     rows: readQueue(sourcePayload.items ?? sourcePayload.queue ?? sourcePayload.queues ?? sourcePayload.rows),
     status: sourcePayload,
+  };
+}
+
+function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
+  const token = firstUsableToken(
+    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
+    env.LIQUIDATION_SNAPSHOT_TOKEN,
+    env.MANAGE_INGEST_TOKEN,
+  );
+  return {
+    accept: "application/json",
+    ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),
+    ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-token": token, "x-supermtnode-app-token": token } : {}),
   };
 }
 
@@ -515,7 +528,7 @@ function readQueue(value: unknown): SnapshotQueueRow[] {
 }
 
 function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQueueRow | null {
-  const wallet = stringValue(row.wallet, row.account, row.user, row.borrower);
+  const wallet = stringValue(row.wallet, row.walletAddress, row.wallet_address, row.address, row.account, row.user, row.borrower);
   if (!wallet) return null;
 
   const chain = normalizeChain(stringValue(row.chain, row.network, row.chainKey, row.chain_key));
@@ -600,7 +613,7 @@ function dedupeEndpointQueueRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
   return [...byWallet.values()].sort((left, right) => toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt));
 }
 
-async function enrichExactTodayContractChanges(rows: SnapshotQueueRow[], env: Record<string, string>): Promise<SnapshotQueueRow[]> {
+async function enrichExactTodayContractChanges(rows: SnapshotQueueRow[], env: Record<string, string>, authCode = ""): Promise<SnapshotQueueRow[]> {
   const db = readAssetChangeDb();
   const enriched = rows.map((row) => applyCachedTodayContractChange(row, db));
   const rowsByChain = new Map<ChainKey, Array<{ index: number; row: SnapshotQueueRow; wallet: string }>>();
@@ -622,7 +635,7 @@ async function enrichExactTodayContractChanges(rows: SnapshotQueueRow[], env: Re
     const wallets = [...new Set(group.map((item) => item.wallet.toLowerCase()))];
     for (const wallet of wallets) assetChangeRefreshInFlight.add(assetChangeDbKey(chain, wallet));
     try {
-      const today = await readPrivateMemberTodayContractEvents(chain, wallets, env).catch(() => null);
+      const today = await readPrivateMemberTodayContractEvents(chain, wallets, env, authCode).catch(() => null);
       if (!today) continue;
       for (const item of group) {
         const todayContractEvents = today?.events.get(item.wallet.toLowerCase()) ?? [];
@@ -733,6 +746,7 @@ async function readPrivateMemberTodayContractEvents(
   chain: ChainKey,
   wallets: string[],
   env: Record<string, string>,
+  authCode = "",
 ): Promise<{ date: string; source: AssetChangeDbRecord["todayContractChangeSource"]; events: Map<string, ContractUsdtEvent[]> } | null> {
   const endpoint = privateMemberTodayContractEventsEndpoint(env);
   if (!endpoint) return null;
@@ -740,7 +754,7 @@ async function readPrivateMemberTodayContractEvents(
 
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: privateMemberTodayContractEventsHeaders(env),
+    headers: privateMemberTodayContractEventsHeaders(env, authCode),
     body: JSON.stringify({
       chain,
       wallets,
@@ -838,15 +852,17 @@ function privateMemberTodayContractEventsEndpoint(env: Record<string, string>): 
   return privateMemberBase ? `${privateMemberBase}${DEFAULT_TX2_CONTRACT_EVENTS_API_PATH}` : "";
 }
 
-function privateMemberTodayContractEventsHeaders(env: Record<string, string>): Record<string, string> {
-  const token =
-    env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() ||
-    env.SUPERMTNODE_APP_TOKEN?.trim() ||
-    env.LIQUIDATION_SNAPSHOT_TOKEN?.trim() ||
-    env.MANAGE_INGEST_TOKEN?.trim();
+function privateMemberTodayContractEventsHeaders(env: Record<string, string>, authCode = ""): Record<string, string> {
+  const token = firstUsableToken(
+    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_SNAPSHOT_TOKEN,
+    env.MANAGE_INGEST_TOKEN,
+  );
   return {
     accept: "application/json",
     "content-type": "application/json",
+    ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),
     ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-token": token } : {}),
   };
 }
@@ -1653,6 +1669,29 @@ function toTimestamp(value?: string): number {
 function headerValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0]?.trim() ?? "";
   return value?.trim() ?? "";
+}
+
+function firstUsableToken(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const token = value?.trim();
+    if (!token) continue;
+    const expiry = jwtExpiry(token);
+    if (expiry && expiry.getTime() <= Date.now()) continue;
+    return token;
+  }
+  return "";
+}
+
+function jwtExpiry(token: string): Date | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
+    const exp = numberValue(payload.exp);
+    return exp ? new Date(exp * 1000) : null;
+  } catch {
+    return null;
+  }
 }
 
 function timeoutMs(env: Record<string, string>): number {

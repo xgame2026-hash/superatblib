@@ -25,8 +25,15 @@ type SuperMtNodeEndpoint = {
 const SUPERMTNODE_API_BASES = ["https://supermtnode.io", "https://api.supermtnode.io"];
 const LICENSE_ENDPOINT_ENV_KEYS: Record<string, string> = {
   eth: "ETHEREUM_RPC_URL",
+  ethereum: "ETHEREUM_RPC_URL",
+  mainnet: "ETHEREUM_RPC_URL",
   bnb: "BNB_RPC_URL",
+  bsc: "BNB_RPC_URL",
+  binance: "BNB_RPC_URL",
+  "bnb chain": "BNB_RPC_URL",
   arb: "ARBITRUM_RPC_URL",
+  arbitrum: "ARBITRUM_RPC_URL",
+  "arbitrum one": "ARBITRUM_RPC_URL",
 };
 
 export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse): boolean {
@@ -90,7 +97,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           json(res, 400, { ok: false, error: "Missing SUPERMTNODE_APP_TOKEN." });
           return;
         }
-        const endpoints = appToken ? await fetchSuperMtNodeEndpointsByToken(appToken, env) : await fetchSuperMtNodeEndpointsByLicense(authCode, env);
+        const endpoints = authCode ? await fetchSuperMtNodeEndpointsByLicenseWithTokenFallback(authCode, appToken, env) : await fetchSuperMtNodeEndpointsByToken(appToken, env);
         const applied = applyLicenseEndpointsToEnv(endpoints);
         if (!Object.keys(applied).length) {
           json(res, 409, { ok: false, error: "SUPERMTNODE_APP_TOKEN 没有可用的 BNB/ETH/ARB RPC 端点，不能启动按 IP 计费。", endpoints });
@@ -279,6 +286,15 @@ async function fetchSuperMtNodeEndpointsByToken(appToken: string, env: Record<st
   throw new Error(errors.join("; "));
 }
 
+async function fetchSuperMtNodeEndpointsByLicenseWithTokenFallback(authCode: string, appToken: string, env: Record<string, string>): Promise<SuperMtNodeEndpoint[]> {
+  try {
+    return await fetchSuperMtNodeEndpointsByLicense(authCode, env);
+  } catch (error) {
+    if (!appToken) throw error;
+    return fetchSuperMtNodeEndpointsByToken(appToken, env);
+  }
+}
+
 async function fetchSuperMtNodeEndpointsByLicense(authCode: string, env: Record<string, string>): Promise<SuperMtNodeEndpoint[]> {
   const errors: string[] = [];
   for (const baseUrl of superMtNodeApiBaseUrls(env)) {
@@ -319,7 +335,7 @@ function applyLicenseEndpointsToEnv(endpoints: SuperMtNodeEndpoint[]): Record<st
   const env = parseEnv(existingText);
   const applied: Record<string, string> = {};
   for (const endpoint of endpoints) {
-    const chain = stringValue(endpoint.chain)?.toLowerCase();
+    const chain = normalizeEndpointChain(endpoint.chain);
     const envKey = chain ? LICENSE_ENDPOINT_ENV_KEYS[chain] : undefined;
     const httpUrl = stringValue(endpoint.httpUrl, endpoint.http_url);
     const status = stringValue(endpoint.status)?.toLowerCase();
@@ -349,6 +365,10 @@ function stringValue(...values: unknown[]): string | undefined {
     if (typeof value === "number" && Number.isFinite(value)) return String(value);
   }
   return undefined;
+}
+
+function normalizeEndpointChain(value: unknown): string | undefined {
+  return stringValue(value)?.trim().toLowerCase();
 }
 
 function readBody(req: IncomingMessage): Promise<string> {

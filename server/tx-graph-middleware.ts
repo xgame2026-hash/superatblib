@@ -70,10 +70,7 @@ const chainQueryRpcEnvKeys: Record<ChainKey, string> = {
   arbitrum: "ARBITRUM_FALLBACK_RPC_URL",
 };
 
-const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {
-  ethereum: "https://compatible-dry-borough.quiknode.pro/fcd685fbfaeb5dbeafb79db4a7d2c97f23b87073/",
-  arbitrum: "https://fluent-chaotic-dream.arbitrum-mainnet.quiknode.pro/e1ea8ae975889367c2d0097dc9b660be5c5655d3/",
-};
+const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {};
 
 const chainLabels: Record<ChainKey, string> = {
   ethereum: "Ethereum",
