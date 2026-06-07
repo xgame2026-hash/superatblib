@@ -591,6 +591,7 @@ const settingsSecurityTitle = computed(() => {
   if (settingsSecurityOk.value) return "官方配置检测通过";
   const failed = visibleSecurityItems.value.filter((item) => !item.ok);
   if (failed.some(isAuthorizationFailureItem)) return "授权失效";
+  if (failed.some((item) => item.key === "BNB_RPC_URL" && /未绑定到/.test(item.message))) return "RPC 未绑定";
   const onlyMissingLocalConfig = failed.length > 0 && failed.every((item) => missingLocalConfigKeys.includes(item.key));
   return onlyMissingLocalConfig ? "本地未配置" : "检测到非官方配置";
 });
@@ -930,8 +931,8 @@ function dedupeSecurityItems(items: SecurityCheckItem[]) {
 }
 
 function isAuthorizationFailureItem(item: SecurityCheckItem) {
-  if (!["SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"].includes(item.key)) return false;
-  return /token has been rotated|HTTP 401|HTTP 403|unauthorized|forbidden|blocked/i.test(item.message);
+  if (!["SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL", "AUTH_CODE"].includes(item.key)) return false;
+  return /token has been rotated|HTTP 401|HTTP 403|unauthorized|forbidden|blocked|invalid token|授权码校验失败/i.test(item.message);
 }
 
 function formatSecurityCheckedAt(value?: string) {
@@ -943,6 +944,7 @@ function formatSecurityCheckedAt(value?: string) {
 
 function formatSecurityLabel(item: SecurityCheckItem) {
   if (item.key === "LIQUIDATION_QUEUE_TX_EVENTS_URL") return "执行流水接口";
+  if (item.key === "AUTH_CODE") return "登录授权码";
   if (item.key === "PRIVATE_MEMBER_TX2_CONTRACT_EVENTS_URL") return "备用执行流水接口";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") return "安全通道主机";
   if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") return "安全通道路径";
@@ -956,6 +958,7 @@ function formatSecurityKey(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return "WALLET_ADDRESS";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return "SERVICE_TOKEN";
   if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return "QUEUE_TOKEN";
+  if (item.key === "AUTH_CODE") return "AUTH_CODE";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") return "SECURE_CHANNEL_HOST";
   if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") return "SECURE_CHANNEL_PATH";
   if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") return "SECURE_VERIFY_FILE";
@@ -971,6 +974,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
   if (item.key === "SUPERMTNODE_APP_TOKEN") {
     return item.ok ? "已配置" : "未配置";
   }
+  if (item.key === "AUTH_CODE") return item.ok ? "已验证" : "校验失败";
   if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "已配置" : "未配置";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
@@ -992,6 +996,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
 function formatSecurityMessage(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? "已从钱包授权解析出地址" : "请先配置有效的钱包授权，否则无法提交执行任务";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? "服务授权已配置" : "请先配置服务授权 Token，否则部分官方服务无法完成授权";
+  if (item.key === "AUTH_CODE") return item.message;
   if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "队列授权已配置" : "请先配置队列授权 Token，否则无法连接执行队列";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
@@ -1013,6 +1018,7 @@ function formatSecurityMessage(item: SecurityCheckItem) {
 function formatSecuritySummary(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? `钱包地址 ${shortAddress(item.value)}` : "本地未配置";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : item.message;
+  if (item.key === "AUTH_CODE") return item.message;
   if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "队列授权已配置" : "本地未配置";
   if (item.key === "BNB_RPC_URL") return item.ok || item.value ? item.message : "本地未配置";
   if (item.key === "SECURE_UPLOAD_STATUS") return item.message;

@@ -49,8 +49,10 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const payload = JSON.parse(body || "{}") as SettingsPayload;
         const submittedEnv = typeof payload.env === "string" ? parseEnv(payload.env) : {};
         const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        const submittedPromise = buildSecurityItems("当前页面配置", submittedEnv);
-        const savedPromise = securityRelevantEnvSignature(submittedEnv) === securityRelevantEnvSignature(savedEnv) ? submittedPromise : buildSecurityItems("已保存 .env", savedEnv);
+        const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+        const submittedPromise = buildSecurityItems("当前页面配置", submittedEnv, authCode);
+        const savedPromise =
+          securityRelevantEnvSignature(submittedEnv) === securityRelevantEnvSignature(savedEnv) ? submittedPromise : buildSecurityItems("已保存 .env", savedEnv, authCode);
         const [submitted, saved] = await Promise.all([submittedPromise, savedPromise]);
         const items = saved === submitted ? submitted : [...submitted, ...saved];
         json(res, 200, {
@@ -192,8 +194,8 @@ function secureUploadItem(scope: string, env: Record<string, string>) {
   };
 }
 
-async function buildSecurityItems(scope: string, env: Record<string, string>) {
-  const [runtimeItems, officialItems] = await Promise.all([checkRuntimeSettings(scope, env), Promise.resolve(checkOfficialConfig(scope, env))]);
+async function buildSecurityItems(scope: string, env: Record<string, string>, authCode = "") {
+  const [runtimeItems, officialItems] = await Promise.all([checkRuntimeSettings(scope, env, authCode), Promise.resolve(checkOfficialConfig(scope, env))]);
   return [...runtimeItems, ...officialItems, secureUploadItem(scope, env)];
 }
 

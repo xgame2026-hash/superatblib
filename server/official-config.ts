@@ -182,15 +182,28 @@ export function checkOfficialConfig(scope: string, env: Record<string, string>):
   return items;
 }
 
-export async function checkRuntimeSettings(scope: string, env: Record<string, string>): Promise<SecurityCheckItem[]> {
+export async function checkRuntimeSettings(scope: string, env: Record<string, string>, authCode = ""): Promise<SecurityCheckItem[]> {
   const wallet = checkWallet(scope, env);
   const queueToken = checkQueueWssToken(scope, env);
   const tokenPromise = checkSuperMtNodeToken(scope, env);
-  const bnbRpcPromise = checkBnbRpc(scope, env, []);
-  const [token, bnbRpcResult] = await Promise.all([tokenPromise, bnbRpcPromise]);
-  const usage = bnbRpcResult.ok ? readEndpointUsage(token.endpoints, env.BNB_RPC_URL?.trim() ?? "") : "";
+  const licensePromise = authCode ? checkLicenseEndpoints(env, authCode) : Promise.resolve({ endpoints: [], error: "" });
+  const [token, license] = await Promise.all([tokenPromise, licensePromise]);
+  const bindingEndpoints = license.endpoints.length ? license.endpoints : token.endpoints;
+  const bnbRpcResult = await checkBnbRpc(scope, env, bindingEndpoints, authCode ? "当前授权码" : bindingEndpoints.length ? "SUPERMTNODE_APP_TOKEN" : "");
+  const usage = bnbRpcResult.ok ? readEndpointUsage(bindingEndpoints, env.BNB_RPC_URL?.trim() ?? "") : "";
   const bnbRpc = usage ? { ...bnbRpcResult, message: `${bnbRpcResult.message}；${usage}` } : bnbRpcResult;
-  return [wallet, token.item, bnbRpc, queueToken];
+  const items = [wallet, token.item, bnbRpc, queueToken];
+  if (license.error) {
+    items.push({
+      scope,
+      key: "AUTH_CODE",
+      label: "登录授权码",
+      value: "已输入",
+      ok: false,
+      message: `授权码校验失败：${license.error}`,
+    });
+  }
+  return items;
 }
 
 export function assertOfficialConfig(scope: string, env: Record<string, string>): void {
@@ -352,21 +365,27 @@ async function checkSuperMtNodeToken(
   }
 }
 
-async function checkBnbRpc(scope: string, env: Record<string, string>, endpoints: Array<Record<string, unknown>>): Promise<SecurityCheckItem> {
+async function checkBnbRpc(
+  scope: string,
+  env: Record<string, string>,
+  endpoints: Array<Record<string, unknown>>,
+  bindingLabel: string,
+): Promise<SecurityCheckItem> {
   const rpcUrl = env.BNB_RPC_URL?.trim() ?? "";
   if (!rpcUrl) return { scope, key: "BNB_RPC_URL", label: "BNB RPC", value: "", ok: false, message: "本地未配置" };
 
   try {
     const chainId = await rpc<string>(rpcUrl, "eth_chainId", []);
     const isBnb = chainId.toLowerCase() === "0x38";
+    const isBound = !bindingLabel || endpoints.some((item) => matchSuperMtNodeEndpoint(item, "bnb", rpcUrl));
     const usage = readEndpointUsage(endpoints, rpcUrl);
     return {
       scope,
       key: "BNB_RPC_URL",
       label: "BNB RPC",
       value: maskUrl(rpcUrl),
-      ok: isBnb,
-      message: `${isBnb ? "RPC 连接正常" : `链 ID 异常：${chainId}`}${usage ? `；${usage}` : ""}`,
+      ok: isBnb && isBound,
+      message: `${isBnb ? "RPC 连接正常" : `链 ID 异常：${chainId}`}${isBound ? "" : `；未绑定到${bindingLabel}`}${usage ? `；${usage}` : ""}`,
     };
   } catch (error) {
     return {
@@ -408,6 +427,63 @@ async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: str
   return Array.isArray(payload.endpoints) ? payload.endpoints.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
 }
 
+async function checkLicenseEndpoints(
+  env: Record<string, string>,
+  authCode: string,
+): Promise<{ endpoints: Array<Record<string, unknown>>; error: string }> {
+  try {
+    return { endpoints: await fetchSuperMtNodeEndpointsByLicense(env, authCode), error: "" };
+  } catch (error) {
+    return { endpoints: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function fetchSuperMtNodeEndpointsByLicense(env: Record<string, string>, authCode: string): Promise<Array<Record<string, unknown>>> {
+  const errors: string[] = [];
+  for (const apiBase of superMtNodeApiBaseUrls(env)) {
+    try {
+      const response = await fetch(`${apiBase}/api/rpc-endpoints/by-license`, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-license-code": authCode,
+        },
+        body: JSON.stringify({ code: authCode }),
+        signal: AbortSignal.timeout(4_000),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        endpoints?: unknown;
+        error?: unknown;
+        message?: unknown;
+        reason?: unknown;
+        status?: unknown;
+        valid?: unknown;
+      };
+      if (!response.ok) {
+        const detail = stringValue(payload.error, payload.message) || `HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+      if (payload.valid === false) {
+        const reason = stringValue(payload.reason, payload.message, payload.status) || "授权码失效";
+        throw new Error(reason);
+      }
+      return Array.isArray(payload.endpoints) ? payload.endpoints.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
+    } catch (error) {
+      errors.push(`${apiBase}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(errors.join("; "));
+}
+
+function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
+  return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), "https://supermtnode.io", "https://api.supermtnode.io"]).map((value) => value.replace(/\/+$/, ""));
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return values.filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index);
+}
+
 function readEndpointUsage(endpoints: Array<Record<string, unknown>>, rpcUrl: string): string {
   const endpoint = endpoints.find((item) => {
     const url = stringValue(item.httpUrl, item.http_url);
@@ -420,6 +496,49 @@ function readEndpointUsage(endpoints: Array<Record<string, unknown>>, rpcUrl: st
   if (count !== null && limit !== null && limit > 0) return `用量 ${count}/${limit}，剩余 ${Math.max(0, limit - count)}`;
   if (count !== null) return `已用 ${count}`;
   return "";
+}
+
+function matchSuperMtNodeEndpoint(endpoint: Record<string, unknown>, chain: "bnb", rpcUrl: string): boolean {
+  const endpointChain = normalizeSuperMtNodeEndpointChain(endpoint.chain);
+  if (endpointChain !== chain) return false;
+  const endpointUrl = normalizeComparableUrl(stringValue(endpoint.httpUrl, endpoint.http_url));
+  const configuredUrl = normalizeComparableUrl(rpcUrl);
+  const configuredSlug = normalizeEndpointSlug(rpcEndpointSlugFromUrl(rpcUrl));
+  const endpointSlug = normalizeEndpointSlug(stringValue(endpoint.endpointSlug, endpoint.endpoint_slug));
+  return endpointUrl === configuredUrl || (Boolean(configuredSlug) && endpointSlug === configuredSlug);
+}
+
+function normalizeSuperMtNodeEndpointChain(value: unknown): string {
+  const chain = stringValue(value)?.toLowerCase();
+  if (chain === "bsc" || chain === "binance" || chain === "bnb" || chain === "bnb chain") return "bnb";
+  return chain ?? "";
+}
+
+function rpcEndpointSlugFromUrl(value: string): string | undefined {
+  try {
+    return new URL(value).pathname.split("/").filter(Boolean).pop();
+  } catch {
+    return value.split("/").filter(Boolean).pop();
+  }
+}
+
+function normalizeEndpointSlug(value?: string): string {
+  return (value ?? "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+}
+
+function normalizeComparableUrl(value: string | undefined): string {
+  const raw = (value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    url.searchParams.sort();
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
 }
 
 function jwtExpiry(token: string): Date | null {
