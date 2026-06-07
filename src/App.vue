@@ -515,7 +515,7 @@ const settingsForm = reactive({
     snapshotTimeoutMs: "8000",
   } as Record<FeedKey, string>,
   queue: {
-    wssUrl: "",
+    wssUrl: "wss://private.superarb.ai/ws/liquidation-queue-v2",
     wssToken: "",
     manageIngestUrl: "https://manage.supermtnode.io/api/ingest/liquidation-queue",
     manageIngestToken: "",
