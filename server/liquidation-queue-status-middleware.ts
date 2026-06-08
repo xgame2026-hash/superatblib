@@ -962,9 +962,9 @@ async function sendQueuePayloadOverWss(
   queuePayload: ReturnType<typeof manageQueuePayload>,
 ): Promise<Record<string, unknown>> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
-  const wssToken = firstUsableToken(env.LIQUIDATION_QUEUE_WSS_TOKEN);
+  const wssToken = firstUsableToken(queueWssToken(env));
   if (!wssToken) {
-    throw new Error("LIQUIDATION_QUEUE_WSS_TOKEN 未配置或已过期；远端 WSS 队列当前要求专用 Token，不能用 SUPERMTNODE_APP_TOKEN 替代。");
+    throw new Error("QUEUE_TOKEN 未配置或已过期；远端 WSS 队列当前要求专用 Token，不能用 SUPERMTNODE_APP_TOKEN 替代。");
   }
   const token = firstUsableToken(
     wssToken,
@@ -1063,6 +1063,10 @@ async function sendQueuePayloadOverWss(
       if (!settled) settle(new Error(`WSS 队列服务在确认上报前断开：${endpointHost(endpoint)}`));
     });
   });
+}
+
+function queueWssToken(env: Record<string, string>): string {
+  return env.QUEUE_TOKEN?.trim() || env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() || "";
 }
 
 function correctWssEndpoint(endpoint: string, env: Record<string, string>): string {
@@ -1309,7 +1313,7 @@ function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMess
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const token = firstUsableToken(
     env.SUPERMTNODE_APP_TOKEN,
-    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    queueWssToken(env),
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,

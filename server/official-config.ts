@@ -304,7 +304,7 @@ function checkWallet(scope: string, env: Record<string, string>): SecurityCheckI
 }
 
 function checkQueueWssToken(scope: string, env: Record<string, string>, authCode = ""): SecurityCheckItem {
-  const token = env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() ?? "";
+  const token = env.QUEUE_TOKEN?.trim() || env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() || "";
   const ok = Boolean(token);
   const fallbackMessage = authCode || usableToken(env.SUPERMTNODE_APP_TOKEN) ? "服务授权已配置，但远端 WSS 队列仍要求专用 Token" : "本地未配置";
   const message = token ? "队列 WSS Token 已配置" : fallbackMessage;

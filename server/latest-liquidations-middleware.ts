@@ -329,6 +329,7 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
   const token = firstUsableToken(
     env.SUPERMTNODE_APP_TOKEN,
+    env.QUEUE_TOKEN,
     env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
@@ -854,6 +855,7 @@ function privateMemberTodayContractEventsEndpoint(env: Record<string, string>): 
 
 function privateMemberTodayContractEventsHeaders(env: Record<string, string>, authCode = ""): Record<string, string> {
   const token = firstUsableToken(
+    env.QUEUE_TOKEN,
     env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,

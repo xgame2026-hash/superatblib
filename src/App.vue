@@ -1058,7 +1058,8 @@ function generateEnvText() {
     `MANAGE_LIQUIDATION_QUEUE_INGEST_URL=${settingsForm.queue.manageIngestUrl}`,
     `MANAGE_INGEST_TOKEN=${settingsForm.queue.manageIngestToken}`,
     `LIQUIDATION_QUEUE_WSS_URL=${settingsForm.queue.wssUrl}`,
-    `LIQUIDATION_QUEUE_WSS_TOKEN=${settingsForm.queue.wssToken}`,
+    `QUEUE_TOKEN=${settingsForm.queue.wssToken}`,
+    "LIQUIDATION_QUEUE_WSS_TOKEN=",
     `LIQUIDATION_QUEUE_STATUS_URL=${settingsForm.queue.statusUrl}`,
     "",
     "SUPERMTNODE_API_BASE_URL=https://api.supermtnode.io",
@@ -1113,7 +1114,7 @@ function applyEnvSettings(env: Record<string, string>) {
   settingsForm.queue.manageIngestUrl = env.MANAGE_LIQUIDATION_QUEUE_INGEST_URL ?? settingsForm.queue.manageIngestUrl;
   settingsForm.queue.manageIngestToken = env.MANAGE_INGEST_TOKEN ?? settingsForm.queue.manageIngestToken;
   settingsForm.queue.wssUrl = env.LIQUIDATION_QUEUE_WSS_URL ?? settingsForm.queue.wssUrl;
-  settingsForm.queue.wssToken = env.LIQUIDATION_QUEUE_WSS_TOKEN ?? settingsForm.queue.wssToken;
+  settingsForm.queue.wssToken = env.QUEUE_TOKEN ?? env.LIQUIDATION_QUEUE_WSS_TOKEN ?? settingsForm.queue.wssToken;
   settingsForm.queue.statusUrl = env.LIQUIDATION_QUEUE_STATUS_URL ?? settingsForm.queue.statusUrl;
   settingsForm.superMtNodeAppToken = env.SUPERMTNODE_APP_TOKEN ?? settingsForm.superMtNodeAppToken;
   settingsForm.cache.redisUrl = env.DASHBOARD_OVERVIEW_REDIS_URL ?? settingsForm.cache.redisUrl;
