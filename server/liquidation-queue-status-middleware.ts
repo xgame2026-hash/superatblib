@@ -11,6 +11,7 @@ import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootst
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
+const CLIENT_INSTANCE_FILE = resolve(process.cwd(), ".superarb/client-instance-id");
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
@@ -235,6 +236,16 @@ async function registerQueueStatus(req: IncomingMessage) {
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能读取钱包余额。`);
   const rpcAccess = stopping ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   const rpcAccessTokenHash = rpcAccess?.rpcAccessTokenHash ?? (await queueRpcAccessTokenHash(chain, env, authCode));
+  const clientInstanceId = readClientInstanceId();
+  if (!stopping) {
+    await assertQueueCredentialAvailable(env, req, {
+      chain,
+      walletAddress,
+      authCode,
+      rpcAccessTokenHash,
+      clientInstanceId,
+    });
+  }
   if (!stopping) {
     await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
   }
@@ -263,6 +274,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     expiresAt: new Date(generatedAt.getTime() + heartbeatMs * 3).toISOString(),
     chain,
     market,
+    clientInstanceId,
     walletAddress,
     wallet: { address: walletAddress, balances },
     balances,
@@ -347,6 +359,7 @@ function updateLocalQueueState(payload: {
   walletAddress: string;
   balances?: WalletBalances;
   endpointSlug?: string;
+  clientInstanceId: string;
   rpcEnv: string;
   authCode?: string;
   rpcAccessTokenHash?: string;
@@ -1081,6 +1094,64 @@ function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): 
   return headers;
 }
 
+async function assertQueueCredentialAvailable(
+  env: Record<string, string>,
+  req: IncomingMessage,
+  payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string },
+): Promise<void> {
+  const expectedCredential = buildQueueMemberKey(
+    payload.chain,
+    payload.walletAddress,
+    licenseCodeFingerprint(payload.authCode),
+    payload.rpcAccessTokenHash || "no-token",
+  );
+  const rows = await fetchQueueLockRows(env, req, payload.chain);
+  const occupied = rows.find((row) => {
+    if (isExpiredRemoteQueueRow(row)) return false;
+    if (remoteQueueCredential(row) !== expectedCredential) return false;
+    const action = (stringValue(row.action) ?? "").toLowerCase();
+    const status = (stringValue(row.status) ?? "").toLowerCase();
+    if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister", "inactive"].includes(status)) return false;
+    const rowClientInstanceId = remoteQueueClientInstanceId(row);
+    return !rowClientInstanceId || rowClientInstanceId !== payload.clientInstanceId;
+  });
+  if (!occupied) return;
+  const updatedAt = stringValue(occupied.updatedAt, occupied.updated_at, occupied.lastSeenAt, occupied.last_seen_at);
+  throw new Error(
+    `同一个私钥/钱包已经在另一台电脑运行，不能重复启动。请先在原电脑退出，或等待队列租约过期${updatedAt ? `（最后上报 ${updatedAt}）` : ""}。`,
+  );
+}
+
+async function fetchQueueLockRows(env: Record<string, string>, req: IncomingMessage, chain: ChainKey): Promise<Record<string, unknown>[]> {
+  const results = await Promise.allSettled([
+    fetchRemoteQueueRows(env, req),
+    fetchManagePublicQueueRows(env, chain),
+  ]);
+  const rows = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+  const deduped = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const key = remoteQueueCredential(row) || stringValue(row.id) || JSON.stringify(row).slice(0, 120);
+    deduped.set(key, row);
+  }
+  return [...deduped.values()];
+}
+
+async function fetchManagePublicQueueRows(env: Record<string, string>, chain: ChainKey): Promise<Record<string, unknown>[]> {
+  const ingestUrl = manageQueueIngestUrl(env);
+  const url = new URL(ingestUrl);
+  url.pathname = "/api/public/liquidations/queue";
+  url.search = "";
+  url.searchParams.set("chain", chain);
+  url.searchParams.set("limit", "500");
+  const response = await fetch(url, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(remoteQueueVerifyTimeoutMs(env)),
+  });
+  const payload = (await response.json().catch(() => ({}))) as unknown;
+  if (!response.ok) return [];
+  return readRemoteQueueRows(unwrapRemoteQueuePayload(payload));
+}
+
 function remoteQueueVerifyEnabled(env: Record<string, string>): boolean {
   const configured = String(env.LIQUIDATION_QUEUE_VERIFY_REMOTE_STATUS ?? "enabled").trim().toLowerCase();
   return !["0", "false", "off", "disabled", "关闭"].includes(configured);
@@ -1220,6 +1291,23 @@ function remoteQueueCredential(row: Record<string, unknown>): string {
   );
 }
 
+function remoteQueueClientInstanceId(row: Record<string, unknown>): string {
+  return (
+    stringValue(
+      row.clientInstanceId,
+      row.client_instance_id,
+      row.instanceId,
+      row.instance_id,
+      row.machineId,
+      row.machine_id,
+      row.deviceId,
+      row.device_id,
+      isRecord(row.client) ? row.client.instanceId : undefined,
+      isRecord(row.tx2) ? row.tx2.clientInstanceId : undefined,
+    ) ?? ""
+  );
+}
+
 function remoteQueueWallet(row: Record<string, unknown>): string {
   const direct = stringValue(row.walletAddress, row.wallet_address, row.address, row.account, row.user, row.borrower, row.owner, row.wallet_id, row.walletId);
   if (direct) return direct;
@@ -1278,6 +1366,7 @@ function manageQueuePayload(payload: {
   walletAddress: string;
   balances?: WalletBalances;
   endpointSlug?: string;
+  clientInstanceId: string;
   rpcEnv: string;
   eligible: boolean;
   reason?: string;
@@ -1310,6 +1399,8 @@ function manageQueuePayload(payload: {
     market: payload.market,
     wallet: payload.walletAddress,
     walletAddress: payload.walletAddress,
+    clientInstanceId: payload.clientInstanceId,
+    client_instance_id: payload.clientInstanceId,
     endpointSlug: payload.endpointSlug,
     participantId: queueMemberKey,
     participantKey: queueMemberKey,
@@ -1365,6 +1456,8 @@ function manageQueuePayload(payload: {
         wallet: payload.walletAddress,
         walletAddress: payload.walletAddress,
         wallet_address: payload.walletAddress,
+        clientInstanceId: payload.clientInstanceId,
+        client_instance_id: payload.clientInstanceId,
         username: payload.username,
         privateKeyCipher: payload.privateKeyCipher,
         private_key_cipher: payload.privateKeyCipher,
@@ -1464,6 +1557,21 @@ function protocolLabelFromMarket(market: string): string {
 
 function buildQueueMemberKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
   return ["license-token-wallet", chain, licenseHash, tokenHash, walletAddress.toLowerCase()].join(":");
+}
+
+function readClientInstanceId(): string {
+  try {
+    if (existsSync(CLIENT_INSTANCE_FILE)) {
+      const existing = readFileSync(CLIENT_INSTANCE_FILE, "utf8").trim();
+      if (/^liq2-[a-f0-9-]{16,}$/i.test(existing)) return existing;
+    }
+    mkdirSync(dirname(CLIENT_INSTANCE_FILE), { recursive: true });
+    const generated = `liq2-${crypto.randomUUID()}`;
+    writeFileSync(CLIENT_INSTANCE_FILE, `${generated}\n`, { mode: 0o600 });
+    return generated;
+  } catch {
+    return `liq2-${crypto.randomUUID()}`;
+  }
 }
 
 function buildTxWalletCredentialFields(env: Record<string, string>, walletAddress: string): {
