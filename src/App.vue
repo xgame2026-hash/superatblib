@@ -5,7 +5,7 @@
       <main class="login-panel">
         <div class="login-brand-row">
           <img class="login-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-          <span class="login-version">1.4.4</span>
+          <span class="login-version">1.4.5</span>
         </div>
 
         <el-form class="auth-form" @submit.prevent="submitLogin">
@@ -60,7 +60,7 @@
       <header class="topbar">
         <div class="topbar-left">
           <img class="system-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-          <span class="topbar-version">1.4.4</span>
+          <span class="topbar-version">1.4.5</span>
         </div>
         <div class="topbar-right">
           <button
@@ -342,7 +342,7 @@ const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.4.4";
+const appVersion = "1.4.5";
 
 const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
 const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "settings"] satisfies ViewKey[];
@@ -564,7 +564,7 @@ const settingsSaveTitle = computed(() => {
   return "保存中";
 });
 
-const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL", "LIQUIDATION_QUEUE_WSS_TOKEN"];
+const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"];
 const hiddenPassingSecurityKeys = [
   "LIQUIDATION_QUEUE_INGEST_URL",
   "MANAGE_LIQUIDATION_QUEUE_WSS_URL",
@@ -973,7 +973,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
     return item.ok ? "已配置" : "未配置";
   }
   if (item.key === "AUTH_CODE") return item.ok ? "已验证" : "校验失败";
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "已配置" : "未配置";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.value || item.message : "未配置";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
     return item.ok ? "官方安全通道" : "非官方安全通道";
@@ -995,7 +995,7 @@ function formatSecurityMessage(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? "已从钱包授权解析出地址" : "请先配置有效的钱包授权，否则无法提交执行任务";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? "服务授权已配置" : "请先配置服务授权 Token，否则部分官方服务无法完成授权";
   if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "队列授权已配置" : "请先配置队列授权 Token，否则无法连接执行队列";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.message : "请先配置服务授权 Token 或登录授权码，否则无法连接执行队列";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
     return item.ok ? "官方安全通道" : "请恢复为官方安全通道";
@@ -1017,7 +1017,7 @@ function formatSecuritySummary(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? `钱包地址 ${shortAddress(item.value)}` : "本地未配置";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : item.message;
   if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "队列授权已配置" : "本地未配置";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.message : "本地未配置";
   if (item.key === "BNB_RPC_URL") return item.ok || item.value ? item.message : "本地未配置";
   if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
   if (item.ok) return "检查通过";
@@ -1030,7 +1030,7 @@ function shortAddress(value: string) {
 
 function generateEnvText() {
   const lines = [
-    "# Generated from SuperARB 1.4.4 internal settings",
+    "# Generated from SuperARB 1.4.5 internal settings",
     `PRIVATE_KEY=${settingsForm.privateKey}`,
     `DASHBOARD_LANGUAGE=${settingsForm.language}`,
     `FUNDING_MODE=${settingsForm.fundingMode}`,
@@ -1038,7 +1038,7 @@ function generateEnvText() {
     `CREDENTIAL_AUTH_MODE=${settingsForm.credentialAuthMode}`,
     `SINGLE_TRADE_AUTH_AMOUNT_USDT=${settingsForm.singleTradeAuthAmountUsdt}`,
     `STARTUP_DETECTION_MODE=${settingsForm.startupDetectionMode}`,
-    "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=10000",
+    "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=1000",
     `LIQUIDATION_QUEUE_WSS_CORRECTION=${settingsForm.wssCorrectionMode}`,
     `DASHBOARD_PORT=${normalizeDashboardPort(settingsForm.dashboardPort)}`,
     `LAUNCH_SOUND_ENABLED=${settingsForm.launchSoundMode}`,

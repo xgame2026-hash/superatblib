@@ -42,7 +42,7 @@ export function handleGithubVersionRequest(req: IncomingMessage, res: ServerResp
 
 async function fetchGithubVersion(): Promise<GithubVersionPayload> {
   const env = readEnv();
-  const currentVersion = env.SUPERARB_VERSION?.trim() || "1.4.4";
+  const currentVersion = env.SUPERARB_VERSION?.trim() || "1.4.5";
   const directVersion = env.GITHUB_LATEST_VERSION?.trim();
   const latestUrl = env.GITHUB_LATEST_VERSION_URL?.trim();
   const repository = normalizeRepository(env.GITHUB_REPOSITORY?.trim() || env.GITHUB_REPO?.trim() || DEFAULT_GITHUB_REPOSITORY);
@@ -162,9 +162,9 @@ function readPackageVersion(): string {
   try {
     const source = existsSync(PACKAGE_FILE) ? readFileSync(PACKAGE_FILE, "utf8") : "{}";
     const payload = JSON.parse(source) as { version?: string };
-    return payload.version ?? "1.4.4";
+    return payload.version ?? "1.4.5";
   } catch {
-    return "1.4.4";
+    return "1.4.5";
   }
 }
 

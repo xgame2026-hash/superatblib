@@ -12,14 +12,15 @@ import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootst
 const ENV_FILE = resolve(process.cwd(), ".env");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
 const CLIENT_INSTANCE_FILE = resolve(process.cwd(), ".superarb/client-instance-id");
+const TX_CREDENTIAL_SYNC_STATE_FILE = resolve(process.cwd(), ".superarb/tx-credential-sync.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 1_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
 const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/ingest/liquidation-queue";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.4.4";
+const CLIENT_VERSION = "1.4.5";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -92,6 +93,16 @@ type SuperMtNodeEndpoint = {
   credit_burn_per_second?: unknown;
   creditsRemaining?: unknown;
   credits_remaining?: unknown;
+  expiresAt?: unknown;
+  expires_at?: unknown;
+  validUntil?: unknown;
+  valid_until?: unknown;
+  licenseExpiresAt?: unknown;
+  license_expires_at?: unknown;
+  tokenExpiresAt?: unknown;
+  token_expires_at?: unknown;
+  subscriptionExpiresAt?: unknown;
+  subscription_expires_at?: unknown;
 };
 
 type RpcAccessInfo = {
@@ -237,15 +248,16 @@ async function registerQueueStatus(req: IncomingMessage) {
   const rpcAccess = stopping ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   const rpcAccessTokenHash = rpcAccess?.rpcAccessTokenHash ?? (await queueRpcAccessTokenHash(chain, env, authCode));
   const clientInstanceId = readClientInstanceId();
-  if (!stopping) {
-    await assertQueueCredentialAvailable(env, req, {
-      chain,
-      walletAddress,
-      authCode,
-      rpcAccessTokenHash,
-      clientInstanceId,
-    });
-  }
+  const credentialIdentity = {
+    chain,
+    walletAddress,
+    authCode,
+    rpcAccessTokenHash,
+    clientInstanceId,
+    action,
+  };
+  if (stopping) await assertQueueCredentialOwnedForStop(env, req, credentialIdentity);
+  else await assertQueueCredentialAvailable(env, req, credentialIdentity);
   if (!stopping) {
     await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
   }
@@ -256,10 +268,15 @@ async function registerQueueStatus(req: IncomingMessage) {
   const gasBalance = balances ? Number(balances.gas.formatted) : null;
   const wssEndpoint = queueWssUrl(env);
   const httpFallbackEndpoint = manageQueueIngestUrl(env);
-  const endpoint = wssEndpoint || httpFallbackEndpoint;
   const generatedAt = new Date();
   const generatedAtIso = generatedAt.toISOString();
   const heartbeatMs = heartbeatIntervalMs(env);
+  const expiresAt = new Date(generatedAt.getTime() + queueLeaseMs(heartbeatMs)).toISOString();
+  const billable = !stopping && action !== "burn";
+  const tradeSettings = readTradeSettings(env);
+  const txCredentialSignature = txCredentialSyncSignature(env, walletAddress, rpcAccess);
+  const shouldUploadTxCredential = !stopping && shouldUploadTxCredentialFields(action, txCredentialSignature);
+  const txCredentialFields = shouldUploadTxCredential ? buildTxWalletCredentialFields(env, walletAddress) : {};
 
   const eligible = !stopping && (balances ? Number.isFinite(gasBalance) && Number(gasBalance) > 0 : true);
   const reason = stopping ? "client stopped" : balances ? (eligible ? undefined : `${chainLabel(chain)} wallet has no gas.`) : balanceResult.reason;
@@ -271,10 +288,11 @@ async function registerQueueStatus(req: IncomingMessage) {
     generatedAt: generatedAtIso,
     lastSeenAt: generatedAtIso,
     heartbeatIntervalMs: heartbeatMs,
-    expiresAt: new Date(generatedAt.getTime() + heartbeatMs * 3).toISOString(),
+    expiresAt,
     chain,
     market,
     clientInstanceId,
+    clientVersion: CLIENT_VERSION,
     walletAddress,
     wallet: { address: walletAddress, balances },
     balances,
@@ -283,27 +301,42 @@ async function registerQueueStatus(req: IncomingMessage) {
     rpcEnv: chainEnvKeys[chain],
     authCode,
     rpcAccessTokenHash,
+    billable,
+    online: billable,
+    billingStatus: billable ? "online" : "stopped",
+    billingStartedAt: billable ? generatedAtIso : undefined,
+    billingStoppedAt: billable ? undefined : generatedAtIso,
+    txCredentialSyncSignature: shouldUploadTxCredential ? txCredentialSignature : undefined,
+    txCredentialSyncRequired: shouldUploadTxCredential,
     eligible,
     reason,
     ...rpcAccess,
-    ...readTradeSettings(env),
-    ...(!stopping ? buildTxWalletCredentialFields(env, walletAddress) : {}),
+    ...(shouldUploadTxCredential ? tradeSettings : {}),
+    ...txCredentialFields,
   };
+  const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
   if (stopping) updateLocalQueueState(payload);
 
   let transportResult: QueueTransportResult;
   let transportWarning: string | undefined;
-  const wssCorrectionEnabled = allowQueueWssCorrection(env);
-
-  try {
-    transportResult = await sendManageQueuePayload(endpoint, env, req, payload);
-  } catch (error) {
-    if (!wssEndpoint || endpoint !== wssEndpoint || (!allowQueueHttpFallback(env) && !wssCorrectionEnabled)) {
-      throw new Error(error instanceof Error ? error.message : String(error));
+  if (wssEndpoint) {
+    try {
+      transportResult = await sendManageQueuePayload(wssEndpoint, env, req, payload);
+    } catch (error) {
+      transportWarning = error instanceof Error ? error.message : String(error);
+      if (!allowQueueHttpFallback(env)) {
+        throw new Error(`WSS 队列上报失败：${transportWarning}`);
+      }
+      transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
     }
-    transportWarning = wssCorrectionEnabled ? undefined : error instanceof Error ? error.message : String(error);
+  } else {
+    if (!allowQueueHttpFallback(env)) {
+      throw new Error("LIQUIDATION_QUEUE_WSS_URL 未配置，不能启动 WSS 队列。");
+    }
+    transportWarning = "LIQUIDATION_QUEUE_WSS_URL 未配置，已使用 HTTP fallback。";
     transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
   }
+  if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
 
   let remoteQueue: { verified: true; participantId?: string } | undefined;
   let remoteQueueWarning: string | undefined;
@@ -342,7 +375,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     heartbeatIntervalMs: heartbeatMs,
     lastSeenAt: generatedAtIso,
     expiresAt: payload.expiresAt,
-    queue: isRecord(transportResult.payload.queue) ? transportResult.payload.queue : null,
+    queue: isRecord(transportResult.payload.queue) ? transportResult.payload.queue : localQueueItem,
     remoteQueueVerified: remoteQueue?.verified ?? false,
     remoteQueueParticipantId: remoteQueue?.participantId,
     remoteQueueWarning,
@@ -369,6 +402,14 @@ function updateLocalQueueState(payload: {
   lastSeenAt: string;
   heartbeatIntervalMs: number;
   expiresAt: string;
+  clientVersion?: string;
+  billable?: boolean;
+  online?: boolean;
+  billingStatus?: string;
+  billingStartedAt?: string;
+  billingStoppedAt?: string;
+  txCredentialSyncSignature?: string;
+  txCredentialSyncRequired?: boolean;
 }): void {
   const state = readLocalQueueState();
   const item = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
@@ -630,24 +671,18 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
-
-  if (authCode) {
-    try {
-      const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
-      const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-      if (endpoint) {
-        return rpcAccessFromEndpoint(chain, endpoint, "授权码", endpointAccessTokenHash(endpoint, token));
-      }
-    } catch (error) {
-      if (!token) throw error;
-    }
-    if (!token) throw new Error(`${chainLabel(chain)} RPC 未绑定到当前授权码，不能启动。`);
-  }
-
   if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
   const tokenExpiry = jwtExpiry(token);
   if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
     throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
+  }
+
+  if (authCode) {
+    const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
+    const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+    if (endpoint) {
+      return rpcAccessFromEndpoint(chain, endpoint, "授权码", endpointAccessTokenHash(endpoint, token));
+    }
   }
 
   const endpoints = await fetchSuperMtNodeEndpoints(env, token);
@@ -664,6 +699,11 @@ function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, a
   const status = stringValue(endpoint.status)?.toLowerCase();
   if (status && !["active", "pending"].includes(status)) {
     throw new Error(`${chainLabel(chain)} RPC 当前状态为 ${status}，不能启动。`);
+  }
+
+  const expiresAt = endpointExpiry(endpoint);
+  if (expiresAt && expiresAt.getTime() <= Date.now()) {
+    throw new Error(`${authLabel} 已于 ${expiresAt.toISOString()} 过期，不能启动。`);
   }
 
   const remaining = endpointRemainingCredits(endpoint);
@@ -808,6 +848,21 @@ function endpointRemainingCredits(endpoint: SuperMtNodeEndpoint): number | null 
   const limit = numberValue(endpoint.requestLimit, endpoint.request_limit);
   if (count !== null && limit !== null && limit > 0) return Math.max(0, limit - count);
   return null;
+}
+
+function endpointExpiry(endpoint: SuperMtNodeEndpoint): Date | null {
+  return dateValue(
+    endpoint.expiresAt,
+    endpoint.expires_at,
+    endpoint.validUntil,
+    endpoint.valid_until,
+    endpoint.licenseExpiresAt,
+    endpoint.license_expires_at,
+    endpoint.tokenExpiresAt,
+    endpoint.token_expires_at,
+    endpoint.subscriptionExpiresAt,
+    endpoint.subscription_expires_at,
+  );
 }
 
 function rpcPlanTypeFromEndpoint(endpoint: SuperMtNodeEndpoint): string | undefined {
@@ -1097,7 +1152,7 @@ function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): 
 async function assertQueueCredentialAvailable(
   env: Record<string, string>,
   req: IncomingMessage,
-  payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string },
+  payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string; action: string },
 ): Promise<void> {
   const expectedCredential = buildQueueMemberKey(
     payload.chain,
@@ -1113,12 +1168,46 @@ async function assertQueueCredentialAvailable(
     const status = (stringValue(row.status) ?? "").toLowerCase();
     if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister", "inactive"].includes(status)) return false;
     const rowClientInstanceId = remoteQueueClientInstanceId(row);
-    return !rowClientInstanceId || rowClientInstanceId !== payload.clientInstanceId;
+    if (rowClientInstanceId) return rowClientInstanceId !== payload.clientInstanceId;
+    return payload.action === "start";
   });
   if (!occupied) return;
   const updatedAt = stringValue(occupied.updatedAt, occupied.updated_at, occupied.lastSeenAt, occupied.last_seen_at);
   throw new Error(
     `同一个私钥/钱包已经在另一台电脑运行，不能重复启动。请先在原电脑退出，或等待队列租约过期${updatedAt ? `（最后上报 ${updatedAt}）` : ""}。`,
+  );
+}
+
+async function assertQueueCredentialOwnedForStop(
+  env: Record<string, string>,
+  req: IncomingMessage,
+  payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string },
+): Promise<void> {
+  const expectedCredential = buildQueueMemberKey(
+    payload.chain,
+    payload.walletAddress,
+    licenseCodeFingerprint(payload.authCode),
+    payload.rpcAccessTokenHash || "no-token",
+  );
+  const rows = await fetchQueueLockRows(env, req, payload.chain);
+  const occupiedByAnotherInstance = rows.find((row) => {
+    if (isExpiredRemoteQueueRow(row)) return false;
+    if (remoteQueueCredential(row) !== expectedCredential) return false;
+    const action = (stringValue(row.action) ?? "").toLowerCase();
+    const status = (stringValue(row.status) ?? "").toLowerCase();
+    if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister", "inactive"].includes(status)) return false;
+    const rowClientInstanceId = remoteQueueClientInstanceId(row);
+    return Boolean(rowClientInstanceId) && rowClientInstanceId !== payload.clientInstanceId;
+  });
+  if (!occupiedByAnotherInstance) return;
+  const updatedAt = stringValue(
+    occupiedByAnotherInstance.updatedAt,
+    occupiedByAnotherInstance.updated_at,
+    occupiedByAnotherInstance.lastSeenAt,
+    occupiedByAnotherInstance.last_seen_at,
+  );
+  throw new Error(
+    `同一个私钥/钱包正在另一台电脑运行，本机不能退出对方队列。请在原电脑退出${updatedAt ? `（最后上报 ${updatedAt}）` : ""}。`,
   );
 }
 
@@ -1374,6 +1463,7 @@ function manageQueuePayload(payload: {
   lastSeenAt: string;
   heartbeatIntervalMs: number;
   expiresAt: string;
+  clientVersion?: string;
   privateKeyCipher?: string;
   walletPublicKey?: string;
   username?: string;
@@ -1385,6 +1475,13 @@ function manageQueuePayload(payload: {
   rpcPlanType?: string;
   rpcPlanName?: string;
   creditBurnPerSecond?: number | null;
+  billable?: boolean;
+  online?: boolean;
+  billingStatus?: string;
+  billingStartedAt?: string;
+  billingStoppedAt?: string;
+  txCredentialSyncSignature?: string;
+  txCredentialSyncRequired?: boolean;
 }) {
   const stopping = STOP_ACTIONS.includes(payload.action);
   const status = stopping ? "paused" : payload.eligible ? "queued" : "waiting";
@@ -1392,10 +1489,16 @@ function manageQueuePayload(payload: {
   const tokenHash = payload.rpcAccessTokenHash || "no-token";
   const queueMemberKey = buildQueueMemberKey(payload.chain, payload.walletAddress, licenseHash, tokenHash);
   const queueItemId = queueMemberKey;
+  const billable = payload.billable ?? (!stopping && payload.eligible);
+  const online = payload.online ?? billable;
+  const billingStatus = payload.billingStatus ?? (billable ? "online" : "stopped");
   return {
     chain: payload.chain,
     source: `${chainLabel(payload.chain).toLowerCase()}-rpc-queue`,
     action: payload.action,
+    version: payload.clientVersion ?? CLIENT_VERSION,
+    clientVersion: payload.clientVersion ?? CLIENT_VERSION,
+    client_version: payload.clientVersion ?? CLIENT_VERSION,
     market: payload.market,
     wallet: payload.walletAddress,
     walletAddress: payload.walletAddress,
@@ -1414,6 +1517,21 @@ function manageQueuePayload(payload: {
     license_code_hash: licenseHash,
     rpcAccessTokenHash: tokenHash,
     rpc_access_token_hash: tokenHash,
+    billable,
+    billingStatus,
+    billing_status: billingStatus,
+    billingStartedAt: payload.billingStartedAt,
+    billing_started_at: payload.billingStartedAt,
+    billingStoppedAt: payload.billingStoppedAt,
+    billing_stopped_at: payload.billingStoppedAt,
+    txCredentialSyncSignature: payload.txCredentialSyncSignature,
+    tx_credential_sync_signature: payload.txCredentialSyncSignature,
+    txCredentialSyncRequired: payload.txCredentialSyncRequired,
+    tx_credential_sync_required: payload.txCredentialSyncRequired,
+    online,
+    isOnline: online,
+    is_online: online,
+    metering: meteringSettings(payload, billable, online, billingStatus),
     rpc: payload.rpcEnv,
     username: payload.username,
     privateKeyCipher: payload.privateKeyCipher,
@@ -1452,6 +1570,9 @@ function manageQueuePayload(payload: {
         dedupe_key: queueMemberKey,
         source: `${chainLabel(payload.chain).toLowerCase()}-rpc-queue`,
         queueType: "endpoint-start",
+        version: payload.clientVersion ?? CLIENT_VERSION,
+        clientVersion: payload.clientVersion ?? CLIENT_VERSION,
+        client_version: payload.clientVersion ?? CLIENT_VERSION,
         chain: payload.chain,
         wallet: payload.walletAddress,
         walletAddress: payload.walletAddress,
@@ -1484,8 +1605,23 @@ function manageQueuePayload(payload: {
         rpc_access_token_hash: tokenHash,
         queueCredential: queueMemberKey,
         queue_credential: queueMemberKey,
+        billable,
+        billingStatus,
+        billing_status: billingStatus,
+        billingStartedAt: payload.billingStartedAt,
+        billing_started_at: payload.billingStartedAt,
+        billingStoppedAt: payload.billingStoppedAt,
+        billing_stopped_at: payload.billingStoppedAt,
+        txCredentialSyncSignature: payload.txCredentialSyncSignature,
+        tx_credential_sync_signature: payload.txCredentialSyncSignature,
+        txCredentialSyncRequired: payload.txCredentialSyncRequired,
+        tx_credential_sync_required: payload.txCredentialSyncRequired,
+        online,
+        isOnline: online,
+        is_online: online,
         creditBurnPerSecond: payload.creditBurnPerSecond,
         credit_burn_per_second: payload.creditBurnPerSecond,
+        metering: meteringSettings(payload, billable, online, billingStatus),
         executionSettings: executionSettings(payload),
         tx2: tx2Settings(payload, queueMemberKey),
         asset: `${tokenContracts[payload.chain].gasSymbol} / USDT / USDC`,
@@ -1527,6 +1663,48 @@ function executionSettings(payload: {
     rpcPlanType: payload.rpcPlanType,
     rpcPlanName: payload.rpcPlanName,
     creditBurnPerSecond: payload.creditBurnPerSecond,
+  };
+}
+
+function meteringSettings(
+  payload: {
+    chain: ChainKey;
+    walletAddress: string;
+    endpointSlug?: string;
+    rpcAccessTokenHash?: string;
+    rpcPlanType?: string;
+    rpcPlanName?: string;
+    creditBurnPerSecond?: number | null;
+    heartbeatIntervalMs: number;
+    expiresAt: string;
+  },
+  billable: boolean,
+  online: boolean,
+  billingStatus: string,
+) {
+  return {
+    model: "server_online_wallet_per_second",
+    billable,
+    online,
+    billingStatus,
+    billing_status: billingStatus,
+    chain: payload.chain,
+    walletAddress: payload.walletAddress,
+    wallet_address: payload.walletAddress,
+    endpointSlug: payload.endpointSlug,
+    endpoint_slug: payload.endpointSlug,
+    rpcAccessTokenHash: payload.rpcAccessTokenHash,
+    rpc_access_token_hash: payload.rpcAccessTokenHash,
+    rpcPlanType: payload.rpcPlanType,
+    rpc_plan_type: payload.rpcPlanType,
+    rpcPlanName: payload.rpcPlanName,
+    rpc_plan_name: payload.rpcPlanName,
+    creditBurnPerSecond: payload.creditBurnPerSecond,
+    credit_burn_per_second: payload.creditBurnPerSecond,
+    heartbeatIntervalMs: payload.heartbeatIntervalMs,
+    heartbeat_interval_ms: payload.heartbeatIntervalMs,
+    expiresAt: payload.expiresAt,
+    expires_at: payload.expiresAt,
   };
 }
 
@@ -1586,6 +1764,44 @@ function buildTxWalletCredentialFields(env: Record<string, string>, walletAddres
     walletPublicKey,
     privateKeyCipher: encryptForTxWallet(privateKey, readTxPublicKeyPem(env)),
   };
+}
+
+function shouldUploadTxCredentialFields(action: string, signature: string): boolean {
+  if (STOP_ACTIONS.includes(action)) return false;
+  if (action === "start") return true;
+  return readTxCredentialSyncSignature() !== signature;
+}
+
+function txCredentialSyncSignature(env: Record<string, string>, walletAddress: string, rpcAccess?: RpcAccessInfo): string {
+  const tradeSettings = readTradeSettings(env);
+  const payload = {
+    version: 1,
+    walletAddress: walletAddress.toLowerCase(),
+    privateKeyHash: tokenFingerprint(normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "")),
+    credentialAuthMode: tradeSettings.credentialAuthMode,
+    singleTradeAuthAmountUsdt: tradeSettings.singleTradeAuthAmountUsdt,
+    arbitrageIntensity: tradeSettings.arbitrageIntensity,
+    rpcAccessTokenHash: rpcAccess?.rpcAccessTokenHash ?? "",
+    rpcPlanType: rpcAccess?.rpcPlanType ?? "",
+    rpcPlanName: rpcAccess?.rpcPlanName ?? "",
+    creditBurnPerSecond: rpcAccess?.creditBurnPerSecond ?? null,
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function readTxCredentialSyncSignature(): string {
+  if (!existsSync(TX_CREDENTIAL_SYNC_STATE_FILE)) return "";
+  try {
+    const parsed = JSON.parse(readFileSync(TX_CREDENTIAL_SYNC_STATE_FILE, "utf8")) as { signature?: unknown };
+    return typeof parsed.signature === "string" ? parsed.signature : "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberTxCredentialSync(signature: string): void {
+  mkdirSync(dirname(TX_CREDENTIAL_SYNC_STATE_FILE), { recursive: true });
+  writeFileSync(TX_CREDENTIAL_SYNC_STATE_FILE, `${JSON.stringify({ signature, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
 }
 
 function readTradeSettings(env: Record<string, string>): { arbitrageIntensity: string; credentialAuthMode: string; singleTradeAuthAmountUsdt: string } {
@@ -1889,6 +2105,29 @@ function numberValue(...values: unknown[]): number | null {
   return null;
 }
 
+function dateValue(...values: unknown[]): Date | null {
+  for (const value of values) {
+    if (value instanceof Date && Number.isFinite(value.getTime())) return value;
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      const timestamp = value > 1_000_000_000_000 ? value : value * 1000;
+      const date = new Date(timestamp);
+      if (Number.isFinite(date.getTime())) return date;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const trimmed = value.trim();
+      const numeric = Number(trimmed);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        const timestamp = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+        const date = new Date(timestamp);
+        if (Number.isFinite(date.getTime())) return date;
+      }
+      const date = new Date(trimmed);
+      if (Number.isFinite(date.getTime())) return date;
+    }
+  }
+  return null;
+}
+
 function stringValue(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -1975,7 +2214,11 @@ function rpcBurnConcurrency(env: Record<string, string>): number {
 
 function heartbeatIntervalMs(env: Record<string, string>): number {
   const parsed = Number(env.LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS);
-  return Number.isFinite(parsed) && parsed >= 5_000 ? Math.min(parsed, 60_000) : DEFAULT_HEARTBEAT_INTERVAL_MS;
+  return Number.isFinite(parsed) && parsed >= 1_000 ? Math.min(parsed, 15_000) : DEFAULT_HEARTBEAT_INTERVAL_MS;
+}
+
+function queueLeaseMs(heartbeatMs: number): number {
+  return Math.max(heartbeatMs * 3, 5_000);
 }
 
 function readEnv(): Record<string, string> {
