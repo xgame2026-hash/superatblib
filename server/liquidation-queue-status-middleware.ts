@@ -1013,8 +1013,9 @@ async function sendQueuePayloadOverWss(
 
     const sendQueueEvent = () => {
       if (eventSent || settled) return;
+      if (ws.readyState !== WebSocket.OPEN) return;
       eventSent = true;
-      ws.send(JSON.stringify({
+      sendWssJson(ws, {
         type: "liquidation_queue.event",
         messageId: eventMessageId,
         requestId: eventMessageId,
@@ -1025,11 +1026,11 @@ async function sendQueuePayloadOverWss(
         participantIds: queueIdentities.map((item) => item.participantId).filter(Boolean),
         data: queuePayload,
         generatedAt: new Date().toISOString(),
-      }));
+      }, settle);
     };
 
     ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({
+      sendWssJson(ws, {
         type: "auth",
         messageId: authMessageId,
         requestId: authMessageId,
@@ -1042,7 +1043,7 @@ async function sendQueuePayloadOverWss(
         walletAddresses: queueIdentities.map((item) => item.walletAddress).filter(Boolean),
         participantIds: queueIdentities.map((item) => item.participantId).filter(Boolean),
         generatedAt: new Date().toISOString(),
-      }));
+      }, settle);
     });
 
     ws.addEventListener("message", (event) => {
@@ -1069,6 +1070,21 @@ async function sendQueuePayloadOverWss(
 function correctWssEndpoint(endpoint: string, env: Record<string, string>): string {
   if (!allowQueueWssCorrection(env)) return endpoint;
   return endpoint.replace(/^ws:\/\//i, "wss://").trim();
+}
+
+function sendWssJson(
+  ws: WebSocket,
+  payload: Record<string, unknown>,
+  settle: (value: Record<string, unknown> | Error) => void,
+): boolean {
+  if (ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    ws.send(JSON.stringify(payload));
+    return true;
+  } catch (error) {
+    settle(error instanceof Error ? error : new Error(String(error)));
+    return false;
+  }
 }
 
 async function handleWssResponseMessage(
