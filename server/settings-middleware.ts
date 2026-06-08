@@ -49,6 +49,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const payload = JSON.parse(body || "{}") as SettingsPayload;
         const submittedEnv = typeof payload.env === "string" ? parseEnv(payload.env) : {};
         const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
+        preserveSavedQueueToken(submittedEnv, savedEnv);
         const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
         const submittedPromise = buildSecurityItems("当前页面配置", submittedEnv, authCode);
         const savedPromise =
@@ -137,7 +138,10 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           json(res, 400, { ok: false, error: "Missing env text." });
           return;
         }
-        const normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(payload.env));
+        const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
+        const submittedEnv = parseEnv(payload.env);
+        preserveSavedQueueToken(submittedEnv, savedEnv);
+        const normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(serializeEnvWithPreservedValues(payload.env, submittedEnv)));
         writeFileSync(ENV_FILE, normalizedEnv, "utf8");
         json(res, 200, { ok: true, file: ".env", path: ENV_FILE });
       })
@@ -242,6 +246,31 @@ function parseEnv(source: string): Record<string, string> {
     parsed[line.slice(0, separator).trim()] = line.slice(separator + 1);
   }
   return parsed;
+}
+
+function preserveSavedQueueToken(submittedEnv: Record<string, string>, savedEnv: Record<string, string>): void {
+  const submittedToken = submittedEnv.QUEUE_TOKEN?.trim() || submittedEnv.LIQUIDATION_QUEUE_WSS_TOKEN?.trim();
+  if (submittedToken) return;
+  const savedToken = savedEnv.QUEUE_TOKEN?.trim() || savedEnv.LIQUIDATION_QUEUE_WSS_TOKEN?.trim();
+  if (!savedToken) return;
+  submittedEnv.QUEUE_TOKEN = savedToken;
+}
+
+function serializeEnvWithPreservedValues(source: string, env: Record<string, string>): string {
+  const required = new Set(Object.keys(env).filter((key) => env[key] !== undefined));
+  const lines = source.replace(/\r\n/g, "\n").split("\n").map((rawLine) => {
+    const line = rawLine.trim();
+    const separator = line.indexOf("=");
+    if (!line || line.startsWith("#") || separator <= 0) return rawLine;
+    const key = line.slice(0, separator).trim();
+    required.delete(key);
+    if (key !== "QUEUE_TOKEN" && key !== "LIQUIDATION_QUEUE_WSS_TOKEN") return rawLine;
+    return `${key}=${env[key] ?? ""}`;
+  });
+  for (const key of required) {
+    if (key === "QUEUE_TOKEN" && env[key]) lines.push(`${key}=${env[key]}`);
+  }
+  return lines.join("\n");
 }
 
 function migrateLegacySnapshotEndpoint(envText: string): string {

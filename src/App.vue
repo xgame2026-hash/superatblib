@@ -445,8 +445,8 @@ const queueFields = [
   {
     key: "wssToken" as const,
     label: "队列 WSS Token",
-    env: "LIQUIDATION_QUEUE_WSS_TOKEN",
-    placeholder: "shared WSS token",
+    env: "QUEUE_TOKEN",
+    placeholder: "official queue token",
     secret: true,
     full: true,
   },
