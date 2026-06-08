@@ -963,8 +963,8 @@ async function sendQueuePayloadOverWss(
 ): Promise<Record<string, unknown>> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const token = firstUsableToken(
-    env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_QUEUE_WSS_TOKEN,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,

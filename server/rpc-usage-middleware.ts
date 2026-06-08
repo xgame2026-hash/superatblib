@@ -71,6 +71,27 @@ async function fetchRpcUsage(req: IncomingMessage) {
   const metrics = initialMetrics(env);
   let licenseError = "";
 
+  if (token) {
+    const tokenExpiry = jwtExpiry(token);
+    if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
+      const message = `SUPERMTNODE_APP_TOKEN expired at ${tokenExpiry.toISOString()}.`;
+      for (const chain of chainKeys()) {
+        if (metrics[chain].rpcConfigured) {
+          metrics[chain] = emptyMetric(chain, env, "error", message);
+        }
+      }
+      return { ok: false, source: "supermtnode", metrics, error: message };
+    }
+
+    try {
+      const result = await fetchSuperMtNodeEndpoints(env, token);
+      applyEndpointMetrics(metrics, env, result.endpoints);
+      return { ok: true, source: "supermtnode", sourceUrl: result.sourceUrl, metrics };
+    } catch (error) {
+      licenseError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   if (authCode) {
     try {
       const result = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
@@ -91,30 +112,12 @@ async function fetchRpcUsage(req: IncomingMessage) {
     return { ok: false, source: authCode ? "supermtnode-license" : "supermtnode", metrics, error: message };
   }
 
-  const tokenExpiry = jwtExpiry(token);
-  if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
-    const message = `SUPERMTNODE_APP_TOKEN expired at ${tokenExpiry.toISOString()}.`;
-    for (const chain of chainKeys()) {
-      if (metrics[chain].rpcConfigured) {
-        metrics[chain] = emptyMetric(chain, env, "error", message);
-      }
+  for (const chain of chainKeys()) {
+    if (metrics[chain].rpcConfigured) {
+      metrics[chain] = emptyMetric(chain, env, "error", licenseError);
     }
-    const error = licenseError ? `${licenseError}; ${message}` : message;
-    return { ok: false, source: "supermtnode", metrics, error };
   }
-
-  try {
-    const result = await fetchSuperMtNodeEndpoints(env, token);
-    applyEndpointMetrics(metrics, env, result.endpoints);
-    return { ok: true, source: "supermtnode", sourceUrl: result.sourceUrl, metrics };
-  } catch (error) {
-    for (const chain of chainKeys()) {
-      if (metrics[chain].rpcConfigured) {
-        metrics[chain] = emptyMetric(chain, env, "error", error instanceof Error ? error.message : String(error));
-      }
-    }
-    return { ok: false, source: "supermtnode", metrics };
-  }
+  return { ok: false, source: "supermtnode", metrics, error: licenseError };
 }
 
 function applyEndpointMetrics(metrics: Record<ChainKey, RpcUsageMetric>, env: Record<string, string>, endpoints: SuperMtNodeEndpoint[]): void {
@@ -271,10 +274,10 @@ function headerValue(value: string | string[] | undefined): string {
 
 function matchEndpoint(endpoint: SuperMtNodeEndpoint, chain: ChainKey, rpcUrl: string): boolean {
   const slug = rpcEndpointSlugFromUrl(rpcUrl);
-  const endpointChain = typeof endpoint.chain === "string" ? endpoint.chain : "";
-  const endpointSlug = endpointString(endpoint, "endpointSlug", "endpoint_slug");
+  const endpointChain = normalizeEndpointChain(endpoint.chain);
+  const endpointSlug = normalizeEndpointSlug(endpointString(endpoint, "endpointSlug", "endpoint_slug"));
   const endpointUrl = normalizeUrl(endpointString(endpoint, "httpUrl", "http_url"));
-  return endpointChain === superMtNodeChainKeys[chain] && ((Boolean(slug) && endpointSlug === slug) || endpointUrl === normalizeUrl(rpcUrl));
+  return endpointChain === superMtNodeChainKeys[chain] && ((Boolean(slug) && endpointSlug === normalizeEndpointSlug(slug)) || endpointUrl === normalizeUrl(rpcUrl));
 }
 
 function chainKeys(): ChainKey[] {
@@ -282,7 +285,19 @@ function chainKeys(): ChainKey[] {
 }
 
 function matchChain(endpoint: SuperMtNodeEndpoint, chain: ChainKey): boolean {
-  return endpoint.chain === superMtNodeChainKeys[chain];
+  return normalizeEndpointChain(endpoint.chain) === superMtNodeChainKeys[chain];
+}
+
+function normalizeEndpointChain(value: unknown): string {
+  const chain = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (chain === "bsc" || chain === "binance" || chain === "bnb" || chain === "bnb chain") return "bnb";
+  if (chain === "arb" || chain === "arbitrum" || chain === "arbitrum one") return "arb";
+  if (chain === "eth" || chain === "ethereum" || chain === "mainnet") return "eth";
+  return chain;
+}
+
+function normalizeEndpointSlug(value?: string): string {
+  return (value ?? "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
 }
 
 function rpcEndpointSlugFromUrl(value: string | undefined): string | undefined {
