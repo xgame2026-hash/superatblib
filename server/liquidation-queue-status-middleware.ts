@@ -962,8 +962,12 @@ async function sendQueuePayloadOverWss(
   queuePayload: ReturnType<typeof manageQueuePayload>,
 ): Promise<Record<string, unknown>> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const wssToken = firstUsableToken(env.LIQUIDATION_QUEUE_WSS_TOKEN);
+  if (!wssToken) {
+    throw new Error("LIQUIDATION_QUEUE_WSS_TOKEN 未配置或已过期；远端 WSS 队列当前要求专用 Token，不能用 SUPERMTNODE_APP_TOKEN 替代。");
+  }
   const token = firstUsableToken(
-    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    wssToken,
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,

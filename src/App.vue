@@ -995,7 +995,7 @@ function formatSecurityMessage(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? "已从钱包授权解析出地址" : "请先配置有效的钱包授权，否则无法提交执行任务";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? "服务授权已配置" : "请先配置服务授权 Token，否则部分官方服务无法完成授权";
   if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.message : "请先配置服务授权 Token 或登录授权码，否则无法连接执行队列";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.message : "请先配置队列 WSS Token，否则无法连接执行队列";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
     return item.ok ? "官方安全通道" : "请恢复为官方安全通道";
