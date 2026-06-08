@@ -963,12 +963,13 @@ async function sendQueuePayloadOverWss(
 ): Promise<Record<string, unknown>> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const token = firstUsableToken(
-    env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,
   );
+  const appToken = firstUsableToken(env.SUPERMTNODE_APP_TOKEN);
   if (!token && !authCode) {
     throw new Error("队列 WSS 授权未配置，请先登录授权码或在设置中保存官方配置。");
   }
@@ -1029,6 +1030,7 @@ async function sendQueuePayloadOverWss(
         requestId: authMessageId,
         clientMessageId: authMessageId,
         token: token || authCode,
+        appToken,
         authCode,
         source: "liq2-client",
         queueIdentities,
