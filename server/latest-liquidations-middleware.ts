@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { assertOfficialConfig } from "./official-config";
 import { PHASE1_LIQUIDATION_STRATEGIES, type Phase1Strategy } from "./phase1-liquidation-strategies";
+import { queueWssToken } from "./queue-token";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
@@ -329,8 +330,7 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
   const token = firstUsableToken(
     env.SUPERMTNODE_APP_TOKEN,
-    env.QUEUE_TOKEN,
-    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    queueWssToken(env),
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,
@@ -855,8 +855,7 @@ function privateMemberTodayContractEventsEndpoint(env: Record<string, string>): 
 
 function privateMemberTodayContractEventsHeaders(env: Record<string, string>, authCode = ""): Record<string, string> {
   const token = firstUsableToken(
-    env.QUEUE_TOKEN,
-    env.LIQUIDATION_QUEUE_WSS_TOKEN,
+    queueWssToken(env),
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,

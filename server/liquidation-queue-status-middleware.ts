@@ -8,6 +8,7 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 import WebSocket from "ws";
 import { assertOfficialConfig } from "./official-config";
 import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootstrap";
+import { queueWssToken } from "./queue-token";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
@@ -1063,10 +1064,6 @@ async function sendQueuePayloadOverWss(
       if (!settled) settle(new Error(`WSS 队列服务在确认上报前断开：${endpointHost(endpoint)}`));
     });
   });
-}
-
-function queueWssToken(env: Record<string, string>): string {
-  return env.QUEUE_TOKEN?.trim() || env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() || "";
 }
 
 function correctWssEndpoint(endpoint: string, env: Record<string, string>): string {

@@ -443,14 +443,6 @@ const queueFields = [
     full: true,
   },
   {
-    key: "wssToken" as const,
-    label: "队列 WSS Token",
-    env: "QUEUE_TOKEN",
-    placeholder: "official queue token",
-    secret: true,
-    full: true,
-  },
-  {
     key: "manageIngestUrl" as const,
     label: "管理端上报地址",
     env: "MANAGE_LIQUIDATION_QUEUE_INGEST_URL",
@@ -1058,8 +1050,6 @@ function generateEnvText() {
     `MANAGE_LIQUIDATION_QUEUE_INGEST_URL=${settingsForm.queue.manageIngestUrl}`,
     `MANAGE_INGEST_TOKEN=${settingsForm.queue.manageIngestToken}`,
     `LIQUIDATION_QUEUE_WSS_URL=${settingsForm.queue.wssUrl}`,
-    `QUEUE_TOKEN=${settingsForm.queue.wssToken}`,
-    "LIQUIDATION_QUEUE_WSS_TOKEN=",
     `LIQUIDATION_QUEUE_STATUS_URL=${settingsForm.queue.statusUrl}`,
     "",
     "SUPERMTNODE_API_BASE_URL=https://api.supermtnode.io",

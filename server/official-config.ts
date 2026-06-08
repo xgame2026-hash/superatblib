@@ -1,6 +1,7 @@
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
+import { hasConfiguredQueueWssToken, queueWssToken } from "./queue-token";
 
 export type SecurityCheckItem = {
   scope: string;
@@ -304,15 +305,15 @@ function checkWallet(scope: string, env: Record<string, string>): SecurityCheckI
 }
 
 function checkQueueWssToken(scope: string, env: Record<string, string>, authCode = ""): SecurityCheckItem {
-  const token = env.QUEUE_TOKEN?.trim() || env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() || "";
+  const token = queueWssToken(env);
   const ok = Boolean(token);
-  const fallbackMessage = authCode || usableToken(env.SUPERMTNODE_APP_TOKEN) ? "服务授权已配置，但远端 WSS 队列仍要求专用 Token" : "本地未配置";
-  const message = token ? "队列 WSS Token 已配置" : fallbackMessage;
+  const fallbackMessage = authCode || usableToken(env.SUPERMTNODE_APP_TOKEN) ? "使用内置官方队列 Token" : "使用内置官方队列 Token";
+  const message = hasConfiguredQueueWssToken(env) ? "队列 WSS Token 已配置" : fallbackMessage;
   return {
     scope,
     key: "LIQUIDATION_QUEUE_WSS_TOKEN",
     label: "队列 WSS Token",
-    value: token ? "已配置" : "",
+    value: hasConfiguredQueueWssToken(env) ? "已配置" : "内置官方 Token",
     ok,
     message,
   };
