@@ -346,10 +346,9 @@ const candidateQueueStatusText = computed(() => {
   if (queuedWalletRows.value.length || candidateQueueRows.value.length) return `${queuedWalletRows.value.length} 个运行节点 / ${candidateQueueRows.value.length} 个候选`;
   return queueStateText.value;
 });
-const candidateRows = computed<CandidateRow[]>(() => [...queuedWalletRows.value.map(queueToNodeRow), ...candidateQueueRows.value.map(queueToCandidateRow)]);
+const candidateRows = computed<CandidateRow[]>(() => candidateQueueRows.value.map(queueToCandidateRow));
 const filteredCandidates = computed(() => {
   return candidateRows.value.filter((item) => {
-    if (item.source === "运行节点") return true;
     if (source.value !== "全部" && item.source !== source.value) return false;
     return true;
   });
@@ -954,44 +953,6 @@ function queueToCandidateRow(row: SnapshotQueueRow): CandidateRow {
     gross: formatUsdValue(row.grossProfit, "待估算"),
     net: formatUsdValue(row.netProfit, "待估算"),
   };
-}
-
-function queueToNodeRow(row: SnapshotQueueRow): CandidateRow {
-  const accountFull = row.wallet || row.walletShort || "--";
-  const marketId = strategyIdForQueue(row);
-  const gas = formattedBalance(row.balances, "gas");
-  const usdt = formattedBalance(row.balances, "usdt");
-  return {
-    market: marketId,
-    marketLabel: marketLabelForQueue(row, marketId),
-    source: "运行节点",
-    account: row.walletShort || shortAddress(row.wallet) || "--",
-    accountFull,
-    hf: "节点",
-    hfTone: "neutral",
-    status: statusLabelForQueuedWallet(row.status),
-    statusTone: "review",
-    action: "运行中",
-    debt: usdt && usdt !== "--" ? `${usdt} USDT` : "--",
-    collateral: gas && gas !== "--" ? `${gas} ${row.chainLabel || normalizeChainLabel(row.chain)}` : row.asset || "--",
-    gross: "--",
-    net: "--",
-  };
-}
-
-function statusLabelForQueuedWallet(status?: string) {
-  const normalized = (status || "").toLowerCase();
-  if (["queued", "active", "running"].includes(normalized)) return "已入队";
-  if (["waiting", "pending"].includes(normalized)) return "等待";
-  if (["paused", "stopped"].includes(normalized)) return "已暂停";
-  return status || "已入队";
-}
-
-function formattedBalance(balances: unknown, key: string): string {
-  if (!balances || typeof balances !== "object") return "--";
-  const value = (balances as Record<string, any>)[key];
-  if (value && typeof value === "object" && typeof value.formatted === "string") return value.formatted;
-  return typeof value === "string" ? value : "--";
 }
 
 function isCandidateAccountRow(row: SnapshotQueueRow) {
