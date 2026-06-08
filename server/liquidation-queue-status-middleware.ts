@@ -322,7 +322,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   let transportWarning: string | undefined;
   if (wssEndpoint) {
     try {
-      transportResult = await sendManageQueuePayload(wssEndpoint, env, req, payload);
+      transportResult = await sendManageQueuePayloadWithRetry(wssEndpoint, env, req, payload, wssQueueRetryCount(env, action));
     } catch (error) {
       transportWarning = error instanceof Error ? error.message : String(error);
       if (!allowQueueHttpFallback(env)) {
@@ -384,6 +384,26 @@ async function registerQueueStatus(req: IncomingMessage) {
     remoteAvailable: true,
     updatedAt: new Date().toISOString(),
   };
+}
+
+async function sendManageQueuePayloadWithRetry(
+  endpoint: string,
+  env: Record<string, string>,
+  req: IncomingMessage,
+  payload: Parameters<typeof manageQueuePayload>[0],
+  retries: number,
+): Promise<QueueTransportResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await sendManageQueuePayload(endpoint, env, req, payload);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || !isTransientWssQueueError(error)) break;
+      await delay(Math.min(2_000, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function updateLocalQueueState(payload: {
@@ -954,6 +974,21 @@ function allowQueueHttpFallback(env: Record<string, string>): boolean {
 function allowQueueWssCorrection(env: Record<string, string>): boolean {
   const configured = String(env.LIQUIDATION_QUEUE_WSS_CORRECTION ?? env.MANAGE_LIQUIDATION_QUEUE_WSS_CORRECTION ?? "enabled").trim().toLowerCase();
   return !["0", "false", "off", "disabled", "close", "关闭"].includes(configured);
+}
+
+function wssQueueRetryCount(env: Record<string, string>, action: string): number {
+  const configured = Number(env.LIQUIDATION_QUEUE_WSS_RETRY_COUNT);
+  if (Number.isFinite(configured) && configured >= 0) return Math.min(5, Math.floor(configured));
+  return action === "heartbeat" ? 2 : 1;
+}
+
+function isTransientWssQueueError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /WSS 队列服务连接超时|WSS 队列服务暂时不可用|在确认上报前断开|WebSocket is not open|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|timeout/i.test(message);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
 async function sendQueuePayloadOverWss(

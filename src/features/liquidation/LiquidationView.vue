@@ -528,6 +528,7 @@ function startMarketHeartbeat(intervalMs: unknown = marketHeartbeatIntervalMs) {
       .catch((error) => {
         const message = error instanceof Error ? error.message : "unknown error";
         appendTerminal(`queue heartbeat failed: ${message}`);
+        if (isTransientHeartbeatError(message)) return;
         if (isFatalQueueRuntimeError(message)) {
           marketRunning.value = false;
           queueState.value = "idle";
@@ -758,6 +759,10 @@ function authHeaders(authCode = readAuthCode()): Record<string, string> {
 
 function isFatalQueueRuntimeError(message: string): boolean {
   return /SUPERMTNODE_APP_TOKEN|PRIVATE_KEY|授权码|license|credits|RPC 未绑定|未配置|格式不正确|不能启动|不能重复启动|另一台电脑|请求超时|远端队列未确认|当前钱包|队列状态请求失败|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|not configured|invalid|timeout|token/i.test(message);
+}
+
+function isTransientHeartbeatError(message: string): boolean {
+  return /WSS 队列服务连接超时|WSS 队列服务暂时不可用|在确认上报前断开|WebSocket is not open|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(message);
 }
 
 function notifyQueueError(message: string) {
