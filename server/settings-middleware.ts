@@ -38,6 +38,13 @@ const LICENSE_ENDPOINT_ENV_KEYS: Record<string, string> = {
 
 export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (!req.url?.startsWith("/api/settings")) return false;
+  applyLocalCors(req, res);
+
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return true;
+  }
 
   if (req.url.startsWith("/api/settings/security-check")) {
     if (req.method !== "POST") {
@@ -410,4 +417,17 @@ function json(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(payload));
+}
+
+function applyLocalCors(req: IncomingMessage, res: ServerResponse): void {
+  const origin = headerValue(req.headers.origin);
+  if (origin && /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET,PUT,POST,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization,X-SuperMtNode-Auth-Code,X-SuperMtNode-App-Token",
+  );
 }

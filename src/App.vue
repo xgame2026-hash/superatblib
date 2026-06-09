@@ -548,7 +548,7 @@ const currentSettingsSection = computed(() => {
 });
 
 const dashboardPort = computed(() => normalizeDashboardPort(settingsForm.dashboardPort));
-const runningDashboardPort = computed(() => window.location.port || dashboardPort.value);
+const runningDashboardPort = computed(() => runtimeDashboardPort(dashboardPort.value));
 const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");
 const settingsSaveTitle = computed(() => {
   if (settingsSaveState.value === "done") return "保存完成";
@@ -608,7 +608,7 @@ let notLaunchedReminderTimer = 0;
 onMounted(() => {
   authCode.value = localStorage.getItem(AUTH_CODE_KEY) ?? sessionStorage.getItem(AUTH_CODE_SESSION_KEY) ?? "";
   isAuthenticated.value = localStorage.getItem(AUTH_STORAGE_KEY) === "authorized";
-  loadSettings();
+  loadSettings({ syncRuntimePort: true });
   void loadGithubVersion();
   document.addEventListener("pointerdown", closeGithubMenuOnOutside);
   if (isAuthenticated.value) {
@@ -706,7 +706,7 @@ async function submitLogin() {
 async function applySuperMtNodeEndpoints(code = authCode.value.trim().toUpperCase()) {
   const token = settingsForm.superMtNodeAppToken.trim();
   if (!token && !code) return;
-  const response = await fetch("/api/settings/apply-license-endpoints", {
+  const response = await fetchSettingsApi("/api/settings/apply-license-endpoints", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -718,7 +718,7 @@ async function applySuperMtNodeEndpoints(code = authCode.value.trim().toUpperCas
   const payload = (await response.json().catch(() => ({}))) as { applied?: Record<string, string>; error?: string };
   if (!response.ok) throw new Error(payload.error ?? "授权 RPC 端点绑定失败");
   if (payload.applied && Object.keys(payload.applied).length) {
-    await loadSettings();
+    await loadSettings({ syncRuntimePort: true });
   }
 }
 
@@ -773,9 +773,39 @@ function closeGithubMenuOnOutside(event: PointerEvent) {
   githubMenuOpen.value = false;
 }
 
-async function loadSettings() {
+async function fetchSettingsApi(path: string, init?: RequestInit): Promise<Response> {
+  const urls = settingsApiUrls(path);
+  let lastError: unknown;
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, init);
+      if (response.status === 404 && url !== urls[urls.length - 1]) continue;
+      return response;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("设置接口连接失败");
+}
+
+function settingsApiUrls(path: string): string[] {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const candidates = [normalizedPath];
+  const currentProtocol = window.location.protocol;
+  const currentPort = window.location.port;
+  const configuredPort = dashboardPort.value;
+  if (currentProtocol === "http:" || currentProtocol === "https:") {
+    candidates.push(`${window.location.origin}${normalizedPath}`);
+  }
+  for (const port of [currentPort, configuredPort, "4310", "4311"]) {
+    if (port) candidates.push(`http://127.0.0.1:${port}${normalizedPath}`);
+  }
+  return [...new Set(candidates)];
+}
+
+async function loadSettings(options: { syncRuntimePort?: boolean } = {}) {
   try {
-    const response = await fetch("/api/settings");
+    const response = await fetchSettingsApi("/api/settings");
     if (!response.ok) return;
     const payload = (await response.json()) as {
       path?: string;
@@ -783,7 +813,7 @@ async function loadSettings() {
       example?: Record<string, string>;
     };
     settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
-    applyEnvSettings({ ...payload.example, ...payload.env });
+    applyEnvSettings({ ...payload.example, ...payload.env }, options);
   } catch {
     // Settings API is available in the local dashboard dev server.
   }
@@ -818,7 +848,7 @@ async function saveSettings() {
   settingsSaveDialogVisible.value = true;
 
   try {
-    const response = await fetch("/api/settings", {
+    const response = await fetchSettingsApi("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ env: generateEnvText() }),
@@ -856,7 +886,7 @@ type SecurityCheckItem = {
 async function checkOfficialSettings() {
   settingsSecurityChecking.value = true;
   try {
-    const response = await fetch("/api/settings/security-check", {
+    const response = await fetchSettingsApi("/api/settings/security-check", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeadersForSettings() },
       body: JSON.stringify({ env: generateEnvText() }),
@@ -880,7 +910,7 @@ async function repairSecurityItem(item: SecurityCheckItem) {
   if (item.action !== "repair_secure_upload") return;
   settingsSecurityRepairing.value = true;
   try {
-    const response = await fetch("/api/settings/security-repair", {
+    const response = await fetchSettingsApi("/api/settings/security-repair", {
       method: "POST",
       headers: authHeadersForSettings(),
     });
@@ -1082,7 +1112,7 @@ function generateEnvText() {
   return `${lines.join("\n")}\n`;
 }
 
-function applyEnvSettings(env: Record<string, string>) {
+function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePort?: boolean } = {}) {
   settingsForm.privateKey = env.PRIVATE_KEY ?? settingsForm.privateKey;
   settingsForm.language = env.DASHBOARD_LANGUAGE ?? settingsForm.language;
   settingsForm.fundingMode = env.FUNDING_MODE ?? settingsForm.fundingMode;
@@ -1091,7 +1121,8 @@ function applyEnvSettings(env: Record<string, string>) {
   settingsForm.singleTradeAuthAmountUsdt = env.SINGLE_TRADE_AUTH_AMOUNT_USDT ?? settingsForm.singleTradeAuthAmountUsdt;
   settingsForm.startupDetectionMode = normalizeStartupDetectionMode(env.STARTUP_DETECTION_MODE ?? settingsForm.startupDetectionMode);
   settingsForm.wssCorrectionMode = normalizeWssCorrectionMode(env.LIQUIDATION_QUEUE_WSS_CORRECTION ?? settingsForm.wssCorrectionMode);
-  settingsForm.dashboardPort = normalizeDashboardPort(env.DASHBOARD_PORT ?? settingsForm.dashboardPort);
+  const envDashboardPort = normalizeDashboardPort(env.DASHBOARD_PORT ?? settingsForm.dashboardPort);
+  settingsForm.dashboardPort = options.syncRuntimePort ? runtimeDashboardPort(envDashboardPort) : envDashboardPort;
   settingsForm.launchSoundMode = normalizeLaunchSoundMode(localStorage.getItem(LAUNCH_SOUND_KEY) ?? env.LAUNCH_SOUND_ENABLED ?? settingsForm.launchSoundMode);
   settingsForm.rpc.ethereum = env.ETHEREUM_RPC_URL ?? settingsForm.rpc.ethereum;
   settingsForm.rpc.bnb = env.BNB_RPC_URL ?? settingsForm.rpc.bnb;
@@ -1143,6 +1174,14 @@ function normalizeDashboardPort(value: string) {
   const port = Number(value.trim());
   if (!Number.isInteger(port) || port < 1024 || port > 65535) return "4310";
   return port.toString();
+}
+
+function runtimeDashboardPort(fallback: string) {
+  const host = window.location.hostname;
+  const port = window.location.port;
+  const isLocalHost = host === "127.0.0.1" || host === "localhost" || host === "127.0.01";
+  if (!isLocalHost || !port) return fallback;
+  return normalizeDashboardPort(port);
 }
 
 function normalizeLaunchSoundMode(value: string) {
