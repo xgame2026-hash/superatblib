@@ -14,10 +14,10 @@ npm run dashboard
 Default local URL:
 
 ```text
-http://127.0.0.1:4310/
+http://127.0.0.1:4311/
 ```
 
-If the port is occupied, set `DASHBOARD_PORT` in a local `.env` file and restart.
+If the port is occupied, set `DASHBOARD_PORT` in a local `.env` file and restart. Local API calls automatically retry common dashboard ports.
 
 ## Configuration
 

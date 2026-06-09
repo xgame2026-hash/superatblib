@@ -129,7 +129,7 @@
             autocomplete="off"
             inputmode="numeric"
             name="settings-dashboard-port"
-            placeholder="4310"
+            placeholder="4311"
           />
         </label>
         <label class="settings-field">

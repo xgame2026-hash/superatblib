@@ -38,7 +38,9 @@ import "element-plus/theme-chalk/el-tag.css";
 import "element-plus/theme-chalk/el-tooltip.css";
 import "./styles.css";
 import App from "./App.vue";
+import { installLocalApiPortFallback } from "./api-runtime";
 
+installLocalApiPortFallback();
 const app = createApp(App);
 
 [

@@ -490,7 +490,7 @@ const settingsForm = reactive({
   singleTradeAuthAmountUsdt: "100",
   startupDetectionMode: "manual",
   wssCorrectionMode: "enabled",
-  dashboardPort: "4310",
+  dashboardPort: "4311",
   launchSoundMode: readStoredValue(LAUNCH_SOUND_KEY, ["enabled", "disabled"], "enabled"),
   language: "zh",
   rpc: {
@@ -1172,7 +1172,7 @@ function normalizeCredentialAuthMode(value: string) {
 
 function normalizeDashboardPort(value: string) {
   const port = Number(value.trim());
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) return "4310";
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return "4311";
   return port.toString();
 }
 

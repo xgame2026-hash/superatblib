@@ -12,7 +12,7 @@ import { bootstrapPrivateMemberWalletOnce } from "./server/private-member-wallet
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const dashboardPort = normalizePort(env.DASHBOARD_PORT, 4310);
+  const dashboardPort = normalizePort(env.DASHBOARD_PORT, 4311);
 
   return {
   plugins: [
@@ -22,6 +22,14 @@ export default defineConfig(({ mode }) => {
       configureServer(server) {
         void bootstrapPrivateMemberWalletOnce("vite-startup");
         server.middlewares.use((req, res, next) => {
+          if (req.url?.startsWith("/api/")) {
+            applyLocalApiCors(req.headers.origin, res);
+            if (req.method === "OPTIONS") {
+              res.statusCode = 204;
+              res.end();
+              return;
+            }
+          }
           if (
             !handleSettingsRequest(req, res) &&
             !handleLatestLiquidationsRequest(req, res) &&
@@ -73,4 +81,17 @@ function normalizePort(value: string | undefined, fallback: number): number {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) return fallback;
   return port;
+}
+
+function applyLocalApiCors(origin: string | string[] | undefined, res: { setHeader(name: string, value: string): void }): void {
+  const value = Array.isArray(origin) ? origin.find(Boolean) : origin;
+  if (value && /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){1,3})(?::\d+)?$/i.test(value)) {
+    res.setHeader("Access-Control-Allow-Origin", value);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET,PUT,POST,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization,X-SuperMtNode-Auth-Code,X-SuperMtNode-App-Token,Accept",
+  );
 }
