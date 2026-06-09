@@ -107,6 +107,11 @@ type QueueRow = {
   wallet?: string;
   walletShort?: string;
   asset?: string;
+  usdt?: string | number;
+  usdtBalance?: string | number;
+  usdt_balance?: string | number;
+  usdtAmount?: string | number;
+  usdt_amount?: string | number;
   todayAssetChange?: string | number;
   todayContractChange?: string | number;
   balances?: QueueBalances;
@@ -130,7 +135,12 @@ type QueueBalanceValue = {
 type QueueBalances = {
   gas?: QueueBalanceValue;
   bnb?: QueueBalanceValue;
-  usdt?: QueueBalanceValue;
+  usdt?: QueueBalanceValue | string | number;
+  USDT?: QueueBalanceValue | string | number;
+  usdtBalance?: string | number;
+  usdt_balance?: string | number;
+  usdtAmount?: string | number;
+  usdt_amount?: string | number;
   todayContractChange?: string | number;
 };
 
@@ -457,24 +467,45 @@ function shortWallet(value?: string) {
 }
 
 function formatUsdtAsset(row: QueueRow) {
-  const value = usdtValue(row);
-  if (value > 0) return `${formatDecimal2(value)} USDT`;
-  if (rawUsdtValue(row) !== undefined || row.asset?.match(/USDT\s+([0-9.,]+)/i) || (row.asset && /^BNB\s*\/\s*USDT\s*\/\s*USDC$/i.test(row.asset))) return "0 USDT";
-  if (row.asset && /^BNB\s*\/\s*USDT\s*\/\s*USDC$/i.test(row.asset)) return "0 USDT";
+  const rawValue = rawUsdtValue(row);
+  const assetValue = rawUsdtAssetValue(row);
+  const value = rawValue === undefined || rawValue === null ? assetValue : parseNumericValue(rawValue);
+  if (value !== undefined) return `${formatDecimal2(value)} USDT`;
   return "--";
 }
 
 function usdtValue(row: QueueRow) {
   const value = rawUsdtValue(row);
   if (value === undefined || value === null) {
-    const parsed = row.asset?.match(/USDT\s+([0-9.,]+)/i);
-    return parsed ? parseNumericValue(parsed[1]) : 0;
+    return rawUsdtAssetValue(row) ?? 0;
   }
   return parseNumericValue(value);
 }
 
 function rawUsdtValue(row: QueueRow) {
-  return row.balances?.usdt?.formatted ?? row.balances?.usdt?.value;
+  return (
+    row.usdtBalance ??
+    row.usdt_balance ??
+    row.usdtAmount ??
+    row.usdt_amount ??
+    row.usdt ??
+    nestedBalanceValue(row.balances?.usdt) ??
+    nestedBalanceValue(row.balances?.USDT) ??
+    row.balances?.usdtBalance ??
+    row.balances?.usdt_balance ??
+    row.balances?.usdtAmount ??
+    row.balances?.usdt_amount
+  );
+}
+
+function nestedBalanceValue(value?: QueueBalanceValue | string | number) {
+  if (value === undefined || value === null || typeof value === "string" || typeof value === "number") return value;
+  return value.formatted ?? value.value;
+}
+
+function rawUsdtAssetValue(row: QueueRow) {
+  const parsed = row.asset?.match(/USDT\s+([0-9][0-9.,]*)/i);
+  return parsed ? parseNumericValue(parsed[1]) : undefined;
 }
 
 function formatTodayChange(row: QueueRow) {
