@@ -21,7 +21,7 @@ const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/inges
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.4.8";
+const CLIENT_VERSION = "1.4.8.1";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
