@@ -12,10 +12,12 @@ const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liqu
 const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
 const DEFAULT_WSS_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liquidation-queue/status";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const BALANCE_OF_SELECTOR = "0x70a08231";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const ASSET_CHANGE_CACHE_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_REFRESH_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_ERROR_RETRY_MS = 2 * 60 * 1000;
+const QUEUE_BALANCE_CACHE_MS = 30 * 1000;
 const DEFAULT_TX2_CONTRACT_EVENTS_API_PATH = "/api/liquidation-queue/contract-events/today";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
@@ -171,6 +173,7 @@ type SnapshotPayload = {
 
 type StableToken = { address: string; decimals: number };
 type AssetChangeCacheEntry = { value?: string; expiresAt: number };
+type QueueBalanceCacheEntry = { value?: string; expiresAt: number };
 type BlockCacheEntry = { blockTag: string; expiresAt: number };
 type TransferLog = { data?: string; topics?: string[]; blockNumber?: string; transactionHash?: string };
 type AssetChangePoint = { date: string; label: string; value: number };
@@ -241,6 +244,7 @@ const logScanChunkSize: Record<ChainKey, number> = {
 };
 
 const assetChangeCache = new Map<string, AssetChangeCacheEntry>();
+const queueBalanceCache = new Map<string, QueueBalanceCacheEntry>();
 const sevenDayBlockCache = new Map<ChainKey, BlockCacheEntry>();
 const blockAtTimestampCache = new Map<string, BlockCacheEntry>();
 const assetChangeRefreshInFlight = new Set<string>();
@@ -273,7 +277,7 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const wssQueue = options.fast ? emptyWssQueueSnapshot() : await fetchWssQueuedWallets(env, req).catch(() => emptyWssQueueSnapshot());
   const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
   const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
-  const queuedWallets = dedupeEndpointQueueRows(response.queuedWallets);
+  const queuedWallets = await enrichQueuedWalletBalances(dedupeEndpointQueueRows(response.queuedWallets), env);
   response.queuedWallets = options.queueOnly ? queuedWallets : await enrichExactTodayContractChanges(queuedWallets, env, authCode);
   return response;
 }
@@ -533,6 +537,7 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
   if (!wallet) return null;
 
   const chain = normalizeChain(stringValue(row.chain, row.network, row.chainKey, row.chain_key));
+  const balances = normalizeQueueBalances(row);
 
   return {
     id: stringValue(row.id) ?? `${chain}-${wallet}-${index}`,
@@ -545,7 +550,7 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
     assetChange7d: stringValue(row.assetChange7d, row.asset_change_7d),
     assetChange7Days: stringValue(row.assetChange7Days, row.asset_change_7_days),
     change7d: stringValue(row.change7d, row.change_7d),
-    balances: isRecord(row.balances) ? row.balances : undefined,
+    balances,
     protocol: stringValue(row.protocol, row.market) ?? "--",
     rpc: stringValue(row.rpc, row.rpcKey, row.rpc_key) ?? "--",
     endpointId: stringValue(row.endpointId, row.endpoint_id),
@@ -565,6 +570,15 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
     expiresAt: stringValue(row.expiresAt, row.expires_at),
     updatedAt: stringValue(row.updatedAt, row.updated_at, row.timestamp) ?? new Date().toISOString(),
   };
+}
+
+function normalizeQueueBalances(row: Record<string, unknown>): Record<string, unknown> | undefined {
+  const balances = isRecord(row.balances) ? { ...row.balances } : {};
+  const usdt = firstDefined(row.usdt, row.USDT, row.usdtBalance, row.usdt_balance, row.usdtAmount, row.usdt_amount);
+  if (usdt !== undefined && balances.usdt === undefined) {
+    balances.usdt = isRecord(usdt) ? usdt : { symbol: "USDT", formatted: usdt };
+  }
+  return Object.keys(balances).length > 0 ? balances : undefined;
 }
 
 function normalizeCandidateSources(sources: SnapshotSourceRow[], queue: SnapshotQueueRow[]): SnapshotSourceRow[] {
@@ -612,6 +626,85 @@ function dedupeEndpointQueueRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
     if (!existing || endpointRowScore(row) < endpointRowScore(existing)) byWallet.set(key, row);
   }
   return [...byWallet.values()].sort((left, right) => toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt));
+}
+
+async function enrichQueuedWalletBalances(rows: SnapshotQueueRow[], env: Record<string, string>): Promise<SnapshotQueueRow[]> {
+  const enriched = [...rows];
+  const rowsByChain = new Map<ChainKey, Array<{ index: number; row: SnapshotQueueRow; wallet: string }>>();
+
+  rows.forEach((row, index) => {
+    const wallet = normalizeWallet(row.wallet);
+    if (!wallet || hasQueueUsdtBalance(row)) return;
+    const group = rowsByChain.get(row.chain) ?? [];
+    group.push({ index, row, wallet });
+    rowsByChain.set(row.chain, group);
+  });
+
+  for (const [chain, group] of rowsByChain) {
+    const rpcUrls = queueBalanceRpcUrls(chain, env);
+    if (rpcUrls.length === 0) continue;
+
+    for (const batch of chunk(group, 8)) {
+      await Promise.all(
+        batch.map(async (item) => {
+          const cacheKey = `${chain}:${item.wallet.toLowerCase()}:usdt-balance`;
+          const cached = queueBalanceCache.get(cacheKey);
+          const value = cached && cached.expiresAt > Date.now() ? cached.value : await readQueueUsdtBalanceWithFallback(chain, item.wallet, rpcUrls, env).catch(() => undefined);
+          queueBalanceCache.set(cacheKey, { value, expiresAt: Date.now() + QUEUE_BALANCE_CACHE_MS });
+          if (value !== undefined) enriched[item.index] = applyQueueUsdtBalance(item.row, value);
+        }),
+      );
+    }
+  }
+
+  return enriched;
+}
+
+function hasQueueUsdtBalance(row: SnapshotQueueRow): boolean {
+  const value = queueUsdtBalanceValue(row);
+  if (value === undefined) return false;
+  if (typeof value === "number") return Number.isFinite(value);
+  return numberValue(value) !== null;
+}
+
+function queueUsdtBalanceValue(row: SnapshotQueueRow): unknown {
+  if (!isRecord(row.balances)) return undefined;
+  return balanceValue(row.balances.usdt) ?? balanceValue(row.balances.USDT) ?? row.balances.usdtBalance ?? row.balances.usdt_balance ?? row.balances.usdtAmount ?? row.balances.usdt_amount;
+}
+
+function balanceValue(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return value.formatted ?? value.value ?? value.amount;
+}
+
+function applyQueueUsdtBalance(row: SnapshotQueueRow, value: string): SnapshotQueueRow {
+  const balances = isRecord(row.balances) ? { ...row.balances } : {};
+  balances.usdt = { symbol: "USDT", formatted: value };
+  return { ...row, balances };
+}
+
+function queueBalanceRpcUrls(chain: ChainKey, env: Record<string, string>): string[] {
+  const configured = rpcEnvKeys[chain].map((key) => env[key]?.trim()).filter((value): value is string => Boolean(value));
+  return [...new Set([...configured, ...(publicRpcUrls[chain] ?? [])])];
+}
+
+async function readQueueUsdtBalanceWithFallback(chain: ChainKey, wallet: string, rpcUrls: string[], env: Record<string, string>): Promise<string> {
+  let lastError: unknown;
+  for (const rpcUrl of rpcUrls) {
+    try {
+      return await readQueueUsdtBalance(chain, wallet, rpcUrl, env);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function readQueueUsdtBalance(chain: ChainKey, wallet: string, rpcUrl: string, env: Record<string, string>): Promise<string> {
+  const token = tokenContracts[chain].usdt;
+  const data = `${BALANCE_OF_SELECTOR}${wallet.slice(2).padStart(64, "0")}`;
+  const value = await rpc<string>(rpcUrl, "eth_call", [{ to: token.address, data }, "latest"], env);
+  return formatUnits(hexToBigInt(value), token.decimals, 2);
 }
 
 async function enrichExactTodayContractChanges(rows: SnapshotQueueRow[], env: Record<string, string>, authCode = ""): Promise<SnapshotQueueRow[]> {
@@ -1642,6 +1735,10 @@ function stringValue(...values: unknown[]): string | undefined {
     if (typeof value === "number" && Number.isFinite(value)) return value.toString();
   }
   return undefined;
+}
+
+function firstDefined(...values: unknown[]): unknown {
+  return values.find((value) => value !== undefined && value !== null);
 }
 
 function arrayValue(...values: unknown[]): unknown[] | undefined {
