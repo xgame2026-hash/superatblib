@@ -21,7 +21,7 @@ const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/inges
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.4.7";
+const CLIENT_VERSION = "1.4.8";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -240,13 +240,14 @@ async function registerQueueStatus(req: IncomingMessage) {
   const action = stringValue(body.action)?.toLowerCase() ?? "start";
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const stopping = STOP_ACTIONS.includes(action);
+  const heartbeat = action === "heartbeat";
   assertOfficialConfig("执行队列上报", env);
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
   const meteredRpcUrl = env[chainEnvKeys[chain]]?.trim();
   const rpcUrls = balanceRpcUrls(chain, env);
   if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能读取钱包余额。`);
-  const rpcAccess = stopping ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
+  const rpcAccess = stopping || heartbeat ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   const rpcAccessTokenHash = rpcAccess?.rpcAccessTokenHash ?? (await queueRpcAccessTokenHash(chain, env, authCode));
   const clientInstanceId = readClientInstanceId();
   const credentialIdentity = {
@@ -258,13 +259,13 @@ async function registerQueueStatus(req: IncomingMessage) {
     action,
   };
   if (stopping) await assertQueueCredentialOwnedForStop(env, req, credentialIdentity);
-  else await assertQueueCredentialAvailable(env, req, credentialIdentity);
-  if (!stopping) {
+  else if (!heartbeat) await assertQueueCredentialAvailable(env, req, credentialIdentity);
+  if (!stopping && !heartbeat) {
     await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
   }
 
   const market = queueMarket(chain, body);
-  const balanceResult = await readQueueBalances(chain, walletAddress, rpcUrls, env, action);
+  const balanceResult = heartbeat ? { balances: undefined, reason: "heartbeat balance refresh skipped" } : await readQueueBalances(chain, walletAddress, rpcUrls, env, action);
   const balances = balanceResult.balances;
   const gasBalance = balances ? Number(balances.gas.formatted) : null;
   const wssEndpoint = queueWssUrl(env);
@@ -276,7 +277,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const billable = !stopping && action !== "burn";
   const tradeSettings = readTradeSettings(env);
   const txCredentialSignature = txCredentialSyncSignature(env, walletAddress, rpcAccess);
-  const shouldUploadTxCredential = !stopping && shouldUploadTxCredentialFields(action, txCredentialSignature);
+  const shouldUploadTxCredential = !stopping && !heartbeat && shouldUploadTxCredentialFields(action, txCredentialSignature);
   const txCredentialFields = shouldUploadTxCredential ? buildTxWalletCredentialFields(env, walletAddress) : {};
 
   const eligible = !stopping && (balances ? Number.isFinite(gasBalance) && Number(gasBalance) > 0 : true);
@@ -341,7 +342,7 @@ async function registerQueueStatus(req: IncomingMessage) {
 
   let remoteQueue: { verified: true; participantId?: string } | undefined;
   let remoteQueueWarning: string | undefined;
-  if (!stopping && remoteQueueVerifyEnabled(env)) {
+  if (!stopping && !heartbeat && remoteQueueVerifyEnabled(env)) {
     try {
       remoteQueue = await verifyRemoteQueueRegistration(env, req, payload);
     } catch (error) {
@@ -2276,7 +2277,7 @@ function heartbeatIntervalMs(env: Record<string, string>): number {
 }
 
 function queueLeaseMs(heartbeatMs: number): number {
-  return Math.max(heartbeatMs * 3, 5_000);
+  return Math.max(heartbeatMs * 10, 30_000);
 }
 
 function readEnv(): Record<string, string> {

@@ -393,8 +393,11 @@ let candidateQueueRefreshTimer = 0;
 let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
+let marketHeartbeatInFlight = false;
+let marketHeartbeatFailureCount = 0;
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const MARKET_HEARTBEAT_INTERVAL_MS = 1_000;
+const MARKET_HEARTBEAT_MAX_FAILURES = 6;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const RUNNING_MARKET_RESTORE_WINDOW_MS = 5 * 60_000;
@@ -407,6 +410,11 @@ onMounted(() => {
   void nextTick(updateOpportunitiesPanelHeight);
   window.addEventListener("resize", updateOpportunitiesPanelHeight);
   window.addEventListener("offline", handleClientOffline);
+  window.addEventListener("online", handleClientOnline);
+  window.addEventListener("visibilitychange", handleVisibilityHeartbeat);
+  window.addEventListener("pageshow", handleClientOnline);
+  window.addEventListener("pagehide", handleClientUnload);
+  window.addEventListener("beforeunload", handleClientUnload);
 });
 
 watch(
@@ -426,6 +434,11 @@ onBeforeUnmount(() => {
   stopMarketHeartbeat();
   window.removeEventListener("resize", updateOpportunitiesPanelHeight);
   window.removeEventListener("offline", handleClientOffline);
+  window.removeEventListener("online", handleClientOnline);
+  window.removeEventListener("visibilitychange", handleVisibilityHeartbeat);
+  window.removeEventListener("pageshow", handleClientOnline);
+  window.removeEventListener("pagehide", handleClientUnload);
+  window.removeEventListener("beforeunload", handleClientUnload);
 });
 
 function startVisiblePolling() {
@@ -517,28 +530,39 @@ function setTerminalLines(lines: string[]) {
 function startMarketHeartbeat(intervalMs: unknown = marketHeartbeatIntervalMs) {
   stopMarketHeartbeat();
   marketHeartbeatIntervalMs = normalizeHeartbeatIntervalMs(intervalMs);
+  marketHeartbeatFailureCount = 0;
   marketHeartbeatTimer = window.setInterval(() => {
-    if (!marketRunning.value || currentMarket.value.disabled) return;
-    void registerMarketQueueStart(currentMarket.value, "heartbeat")
-      .then((payload) => {
-        persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined);
-        const nextInterval = normalizeHeartbeatIntervalMs(payload.heartbeatIntervalMs);
-        if (nextInterval !== marketHeartbeatIntervalMs) startMarketHeartbeat(nextInterval);
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : "unknown error";
-        appendTerminal(`queue heartbeat failed: ${message}`);
-        if (isTransientHeartbeatError(message)) return;
-        if (isFatalQueueRuntimeError(message)) {
-          marketRunning.value = false;
-          queueState.value = "idle";
-          stopMarketHeartbeat();
-          clearRunningMarketState();
-          notifyQueueError(message);
-          emit("launch-sound", "not-launched");
-        }
-      });
+    void sendMarketHeartbeat();
   }, marketHeartbeatIntervalMs);
+}
+
+async function sendMarketHeartbeat() {
+  if (!marketRunning.value || currentMarket.value.disabled || marketHeartbeatInFlight) return;
+  marketHeartbeatInFlight = true;
+  try {
+    const payload = await registerMarketQueueStart(currentMarket.value, "heartbeat");
+    marketHeartbeatFailureCount = 0;
+    queueState.value = payload.eligible === false ? "waiting" : "queued";
+    persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
+    const nextInterval = normalizeHeartbeatIntervalMs(payload.heartbeatIntervalMs);
+    if (nextInterval !== marketHeartbeatIntervalMs) startMarketHeartbeat(nextInterval);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    marketHeartbeatFailureCount += 1;
+    appendTerminal(`queue heartbeat failed (${marketHeartbeatFailureCount}/${MARKET_HEARTBEAT_MAX_FAILURES}): ${message}`);
+    if (isRecoverableHeartbeatError(message) && marketHeartbeatFailureCount < MARKET_HEARTBEAT_MAX_FAILURES) return;
+    if (isFatalQueueRuntimeError(message)) {
+      sendQueueStopBeacon(currentMarket.value);
+      marketRunning.value = false;
+      queueState.value = "idle";
+      stopMarketHeartbeat();
+      clearRunningMarketState();
+      notifyQueueError(message);
+      emit("launch-sound", "not-launched");
+    }
+  } finally {
+    marketHeartbeatInFlight = false;
+  }
 }
 
 function normalizeHeartbeatIntervalMs(value: unknown): number {
@@ -550,6 +574,7 @@ function stopMarketHeartbeat() {
   if (!marketHeartbeatTimer) return;
   window.clearInterval(marketHeartbeatTimer);
   marketHeartbeatTimer = 0;
+  marketHeartbeatInFlight = false;
 }
 
 async function unregisterMarketQueue(item: MarketOption): Promise<Record<string, any>> {
@@ -669,6 +694,19 @@ function handleClientOffline() {
   emit("launch-sound", "not-launched");
 }
 
+function handleClientOnline() {
+  if (!marketRunning.value || currentMarket.value.disabled) return;
+  void sendMarketHeartbeat();
+}
+
+function handleVisibilityHeartbeat() {
+  if (document.visibilityState === "visible") handleClientOnline();
+}
+
+function handleClientUnload() {
+  if (marketRunning.value && !currentMarket.value.disabled) sendQueueStopBeacon(currentMarket.value);
+}
+
 function sendQueueStopBeacon(item: MarketOption) {
   const body = JSON.stringify(queueRequestBody(item, "stop"));
   const authCode = readAuthCode();
@@ -761,8 +799,8 @@ function isFatalQueueRuntimeError(message: string): boolean {
   return /SUPERMTNODE_APP_TOKEN|PRIVATE_KEY|授权码|license|credits|RPC 未绑定|未配置|格式不正确|不能启动|不能重复启动|另一台电脑|请求超时|远端队列未确认|当前钱包|队列状态请求失败|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|not configured|invalid|timeout|token/i.test(message);
 }
 
-function isTransientHeartbeatError(message: string): boolean {
-  return /WSS 队列服务连接超时|WSS 队列服务暂时不可用|在确认上报前断开|WebSocket is not open|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(message);
+function isRecoverableHeartbeatError(message: string): boolean {
+  return /队列服务请求超时|请求超时|WSS 队列服务连接超时|WSS 队列服务暂时不可用|在确认上报前断开|WebSocket is not open|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|network|timeout/i.test(message);
 }
 
 function notifyQueueError(message: string) {
