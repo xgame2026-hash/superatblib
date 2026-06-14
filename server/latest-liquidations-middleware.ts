@@ -77,6 +77,9 @@ type SnapshotQueueRow = {
   rpc: string;
   endpointId?: string;
   endpointSlug?: string;
+  participantId?: string;
+  queueMemberKey?: string;
+  dedupeKey?: string;
   queueType?: string;
   healthFactor: string;
   debt: string;
@@ -277,6 +280,8 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const wssQueue = options.fast ? emptyWssQueueSnapshot() : await fetchWssQueuedWallets(env, req).catch(() => emptyWssQueueSnapshot());
   const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
   const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
+  response.queue = response.queue.filter(isLicensedQueueRow);
+  response.queuedWallets = response.queuedWallets.filter(isLicensedQueueRow);
   const queuedWallets = await enrichQueuedWalletBalances(dedupeEndpointQueueRows(response.queuedWallets), env);
   response.queuedWallets = options.queueOnly ? queuedWallets : await enrichExactTodayContractChanges(queuedWallets, env, authCode);
   return response;
@@ -557,6 +562,9 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
     rpc: stringValue(row.rpc, row.rpcKey, row.rpc_key) ?? "--",
     endpointId: stringValue(row.endpointId, row.endpoint_id),
     endpointSlug: stringValue(row.endpointSlug, row.endpoint_slug),
+    participantId: stringValue(row.participantId, row.participant_id, row.participantKey, row.participant_key),
+    queueMemberKey: stringValue(row.queueMemberKey, row.queue_member_key, row.queueCredential, row.queue_credential),
+    dedupeKey: stringValue(row.dedupeKey, row.dedupe_key),
     queueType: stringValue(row.queueType, row.queue_type),
     healthFactor: formatPlainNumber(row.healthFactor, row.health_factor, row.hf),
     debt: formatMaybeMoney(row.debt, row.debtUsd, row.debt_usd, row.debtAmount, row.debt_amount),
@@ -1758,6 +1766,11 @@ function isExpiredQueueRow(row: SnapshotQueueRow): boolean {
   if (!row.expiresAt) return false;
   const timestamp = new Date(row.expiresAt).getTime();
   return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function isLicensedQueueRow(row: SnapshotQueueRow): boolean {
+  const identity = [row.id, row.participantId, row.queueMemberKey, row.dedupeKey].filter(Boolean).join(":").toLowerCase();
+  return !identity.includes(":no-license:");
 }
 
 function toTimestamp(value?: string): number {

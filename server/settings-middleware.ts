@@ -57,7 +57,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const submittedEnv = typeof payload.env === "string" ? parseEnv(payload.env) : {};
         const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
         preserveSavedQueueToken(submittedEnv, savedEnv);
-        const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+        const authCode = requestAuthCode(req, savedEnv);
         const submittedPromise = buildSecurityItems("当前页面配置", submittedEnv, authCode);
         const savedPromise =
           securityRelevantEnvSignature(submittedEnv) === securityRelevantEnvSignature(savedEnv) ? submittedPromise : buildSecurityItems("已保存 .env", savedEnv, authCode);
@@ -80,7 +80,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
       json(res, 405, { ok: false, error: "Method not allowed." });
       return true;
     }
-    const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+    const authCode = requestAuthCode(req, existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {});
     bootstrapPrivateMemberWalletOnce("security-repair", { authCode })
       .then((payload) => json(res, payload.ok ? 200 : 400, payload))
       .catch((error: unknown) => json(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) }));
@@ -96,7 +96,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
       .then(async (body) => {
         const payload = JSON.parse(body || "{}") as SettingsPayload;
         const env = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        const authCode = headerValue(req.headers["x-supermtnode-auth-code"]) || (typeof payload.code === "string" ? payload.code.trim() : "");
+        const authCode = requestAuthCode(req, env, typeof payload.code === "string" ? payload.code : undefined);
         const appToken =
           bearerToken(req.headers.authorization) ||
           headerValue(req.headers["x-supermtnode-app-token"]) ||
@@ -289,6 +289,19 @@ function migrateLegacySnapshotEndpoint(envText: string): string {
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value.find((item) => item.trim())?.trim();
   return value?.trim() || undefined;
+}
+
+function requestAuthCode(req: IncomingMessage, env: Record<string, string>, fallback?: string): string {
+  return (
+    headerValue(req.headers["x-supermtnode-auth-code"]) ||
+    headerValue(req.headers["x-license-code"]) ||
+    headerValue(req.headers["x-auth-code"]) ||
+    fallback?.trim() ||
+    env.AUTH_CODE?.trim() ||
+    env.SUPERARB_AUTH_CODE?.trim() ||
+    env.LICENSE_CODE?.trim() ||
+    ""
+  ).toUpperCase();
 }
 
 function bearerToken(value: string | string[] | undefined): string | undefined {

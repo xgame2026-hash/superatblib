@@ -123,6 +123,12 @@ type QueueRow = {
   source?: string;
   endpointId?: string;
   endpointSlug?: string;
+  participantId?: string;
+  participant_id?: string;
+  queueMemberKey?: string;
+  queue_member_key?: string;
+  dedupeKey?: string;
+  dedupe_key?: string;
   queueType?: string;
   registeredAt?: string;
   updatedAt?: string;
@@ -372,7 +378,16 @@ function isProductionQueueWallet(row: QueueRow) {
   const wallet = rowWallet(row).toLowerCase();
   const endpointSlug = (row.endpointSlug || "").toLowerCase();
   const endpointId = (row.endpointId || "").toLowerCase();
-  return wallet !== "0x0000000000000000000000000000000000000001" && endpointSlug !== "public-test" && endpointId !== "public-test";
+  const identity = [
+    row.id,
+    row.participantId,
+    row.participant_id,
+    row.queueMemberKey,
+    row.queue_member_key,
+    row.dedupeKey,
+    row.dedupe_key,
+  ].filter(Boolean).join(":").toLowerCase();
+  return wallet !== "0x0000000000000000000000000000000000000001" && endpointSlug !== "public-test" && endpointId !== "public-test" && !identity.includes(":no-license:");
 }
 
 function dedupeQueueRows(rows: QueueRow[]) {
