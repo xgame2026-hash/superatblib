@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "npm run dashboard",
+    "start": "npm run dashboard",
     "dashboard": "vite --host 127.0.0.1",
     "dashboard:url": "node scripts/dashboard-url.mjs",
     "build": "vue-tsc --noEmit && vite build",
