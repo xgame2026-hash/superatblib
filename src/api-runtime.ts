@@ -1,5 +1,4 @@
 const API_PORT_KEY = "liq2-api-port";
-const FALLBACK_API_PORTS = ["4310", "4311", "4312"];
 
 export function installLocalApiPortFallback(): void {
   const nativeFetch = window.fetch.bind(window);
@@ -43,7 +42,7 @@ function localApiUrls(input: RequestInfo | URL): string[] {
   const candidates = [path];
   const currentPort = window.location.port;
   const savedPort = localStorage.getItem(API_PORT_KEY) || "";
-  for (const port of [currentPort, savedPort, ...FALLBACK_API_PORTS]) {
+  for (const port of [currentPort, savedPort]) {
     if (port) candidates.push(`http://127.0.0.1:${port}${path}`);
   }
   return [...new Set(candidates)];

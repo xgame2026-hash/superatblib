@@ -1,66 +1,90 @@
 <template>
   <div class="app-shell" :class="{ 'is-authenticated': isAuthenticated }">
     <section v-if="!isAuthenticated" class="login-screen">
-      <canvas ref="loginCanvas" class="login-canvas" aria-hidden="true"></canvas>
-      <main class="login-panel">
-        <div class="login-brand-row">
-          <img class="login-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-          <span class="login-version">1.4.8.1</span>
-        </div>
-
-        <el-form class="auth-form" @submit.prevent="submitLogin">
-          <label class="field-label" for="auth-code">授权码</label>
-          <el-input
-            id="auth-code"
-            v-model="authCode"
-            :type="showAuthCode ? 'text' : 'password'"
-            size="large"
-            placeholder="SMT-XXXX-XXXX-XXXX-XXXX"
-            autocomplete="one-time-code"
-            spellcheck="false"
-            :prefix-icon="Key"
-            @input="formatCode"
-          >
-            <template #suffix>
-              <button
-                class="visibility-toggle"
-                type="button"
-                :aria-label="showAuthCode ? '隐藏授权码' : '显示授权码'"
-                @click="showAuthCode = !showAuthCode"
-              >
-                <el-icon><component :is="showAuthCode ? Hide : View" /></el-icon>
-              </button>
-            </template>
-          </el-input>
-          <div class="form-row">
-            <el-checkbox v-model="rememberCode">保存授权码</el-checkbox>
+      <div class="login-liquid-shell">
+        <LiquidEther
+          class-name="login-liquid-ether"
+          :colors="['#6D28D9', '#8B5CF6', '#A78BFA']"
+          :mouse-force="20"
+          :cursor-size="100"
+          :is-viscous="false"
+          :viscous="30"
+          :iterations-viscous="32"
+          :iterations-poisson="32"
+          :dt="0.014"
+          :resolution="0.5"
+          :BFECC="true"
+          :is-bounce="false"
+          :auto-demo="true"
+          :auto-speed="0.5"
+          :auto-intensity="2.2"
+          :takeover-duration="0.25"
+          :auto-resume-delay="3000"
+          :auto-ramp-duration="0.6"
+        />
+      </div>
+      <div class="login-card-stack">
+        <main class="login-panel">
+          <div class="login-brand-row">
+            <img class="login-wordmark" :src="miniLogoUrl" alt="SuperARB" />
+            <span class="login-version">1.4.9</span>
           </div>
-          <el-alert
-            v-if="authMessage"
-            class="auth-alert"
-            :title="authMessage"
-            :type="authMessageType"
-            :closable="false"
-            show-icon
-          />
-          <el-button
-            class="primary-action"
-            size="large"
-            type="primary"
-            native-type="submit"
-            :loading="loginLoading"
-          >
-            进入控制台
-          </el-button>
-        </el-form>
-      </main>
+
+          <el-form class="auth-form" @submit.prevent="submitLogin">
+            <label class="field-label" for="auth-code">授权码</label>
+            <el-input
+              id="auth-code"
+              v-model="authCode"
+              :type="showAuthCode ? 'text' : 'password'"
+              size="large"
+              placeholder="SMT-XXXX-XXXX-XXXX-XXXX"
+              autocomplete="one-time-code"
+              spellcheck="false"
+              :prefix-icon="Key"
+              @input="formatCode"
+            >
+              <template #suffix>
+                <button
+                  class="visibility-toggle"
+                  type="button"
+                  :aria-label="showAuthCode ? '隐藏授权码' : '显示授权码'"
+                  @click="showAuthCode = !showAuthCode"
+                >
+                  <el-icon><component :is="showAuthCode ? Hide : View" /></el-icon>
+                </button>
+              </template>
+            </el-input>
+            <div class="form-row">
+              <el-checkbox v-model="rememberCode">保存授权码</el-checkbox>
+            </div>
+            <el-alert
+              v-if="authMessage"
+              class="auth-alert"
+              :title="authMessage"
+              :type="authMessageType"
+              :closable="false"
+              show-icon
+            />
+            <el-button
+              class="primary-action"
+              size="large"
+              type="primary"
+              native-type="submit"
+              :loading="loginLoading"
+            >
+              进入控制台
+            </el-button>
+          </el-form>
+        </main>
+        <p class="login-copyright">© 2026 SuperARB. All rights reserved.</p>
+      </div>
     </section>
 
     <section v-else class="workspace">
       <header class="topbar">
         <div class="topbar-left">
           <img class="system-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-          <span class="topbar-version">1.4.8.1</span>
+          <span class="topbar-version">1.4.9</span>
         </div>
         <div class="topbar-right">
           <button
@@ -174,9 +198,6 @@
             :save-icon-url="saveIconUrl"
             :rpc-fields="rpcFields"
             :feed-fields="feedFields"
-            :queue-fields="queueFields"
-            :cache-fields="cacheFields"
-            :exchange-fields="exchangeFields"
             @security-check="checkOfficialSettings"
             @save="saveSettings"
             @logout="logout"
@@ -281,7 +302,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { Hide, Key, View } from "@element-plus/icons-vue";
 import { useNews } from "./composables/useNews";
@@ -289,6 +310,7 @@ import DashboardView from "./features/dashboard/DashboardView.vue";
 import LatestLiquidationsView from "./features/latest-liquidations/LatestLiquidationsView.vue";
 import LiquidationView from "./features/liquidation/LiquidationView.vue";
 import LiquidationTopicView from "./features/liquidation/LiquidationTopicView.vue";
+import LiquidEther from "./components/LiquidEther.vue";
 import NewsPanel from "./features/news/NewsPanel.vue";
 import SettingsView from "./features/settings/SettingsView.vue";
 import SidebarNav from "./features/sidebar/SidebarNav.vue";
@@ -320,7 +342,7 @@ type AuthMessageType = "success" | "warning" | "info" | "error";
 type SettingsSaveState = "saving" | "done" | "error";
 type GithubVersionState = "checking" | "latest" | "update" | "unconfigured" | "error";
 type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "settings";
-type SettingsSectionKey = "general" | "credentials" | "rpc" | "feeds" | "queue" | "cache" | "exchanges";
+type SettingsSectionKey = "general" | "credentials" | "rpc" | "feeds";
 type RpcKey = "ethereum" | "bnb" | "arbitrum" | "base" | "polygon";
 type FeedKey =
   | "snapshotApiUrl"
@@ -331,9 +353,9 @@ type QueueKey =
   | "manageIngestToken"
   | "wssUrl"
   | "wssToken"
-  | "statusUrl";
-type CacheKey = "redisUrl" | "snapshotTtlMs" | "staleMs" | "sourceTimeoutMs";
-type ExchangeKey = "binance" | "okx" | "bitget" | "mexc" | "gate";
+  | "statusUrl"
+  | "heartbeatIntervalMs"
+  | "txEventsUrl";
 
 const AUTH_STORAGE_KEY = "liq2-auth-session";
 const AUTH_CODE_KEY = "liq2-auth-code";
@@ -342,12 +364,11 @@ const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.4.8.1";
+const appVersion = "1.4.9";
 
 const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
 const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "settings"] satisfies ViewKey[];
-const settingsSectionKeys = ["general", "credentials", "rpc", "feeds", "queue", "cache", "exchanges"] satisfies SettingsSectionKey[];
-
+const settingsSectionKeys = ["general", "credentials", "rpc", "feeds"] satisfies SettingsSectionKey[];
 const authCode = ref("");
 const showAuthCode = ref(false);
 const rememberCode = ref(true);
@@ -355,7 +376,6 @@ const loginLoading = ref(false);
 const authMessage = ref("");
 const authMessageType = ref<AuthMessageType>("info");
 const isAuthenticated = ref(false);
-const loginCanvas = ref<HTMLCanvasElement | null>(null);
 const activeView = ref<ViewKey>(readStoredValue(ACTIVE_VIEW_KEY, viewKeys, "overview"));
 const settingsSection = ref<SettingsSectionKey>(readStoredValue(SETTINGS_SECTION_KEY, settingsSectionKeys, "general"));
 const settingsSecretsVisible = ref(false);
@@ -392,10 +412,7 @@ const settingsSections = [
   { key: "general" as const, label: "通用", hint: "私钥、Token、语言", eyebrow: "General" },
   { key: "credentials" as const, label: "凭证管理", hint: "单次、多次循环", eyebrow: "Credentials" },
   { key: "rpc" as const, label: "RPC", hint: "各链端点", eyebrow: "Network" },
-  { key: "exchanges" as const, label: "交易所", hint: "套利 API keys", eyebrow: "Exchanges" },
   { key: "feeds" as const, label: "公共 Feed", hint: "清算候选数据源", eyebrow: "Feeds" },
-  { key: "queue" as const, label: "执行队列", hint: "队列桥与本地服务", eyebrow: "Queue" },
-  { key: "cache" as const, label: "缓存", hint: "Redis 与快照", eyebrow: "Cache" },
 ];
 
 const rpcFields = [
@@ -405,12 +422,6 @@ const rpcFields = [
   { key: "base" as const, label: "Base", env: "BASE_RPC_URL", icon: baseIcon },
   { key: "polygon" as const, label: "Polygon", env: "POLYGON_RPC_URL", icon: polygonIcon },
 ];
-
-const defaultFallbackRpcUrls = {
-  ethereum: "",
-  arbitrum: "",
-  bnb: "",
-};
 
 const feedFields = [
   {
@@ -434,53 +445,6 @@ const feedFields = [
   },
 ];
 
-const queueFields = [
-  {
-    key: "wssUrl" as const,
-    label: "队列 WSS 地址",
-    env: "LIQUIDATION_QUEUE_WSS_URL",
-    placeholder: "wss://private.superarb.ai/ws/liquidation-queue-v2",
-    full: true,
-  },
-  {
-    key: "manageIngestUrl" as const,
-    label: "管理端上报地址",
-    env: "MANAGE_LIQUIDATION_QUEUE_INGEST_URL",
-    placeholder: "https://manage.supermtnode.io/api/ingest/liquidation-queue",
-    full: true,
-  },
-  {
-    key: "manageIngestToken" as const,
-    label: "管理端上报 Token",
-    env: "MANAGE_INGEST_TOKEN",
-    placeholder: "manage ingest token",
-    secret: true,
-    full: true,
-  },
-  {
-    key: "statusUrl" as const,
-    label: "队列状态接口",
-    env: "LIQUIDATION_QUEUE_STATUS_URL",
-    placeholder: "https://api.supermtnode.io/api/public/liquidations/queue-status",
-    full: true,
-  },
-];
-
-const cacheFields = [
-  { key: "redisUrl" as const, env: "DASHBOARD_OVERVIEW_REDIS_URL", placeholder: "redis://127.0.0.1:6379" },
-  { key: "snapshotTtlMs" as const, env: "DASHBOARD_OVERVIEW_SNAPSHOT_TTL_MS", placeholder: "300000" },
-  { key: "staleMs" as const, env: "DASHBOARD_OVERVIEW_STALE_MS", placeholder: "1800000" },
-  { key: "sourceTimeoutMs" as const, env: "DASHBOARD_OVERVIEW_SOURCE_TIMEOUT_MS", placeholder: "8000" },
-];
-
-const exchangeFields = [
-  { key: "binance" as const, label: "Binance", apiEnv: "BINANCE_API_KEY", secretEnv: "BINANCE_SECRET_KEY" },
-  { key: "okx" as const, label: "OKX", apiEnv: "OKX_API_KEY", secretEnv: "OKX_SECRET_KEY" },
-  { key: "bitget" as const, label: "Bitget", apiEnv: "BITGET_API_KEY", secretEnv: "BITGET_SECRET_KEY" },
-  { key: "mexc" as const, label: "MEXC", apiEnv: "MEXC_API_KEY", secretEnv: "MEXC_SECRET_KEY" },
-  { key: "gate" as const, label: "Gate", apiEnv: "GATE_API_KEY", secretEnv: "GATE_SECRET_KEY" },
-];
-
 const settingsForm = reactive({
   privateKey: "",
   superMtNodeAppToken: "",
@@ -501,7 +465,7 @@ const settingsForm = reactive({
     polygon: "",
   } as Record<RpcKey, string>,
   feeds: {
-    snapshotApiUrl: "",
+    snapshotApiUrl: "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
     snapshotToken: "",
     snapshotTimeoutMs: "8000",
   } as Record<FeedKey, string>,
@@ -510,22 +474,10 @@ const settingsForm = reactive({
     wssToken: "",
     manageIngestUrl: "https://manage.supermtnode.io/api/ingest/liquidation-queue",
     manageIngestToken: "",
-    statusUrl: "",
+    statusUrl: "https://api.supermtnode.io/api/public/liquidations/queue-status",
+    heartbeatIntervalMs: "1000",
+    txEventsUrl: "",
   } as Record<QueueKey, string>,
-  cache: {
-    redisUrl: "redis://127.0.0.1:6379",
-    snapshotTtlMs: "300000",
-    staleMs: "1800000",
-    sourceTimeoutMs: "8000",
-  } as Record<CacheKey, string>,
-  arbitrageVenues: "binance,okx,bitget,mexc,gate",
-  exchanges: {
-    binance: { apiKey: "", secretKey: "" },
-    okx: { apiKey: "", secretKey: "" },
-    bitget: { apiKey: "", secretKey: "" },
-    mexc: { apiKey: "", secretKey: "" },
-    gate: { apiKey: "", secretKey: "" },
-  } as Record<ExchangeKey, { apiKey: string; secretKey: string }>,
 });
 
 const currentNavLabel = computed(() => {
@@ -563,6 +515,7 @@ const hiddenPassingSecurityKeys = [
   "LIQUIDATION_QUEUE_PUBLIC_STATUS_URL",
   "LIQUIDATION_QUEUE_WSS_STATUS_URL",
   "PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL",
+  "LIQUIDATION_QUEUE_WSS_TOKEN",
   "LIQ2_PRIVATE_MEMBER_API_URL",
   "PRIVATE_MEMBER_ADMIN_API_URL",
   "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH",
@@ -601,8 +554,6 @@ const metrics = ref([
   { label: "失败保护", value: "0%", trend: 0 },
 ]);
 
-let animationFrame = 0;
-let resizeHandler: (() => void) | null = null;
 let notLaunchedReminderTimer = 0;
 
 onMounted(() => {
@@ -614,13 +565,9 @@ onMounted(() => {
   if (isAuthenticated.value) {
     void loadNews();
   }
-  if (!isAuthenticated.value) {
-    void nextTick(startLoginCanvas);
-  }
 });
 
 onBeforeUnmount(() => {
-  stopLoginCanvas();
   stopNotLaunchedReminder();
   document.removeEventListener("pointerdown", closeGithubMenuOnOutside);
 });
@@ -632,12 +579,8 @@ watch(launchSoundEnabled, (enabled) => {
 
 watch(isAuthenticated, async (authorized) => {
   if (authorized) {
-    stopLoginCanvas();
     void loadNews();
-    return;
   }
-  await nextTick();
-  startLoginCanvas();
 });
 
 watch(activeView, (view) => {
@@ -797,7 +740,7 @@ function settingsApiUrls(path: string): string[] {
   if (currentProtocol === "http:" || currentProtocol === "https:") {
     candidates.push(`${window.location.origin}${normalizedPath}`);
   }
-  for (const port of [currentPort, configuredPort, "4310", "4311"]) {
+  for (const port of [currentPort, configuredPort]) {
     if (port) candidates.push(`http://127.0.0.1:${port}${normalizedPath}`);
   }
   return [...new Set(candidates)];
@@ -995,7 +938,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
     return item.ok ? "已配置" : "未配置";
   }
   if (item.key === "AUTH_CODE") return item.ok ? "已验证" : "校验失败";
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.value || item.message : "未配置";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "官方内置" : "官方队列不可用";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
     return item.ok ? "官方安全通道" : "非官方安全通道";
@@ -1017,7 +960,7 @@ function formatSecurityMessage(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? "已从钱包授权解析出地址" : "请先配置有效的钱包授权，否则无法提交执行任务";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? "服务授权已配置" : "请先配置服务授权 Token，否则部分官方服务无法完成授权";
   if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.message : "请先配置队列 WSS Token，否则无法连接执行队列";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "官方内置队列 Token 可用" : "官方内置队列 Token 不可用";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
   if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
     return item.ok ? "官方安全通道" : "请恢复为官方安全通道";
@@ -1039,7 +982,7 @@ function formatSecuritySummary(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? `钱包地址 ${shortAddress(item.value)}` : "本地未配置";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : item.message;
   if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? item.message : "本地未配置";
+  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "官方内置队列 Token" : "官方队列不可用";
   if (item.key === "BNB_RPC_URL") return item.ok || item.value ? item.message : "本地未配置";
   if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
   if (item.ok) return "检查通过";
@@ -1052,62 +995,69 @@ function shortAddress(value: string) {
 
 function generateEnvText() {
   const lines = [
-    "# Generated from SuperARB 1.4.8.1 internal settings",
+    "# SuperARB / LIQ2 environment file",
+    "# Generated from SuperARB 1.4.9 internal settings.",
+    "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
+    "",
+    "# -----------------------------------------------------------------------------",
+    "# 1. Wallet & License",
+    "# -----------------------------------------------------------------------------",
     `PRIVATE_KEY=${settingsForm.privateKey}`,
-    `DASHBOARD_LANGUAGE=${settingsForm.language}`,
+    `SUPERMTNODE_APP_TOKEN=${settingsForm.superMtNodeAppToken}`,
+    "",
+    "# -----------------------------------------------------------------------------",
+    "# 2. Execution Policy",
+    "# -----------------------------------------------------------------------------",
     `FUNDING_MODE=${settingsForm.fundingMode}`,
     `ARBITRAGE_INTENSITY=${settingsForm.arbitrageIntensity}`,
-    `CREDENTIAL_AUTH_MODE=${settingsForm.credentialAuthMode}`,
     `SINGLE_TRADE_AUTH_AMOUNT_USDT=${settingsForm.singleTradeAuthAmountUsdt}`,
+    `CREDENTIAL_AUTH_MODE=${settingsForm.credentialAuthMode}`,
     `STARTUP_DETECTION_MODE=${settingsForm.startupDetectionMode}`,
-    "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=1000",
-    `LIQUIDATION_QUEUE_WSS_CORRECTION=${settingsForm.wssCorrectionMode}`,
+    "",
+    "# -----------------------------------------------------------------------------",
+    "# 3. Dashboard",
+    "# -----------------------------------------------------------------------------",
     `DASHBOARD_PORT=${normalizeDashboardPort(settingsForm.dashboardPort)}`,
     `LAUNCH_SOUND_ENABLED=${settingsForm.launchSoundMode}`,
+    `DASHBOARD_LANGUAGE=${settingsForm.language}`,
+    "",
+    "# -----------------------------------------------------------------------------",
+    "# 4. RPC Endpoints",
+    "# -----------------------------------------------------------------------------",
     `ETHEREUM_RPC_URL=${settingsForm.rpc.ethereum}`,
     `BNB_RPC_URL=${settingsForm.rpc.bnb}`,
     `ARBITRUM_RPC_URL=${settingsForm.rpc.arbitrum}`,
     `BASE_RPC_URL=${settingsForm.rpc.base}`,
     `POLYGON_RPC_URL=${settingsForm.rpc.polygon}`,
-    `ETHEREUM_FALLBACK_RPC_URL=${defaultFallbackRpcUrls.ethereum}`,
-    `ARBITRUM_FALLBACK_RPC_URL=${defaultFallbackRpcUrls.arbitrum}`,
-    `BNB_FALLBACK_RPC_URL=${defaultFallbackRpcUrls.bnb}`,
     "",
+    "# -----------------------------------------------------------------------------",
+    "# 5. Public Feed",
+    "# -----------------------------------------------------------------------------",
     `LIQUIDATION_SNAPSHOT_API_URL=${settingsForm.feeds.snapshotApiUrl}`,
     `LIQUIDATION_SNAPSHOT_TOKEN=${settingsForm.feeds.snapshotToken}`,
     `LIQUIDATION_SNAPSHOT_TIMEOUT_MS=${settingsForm.feeds.snapshotTimeoutMs}`,
     "",
-    `MANAGE_LIQUIDATION_QUEUE_INGEST_URL=${settingsForm.queue.manageIngestUrl}`,
-    `MANAGE_INGEST_TOKEN=${settingsForm.queue.manageIngestToken}`,
+    "# -----------------------------------------------------------------------------",
+    "# 6. Execution Queue",
+    "# -----------------------------------------------------------------------------",
+    `LIQUIDATION_QUEUE_WSS_CORRECTION=${settingsForm.wssCorrectionMode}`,
+    `QUEUE_TOKEN=${settingsForm.queue.wssToken}`,
     `LIQUIDATION_QUEUE_WSS_URL=${settingsForm.queue.wssUrl}`,
     `LIQUIDATION_QUEUE_STATUS_URL=${settingsForm.queue.statusUrl}`,
+    `LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=${settingsForm.queue.heartbeatIntervalMs}`,
+    `LIQUIDATION_QUEUE_TX_EVENTS_URL=${settingsForm.queue.txEventsUrl}`,
+    `MANAGE_LIQUIDATION_QUEUE_INGEST_URL=${settingsForm.queue.manageIngestUrl}`,
+    `MANAGE_INGEST_TOKEN=${settingsForm.queue.manageIngestToken}`,
     "",
+    "# -----------------------------------------------------------------------------",
+    "# 7. Official Services",
+    "# -----------------------------------------------------------------------------",
     "SUPERMTNODE_API_BASE_URL=https://api.supermtnode.io",
-    `SUPERMTNODE_APP_TOKEN=${settingsForm.superMtNodeAppToken}`,
-    "",
     "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED=true",
     "LIQ2_PRIVATE_MEMBER_API_URL=https://private.superarb.ai",
     "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH=/api/internal/liq2-wallet/bootstrap",
     "TX_WALLET_PUBLIC_KEY_PATH=server/tx-wallet-public.pem",
-    "",
     "GITHUB_REPOSITORY=xgame2026-hash/superatblib",
-    "",
-    `DASHBOARD_OVERVIEW_REDIS_URL=${settingsForm.cache.redisUrl}`,
-    `DASHBOARD_OVERVIEW_SNAPSHOT_TTL_MS=${settingsForm.cache.snapshotTtlMs}`,
-    `DASHBOARD_OVERVIEW_STALE_MS=${settingsForm.cache.staleMs}`,
-    `DASHBOARD_OVERVIEW_SOURCE_TIMEOUT_MS=${settingsForm.cache.sourceTimeoutMs}`,
-    "",
-    `ARBITRAGE_VENUES=${settingsForm.arbitrageVenues}`,
-    `BINANCE_API_KEY=${settingsForm.exchanges.binance.apiKey}`,
-    `BINANCE_SECRET_KEY=${settingsForm.exchanges.binance.secretKey}`,
-    `OKX_API_KEY=${settingsForm.exchanges.okx.apiKey}`,
-    `OKX_SECRET_KEY=${settingsForm.exchanges.okx.secretKey}`,
-    `BITGET_API_KEY=${settingsForm.exchanges.bitget.apiKey}`,
-    `BITGET_SECRET_KEY=${settingsForm.exchanges.bitget.secretKey}`,
-    `MEXC_API_KEY=${settingsForm.exchanges.mexc.apiKey}`,
-    `MEXC_SECRET_KEY=${settingsForm.exchanges.mexc.secretKey}`,
-    `GATE_API_KEY=${settingsForm.exchanges.gate.apiKey}`,
-    `GATE_SECRET_KEY=${settingsForm.exchanges.gate.secretKey}`,
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -1137,22 +1087,9 @@ function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePor
   settingsForm.queue.wssUrl = env.LIQUIDATION_QUEUE_WSS_URL ?? settingsForm.queue.wssUrl;
   settingsForm.queue.wssToken = env.QUEUE_TOKEN ?? env.LIQUIDATION_QUEUE_WSS_TOKEN ?? settingsForm.queue.wssToken;
   settingsForm.queue.statusUrl = env.LIQUIDATION_QUEUE_STATUS_URL ?? settingsForm.queue.statusUrl;
+  settingsForm.queue.heartbeatIntervalMs = env.LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS ?? settingsForm.queue.heartbeatIntervalMs;
+  settingsForm.queue.txEventsUrl = env.LIQUIDATION_QUEUE_TX_EVENTS_URL ?? settingsForm.queue.txEventsUrl;
   settingsForm.superMtNodeAppToken = env.SUPERMTNODE_APP_TOKEN ?? settingsForm.superMtNodeAppToken;
-  settingsForm.cache.redisUrl = env.DASHBOARD_OVERVIEW_REDIS_URL ?? settingsForm.cache.redisUrl;
-  settingsForm.cache.snapshotTtlMs = env.DASHBOARD_OVERVIEW_SNAPSHOT_TTL_MS ?? settingsForm.cache.snapshotTtlMs;
-  settingsForm.cache.staleMs = env.DASHBOARD_OVERVIEW_STALE_MS ?? settingsForm.cache.staleMs;
-  settingsForm.cache.sourceTimeoutMs = env.DASHBOARD_OVERVIEW_SOURCE_TIMEOUT_MS ?? settingsForm.cache.sourceTimeoutMs;
-  settingsForm.arbitrageVenues = env.ARBITRAGE_VENUES ?? settingsForm.arbitrageVenues;
-  settingsForm.exchanges.binance.apiKey = env.BINANCE_API_KEY ?? settingsForm.exchanges.binance.apiKey;
-  settingsForm.exchanges.binance.secretKey = env.BINANCE_SECRET_KEY ?? settingsForm.exchanges.binance.secretKey;
-  settingsForm.exchanges.okx.apiKey = env.OKX_API_KEY ?? settingsForm.exchanges.okx.apiKey;
-  settingsForm.exchanges.okx.secretKey = env.OKX_SECRET_KEY ?? settingsForm.exchanges.okx.secretKey;
-  settingsForm.exchanges.bitget.apiKey = env.BITGET_API_KEY ?? settingsForm.exchanges.bitget.apiKey;
-  settingsForm.exchanges.bitget.secretKey = env.BITGET_SECRET_KEY ?? settingsForm.exchanges.bitget.secretKey;
-  settingsForm.exchanges.mexc.apiKey = env.MEXC_API_KEY ?? settingsForm.exchanges.mexc.apiKey;
-  settingsForm.exchanges.mexc.secretKey = env.MEXC_SECRET_KEY ?? settingsForm.exchanges.mexc.secretKey;
-  settingsForm.exchanges.gate.apiKey = env.GATE_API_KEY ?? settingsForm.exchanges.gate.apiKey;
-  settingsForm.exchanges.gate.secretKey = env.GATE_SECRET_KEY ?? settingsForm.exchanges.gate.secretKey;
 }
 
 function normalizeStartupDetectionMode(value: string) {
@@ -1221,120 +1158,4 @@ function stopNotLaunchedReminder() {
   notLaunchedReminderTimer = 0;
 }
 
-function stopLoginCanvas() {
-  if (animationFrame) {
-    cancelAnimationFrame(animationFrame);
-    animationFrame = 0;
-  }
-  if (resizeHandler) {
-    window.removeEventListener("resize", resizeHandler);
-    resizeHandler = null;
-  }
-}
-
-function startLoginCanvas() {
-  stopLoginCanvas();
-
-  const canvas = loginCanvas.value;
-  const context = canvas?.getContext("2d");
-  if (!canvas || !context) return;
-
-  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const movers = Array.from({ length: prefersReducedMotion ? 12 : 30 }, (_, index) => ({
-    offset: index / 30,
-    speed: 0.000045 + (index % 8) * 0.000006,
-    size: 1.4 + (index % 6) * 0.62,
-    lane: (index % 5) - 2,
-    hue: index % 4,
-  }));
-
-  const resize = () => {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = Math.floor(window.innerWidth * dpr);
-    canvas.height = Math.floor(window.innerHeight * dpr);
-    canvas.style.width = `${window.innerWidth}px`;
-    canvas.style.height = `${window.innerHeight}px`;
-    context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  };
-
-  resizeHandler = resize;
-  window.addEventListener("resize", resize);
-  resize();
-
-  const draw = (time: number) => {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    const centerX = width * 0.5;
-    const centerY = height * 0.47;
-    context.clearRect(0, 0, width, height);
-
-    const glow = context.createRadialGradient(centerX, centerY, 40, centerX, centerY, width * 0.58);
-    glow.addColorStop(0, "rgba(139, 92, 246, 0.11)");
-    glow.addColorStop(0.34, "rgba(37, 18, 64, 0.1)");
-    glow.addColorStop(1, "rgba(5, 4, 10, 0)");
-    context.fillStyle = glow;
-    context.fillRect(0, 0, width, height);
-
-    const scaleX = Math.min(width * 0.5, 620);
-    const scaleY = Math.min(height * 0.38, 260);
-    const pointAt = (rawT: number, lane = 0) => {
-      const t = rawT % (Math.PI * 2);
-      const sin = Math.sin(t);
-      const cos = Math.cos(t);
-      return {
-        x: centerX + scaleX * sin + lane * Math.cos(t) * 5,
-        y: centerY + scaleY * sin * cos + lane * Math.sin(t * 2) * 3,
-      };
-    };
-
-    for (let layer = 0; layer < 3; layer += 1) {
-      context.beginPath();
-      for (let step = 0; step <= 240; step += 1) {
-        const point = pointAt((step / 240) * Math.PI * 2, (layer - 1) * 3);
-        if (step === 0) {
-          context.moveTo(point.x, point.y);
-        } else {
-          context.lineTo(point.x, point.y);
-        }
-      }
-      const gradient = context.createLinearGradient(centerX - scaleX, centerY, centerX + scaleX, centerY);
-      gradient.addColorStop(0, `rgba(39, 215, 255, ${0.08 + layer * 0.018})`);
-      gradient.addColorStop(0.5, `rgba(168, 85, 247, ${0.14 + layer * 0.022})`);
-      gradient.addColorStop(1, `rgba(65, 240, 170, ${0.07 + layer * 0.016})`);
-      context.strokeStyle = gradient;
-      context.lineWidth = layer === 1 ? 1.4 : 0.8;
-      context.stroke();
-    }
-
-    for (const mover of movers) {
-      const t = (mover.offset + (prefersReducedMotion ? 0 : time * mover.speed)) * Math.PI * 2;
-      const current = pointAt(t, mover.lane);
-      const alpha = 0.52 + Math.sin(t * 1.7) * 0.2;
-      const color =
-        mover.hue === 0
-          ? `rgba(168, 85, 247, ${alpha})`
-          : mover.hue === 1
-            ? `rgba(39, 215, 255, ${alpha})`
-            : mover.hue === 2
-              ? `rgba(65, 240, 170, ${alpha * 0.72})`
-              : `rgba(217, 208, 255, ${alpha * 0.86})`;
-
-      context.beginPath();
-      context.arc(current.x, current.y, mover.size + 5, 0, Math.PI * 2);
-      context.fillStyle = `rgba(139, 92, 246, ${alpha * 0.08})`;
-      context.fill();
-
-      context.beginPath();
-      context.arc(current.x, current.y, mover.size, 0, Math.PI * 2);
-      context.fillStyle = color;
-      context.fill();
-    }
-
-    if (!prefersReducedMotion) {
-      animationFrame = requestAnimationFrame(draw);
-    }
-  };
-
-  animationFrame = requestAnimationFrame(draw);
-}
 </script>

@@ -55,9 +55,8 @@ body,
 
 body {
   background:
-    radial-gradient(circle at 20% 18%, rgba(139, 92, 246, 0.24), transparent 28%),
-    radial-gradient(circle at 82% 8%, rgba(39, 215, 255, 0.1), transparent 26%),
-    linear-gradient(135deg, #05040a 0%, #0b0714 54%, #080613 100%);
+    radial-gradient(circle at 50% 0%, rgba(81, 5, 234, 0.22), transparent 48%),
+    linear-gradient(180deg, #050507 0%, #08070d 54%, #050507 100%);
 }
 
 button,
@@ -76,46 +75,123 @@ input {
   place-items: center;
   overflow: hidden;
   padding: 24px;
+  background: #000;
 }
 
-.login-canvas {
+.login-screen::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  content: "";
+  pointer-events: none;
+  background: #000;
+}
+
+.login-liquid-shell {
   position: fixed;
   inset: 0;
   z-index: 0;
   width: 100vw;
   height: 100vh;
-  pointer-events: none;
+  overflow: hidden;
 }
 
-.login-orbit {
-  position: fixed;
-  z-index: 1;
-  border: 1px solid rgba(168, 85, 247, 0.22);
-  border-radius: 999px;
-  pointer-events: none;
+.login-liquid-ether {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #000;
+  opacity: 1;
 }
 
-.login-orbit-a {
-  width: 560px;
-  height: 560px;
-  transform: rotate(18deg);
-}
+.login-card-stack {
+  --login-border-angle: 0deg;
 
-.login-orbit-b {
-  width: 760px;
-  height: 760px;
-  transform: rotate(-22deg);
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: min(460px, 100%);
+  gap: 12px;
 }
 
 .login-panel {
   position: relative;
-  z-index: 2;
   width: min(460px, 100%);
   padding: 36px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(18, 14, 31, 0.96), rgba(9, 7, 18, 0.96));
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  overflow: hidden;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  backdrop-filter: blur(22px) saturate(124%);
+  box-shadow:
+    0 30px 90px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(255, 255, 255, 0.055) inset,
+    0 18px 70px rgba(81, 5, 234, 0.12) inset;
+}
+
+.login-panel::before,
+.login-panel::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.login-panel::before {
+  z-index: 0;
+  border-radius: inherit;
+  border: 2px solid transparent;
+  background: conic-gradient(
+    from var(--login-border-angle),
+    rgba(99, 66, 244, 0.18) 0deg 48deg,
+    rgba(255, 184, 51, 0.95) 72deg,
+    rgba(255, 250, 214, 1) 86deg,
+    rgba(255, 183, 55, 0.9) 104deg,
+    rgba(99, 66, 244, 0.18) 138deg 232deg,
+    rgba(255, 211, 122, 0.68) 258deg,
+    rgba(99, 66, 244, 0.18) 292deg,
+    transparent 360deg
+  ) border-box;
+  background-clip: border-box;
+  opacity: 0.9;
+  mask:
+    linear-gradient(#000 0 0) padding-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask:
+    linear-gradient(#000 0 0) padding-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  animation: login-border-gold 3.6s linear infinite;
+}
+
+.login-panel::after {
+  inset: 2px;
+  z-index: 0;
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 38%),
+    radial-gradient(circle at 50% 18%, rgba(176, 2, 251, 0.06), transparent 36%),
+    radial-gradient(ellipse at 50% 100%, rgba(0, 0, 0, 0.18), transparent 62%),
+    linear-gradient(180deg, rgba(13, 12, 19, 0.36), rgba(6, 6, 10, 0.26));
+}
+
+.login-panel > * {
+  position: relative;
+  z-index: 2;
+}
+
+@keyframes login-border-gold {
+  to {
+    --login-border-angle: 360deg;
+  }
+}
+
+@property --login-border-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
 }
 
 .login-brand-row {
@@ -284,10 +360,34 @@ input {
   gap: 10px;
 }
 
+.auth-form .el-input__wrapper {
+  border: 1px solid rgba(174, 126, 255, 0.26);
+  border-radius: 20px;
+  background: rgba(18, 17, 26, 0.34);
+  backdrop-filter: blur(12px) saturate(118%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.035) inset,
+    0 16px 42px rgba(0, 0, 0, 0.22);
+}
+
+.auth-form .el-input__wrapper:hover,
+.auth-form .el-input__wrapper.is-focus {
+  border-color: rgba(174, 126, 255, 0.48);
+  background: rgba(22, 20, 32, 0.42);
+}
+
 .field-label {
   color: #ddd5f4;
   font-size: 13px;
   font-weight: 700;
+}
+
+.login-copyright {
+  margin: 0;
+  color: rgba(220, 211, 245, 0.52);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
 }
 
 .form-row {
@@ -317,9 +417,12 @@ input {
   color: white;
 }
 
-.primary-action {
+.primary-action.el-button {
   width: 100%;
-  border-radius: 8px;
+  height: 48px;
+  min-height: 48px;
+  border-radius: 20px;
+  padding-block: 0;
 }
 
 .auth-alert {

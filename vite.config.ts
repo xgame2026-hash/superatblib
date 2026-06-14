@@ -1,5 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import vue from "@vitejs/plugin-vue";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { handleGithubVersionRequest } from "./server/github-version-middleware";
 import { handleLatestLiquidationsRequest } from "./server/latest-liquidations-middleware";
 import { handleLiquidationQueueStatusRequest } from "./server/liquidation-queue-status-middleware";
@@ -21,6 +23,11 @@ export default defineConfig(({ mode }) => {
       name: "superarb-settings-api",
       configureServer(server) {
         void bootstrapPrivateMemberWalletOnce("vite-startup");
+        server.httpServer?.once("listening", () => {
+          const address = server.httpServer?.address();
+          const port = typeof address === "object" && address ? address.port : dashboardPort;
+          writeDashboardRuntimePort(port);
+        });
         server.middlewares.use((req, res, next) => {
           if (req.url?.startsWith("/api/")) {
             applyLocalApiCors(req.headers.origin, res);
@@ -81,6 +88,16 @@ function normalizePort(value: string | undefined, fallback: number): number {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) return fallback;
   return port;
+}
+
+function writeDashboardRuntimePort(port: number): void {
+  try {
+    const path = resolve(process.cwd(), ".superarb/dashboard-runtime.json");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ host: "127.0.0.1", port, url: `http://127.0.0.1:${port}/`, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
+  } catch {
+    // Runtime URL discovery is best-effort; Vite still prints the actual URL.
+  }
 }
 
 function applyLocalApiCors(origin: string | string[] | undefined, res: { setHeader(name: string, value: string): void }): void {

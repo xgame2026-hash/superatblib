@@ -1,6 +1,6 @@
 # SuperARB Client
 
-Version: 1.4.8.1
+Version: 1.4.9
 
 Local dashboard for monitoring supported market data and runtime status.
 
@@ -17,7 +17,7 @@ Default local URL:
 http://127.0.0.1:4311/
 ```
 
-If the port is occupied, set `DASHBOARD_PORT` in a local `.env` file and restart. Local API calls automatically retry common dashboard ports.
+If the port is occupied, the dashboard automatically starts on the next available local port. Local API calls use the active dashboard port from the page/runtime state instead of a fixed port list.
 
 Controllers and desktop launchers must use the same `.env` value as the dashboard. Resolve the client URL with:
 
@@ -25,7 +25,7 @@ Controllers and desktop launchers must use the same `.env` value as the dashboar
 npm run dashboard:url --silent
 ```
 
-For example, `DASHBOARD_PORT=4310` opens `http://127.0.0.1:4310/`; `DASHBOARD_PORT=4311` opens `http://127.0.0.1:4311/`.
+For example, if `4311` is occupied and Vite starts on `4316`, `npm run dashboard:url --silent` prints `http://127.0.0.1:4316/`.
 
 ## Configuration
 

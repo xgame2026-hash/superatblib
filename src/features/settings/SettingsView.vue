@@ -116,13 +116,6 @@
           </el-select>
         </label>
         <label class="settings-field">
-          <span>WSS 纠错</span>
-          <el-select v-model="settingsForm.wssCorrectionMode">
-            <el-option label="启动" value="enabled" />
-            <el-option label="关闭" value="disabled" />
-          </el-select>
-        </label>
-        <label class="settings-field">
           <span>端口设置</span>
           <el-input
             v-model="settingsForm.dashboardPort"
@@ -198,76 +191,6 @@
         </label>
       </div>
 
-      <div v-else-if="settingsSection === 'queue'" class="settings-form-grid">
-        <label v-for="field in queueFields" :key="field.key" class="settings-field" :class="{ 'is-full': field.full }">
-          <span class="settings-field-meta">
-            <strong>{{ field.label ?? field.env }}</strong>
-            <small>{{ field.env }}</small>
-          </span>
-          <el-input
-            v-model="settingsForm.queue[field.key]"
-            :class="{ 'settings-secret-input': field.secret, 'is-masked': field.secret && !settingsSecretsVisible }"
-            type="text"
-            :name="`settings-queue-${field.key}`"
-            :placeholder="field.placeholder"
-            autocomplete="off"
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-          />
-        </label>
-      </div>
-
-      <div v-else-if="settingsSection === 'cache'" class="settings-form-grid">
-        <label v-for="field in cacheFields" :key="field.key" class="settings-field">
-          <span>{{ field.env }}</span>
-          <el-input
-            v-model="settingsForm.cache[field.key]"
-            autocomplete="off"
-            :name="`settings-cache-${field.key}`"
-            :placeholder="field.placeholder"
-          />
-        </label>
-      </div>
-
-      <div v-else class="exchange-settings">
-        <div v-for="exchange in exchangeFields" :key="exchange.key" class="exchange-block">
-          <div class="exchange-title">{{ exchange.label }}</div>
-          <div class="settings-form-grid">
-            <label class="settings-field">
-              <span>{{ exchange.apiEnv }}</span>
-              <el-input
-                v-model="settingsForm.exchanges[exchange.key].apiKey"
-                class="settings-secret-input"
-                :class="{ 'is-masked': !settingsSecretsVisible }"
-                type="text"
-                :name="`settings-exchange-${exchange.key}-api-key`"
-                placeholder="public key"
-                autocomplete="off"
-                autocapitalize="off"
-                autocorrect="off"
-                spellcheck="false"
-              />
-            </label>
-            <label class="settings-field">
-              <span>{{ exchange.secretEnv }}</span>
-              <el-input
-                v-model="settingsForm.exchanges[exchange.key].secretKey"
-                class="settings-secret-input"
-                :class="{ 'is-masked': !settingsSecretsVisible }"
-                type="text"
-                :name="`settings-exchange-${exchange.key}-secret-key`"
-                placeholder="secret key"
-                autocomplete="off"
-                autocapitalize="off"
-                autocorrect="off"
-                spellcheck="false"
-              />
-            </label>
-          </div>
-        </div>
-      </div>
-
       <div class="settings-footer">
         <span>保存位置：{{ settingsEnvPath }}</span>
       </div>
@@ -293,9 +216,6 @@ defineProps<{
   saveIconUrl: string;
   rpcFields: LooseRecord[];
   feedFields: LooseRecord[];
-  queueFields: LooseRecord[];
-  cacheFields: LooseRecord[];
-  exchangeFields: LooseRecord[];
 }>();
 
 const emit = defineEmits<{

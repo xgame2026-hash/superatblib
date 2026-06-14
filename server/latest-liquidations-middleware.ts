@@ -332,9 +332,10 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
 }
 
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
+  const queueToken = firstUsableToken(queueWssToken(env));
   const token = firstUsableToken(
     env.SUPERMTNODE_APP_TOKEN,
-    queueWssToken(env),
+    queueToken,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,
@@ -343,6 +344,7 @@ function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: 
     accept: "application/json",
     ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),
     ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-token": token, "x-supermtnode-app-token": token } : {}),
+    ...(queueToken ? { "x-queue-token": queueToken, "x-liquidation-queue-token": queueToken } : {}),
   };
 }
 

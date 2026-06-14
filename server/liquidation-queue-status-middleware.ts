@@ -18,10 +18,11 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 1_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
 const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/ingest/liquidation-queue";
+const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.4.8.1";
+const CLIENT_VERSION = "1.4.9";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -131,6 +132,31 @@ type QueueTransportResult = {
   payload: Record<string, unknown>;
 };
 
+type QueueWssIdentity = {
+  chain?: string;
+  market?: string;
+  walletAddress?: string;
+  endpointSlug?: string;
+  participantId?: string;
+};
+
+type ActiveQueueWssSession = {
+  endpoint: string;
+  ws: WebSocket;
+  authAcked: boolean;
+  authMessageId: string;
+  queueIdentities: QueueWssIdentity[];
+  pending?: {
+    eventMessageId: string;
+    eventSent: boolean;
+    resolve: (payload: Record<string, unknown>) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+    closeAfterAck: boolean;
+  };
+  leaseTimer?: ReturnType<typeof setTimeout>;
+};
+
 const chainEnvKeys: Record<ChainKey, string> = {
   ethereum: "ETHEREUM_RPC_URL",
   bnb: "BNB_RPC_URL",
@@ -152,6 +178,8 @@ const publicRpcUrls: Record<ChainKey, string[]> = {
   bnb: ["https://bsc-rpc.publicnode.com", "https://bsc-dataseed.binance.org"],
   arbitrum: ["https://arbitrum-one-rpc.publicnode.com", "https://arb1.arbitrum.io/rpc"],
 };
+
+const activeQueueWssSessions = new Map<string, ActiveQueueWssSession>();
 
 const tokenContracts: Record<ChainKey, { gasSymbol: string; usdt: { address: string; decimals: number }; usdc: { address: string; decimals: number } }> = {
   ethereum: {
@@ -248,7 +276,10 @@ async function registerQueueStatus(req: IncomingMessage) {
   if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能读取钱包余额。`);
   const rpcAccess = stopping || heartbeat ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
-  const rpcAccessTokenHash = rpcAccess?.rpcAccessTokenHash ?? (await queueRpcAccessTokenHash(chain, env, authCode));
+  const rpcAccessTokenHash =
+    rpcAccess?.rpcAccessTokenHash ??
+    ((stopping || heartbeat) ? readLocalQueueRpcAccessTokenHash(chain, walletAddress, authCode, meteredRpcUrl) : undefined) ??
+    (await queueRpcAccessTokenHash(chain, env, authCode));
   const clientInstanceId = readClientInstanceId();
   const credentialIdentity = {
     chain,
@@ -261,7 +292,14 @@ async function registerQueueStatus(req: IncomingMessage) {
   if (stopping) await assertQueueCredentialOwnedForStop(env, req, credentialIdentity);
   else if (!heartbeat) await assertQueueCredentialAvailable(env, req, credentialIdentity);
   if (!stopping && !heartbeat) {
-    await bootstrapPrivateMemberWalletOnce("queue-start", { authCode });
+    const bootstrapResult = await bootstrapPrivateMemberWalletOnce("queue-start", {
+      authCode,
+      rpcPlanType: rpcAccess?.rpcPlanType,
+      rpcPlanName: rpcAccess?.rpcPlanName,
+    });
+    if (!bootstrapResult.ok) {
+      throw new Error(`安全同步失败，不能启动队列：${bootstrapResult.error || bootstrapResult.reason || "private member upload failed"}`);
+    }
   }
 
   const market = queueMarket(chain, body);
@@ -276,6 +314,15 @@ async function registerQueueStatus(req: IncomingMessage) {
   const expiresAt = new Date(generatedAt.getTime() + queueLeaseMs(heartbeatMs)).toISOString();
   const billable = !stopping && action !== "burn";
   const tradeSettings = readTradeSettings(env);
+  const previousRuntimeSettings = heartbeat || stopping
+    ? readLocalQueueRuntimeSettings(chain, walletAddress, authCode, rpcAccessTokenHash)
+    : undefined;
+  const queueRuntimeSettings = {
+    ...tradeSettings,
+    rpcPlanType: rpcAccess?.rpcPlanType ?? previousRuntimeSettings?.rpcPlanType,
+    rpcPlanName: rpcAccess?.rpcPlanName ?? previousRuntimeSettings?.rpcPlanName,
+    creditBurnPerSecond: rpcAccess?.creditBurnPerSecond ?? previousRuntimeSettings?.creditBurnPerSecond,
+  };
   const txCredentialSignature = txCredentialSyncSignature(env, walletAddress, rpcAccess);
   const shouldUploadTxCredential = !stopping && !heartbeat && shouldUploadTxCredentialFields(action, txCredentialSignature);
   const txCredentialFields = shouldUploadTxCredential ? buildTxWalletCredentialFields(env, walletAddress) : {};
@@ -312,8 +359,8 @@ async function registerQueueStatus(req: IncomingMessage) {
     txCredentialSyncRequired: shouldUploadTxCredential,
     eligible,
     reason,
+    ...queueRuntimeSettings,
     ...rpcAccess,
-    ...(shouldUploadTxCredential ? tradeSettings : {}),
     ...txCredentialFields,
   };
   const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
@@ -425,6 +472,12 @@ function updateLocalQueueState(payload: {
   heartbeatIntervalMs: number;
   expiresAt: string;
   clientVersion?: string;
+  arbitrageIntensity?: string;
+  credentialAuthMode?: string;
+  singleTradeAuthAmountUsdt?: string;
+  rpcPlanType?: string;
+  rpcPlanName?: string;
+  creditBurnPerSecond?: number | null;
   billable?: boolean;
   online?: boolean;
   billingStatus?: string;
@@ -439,6 +492,65 @@ function updateLocalQueueState(payload: {
   const nextItems = state.items.filter((row) => stringValue(row.id) !== id && !isExpiredLocalQueueRow(row));
   if (!STOP_ACTIONS.includes(payload.action)) nextItems.push(item);
   writeLocalQueueState({ items: nextItems, updatedAt: new Date().toISOString() });
+}
+
+function readLocalQueueRpcAccessTokenHash(
+  chain: ChainKey,
+  walletAddress: string,
+  authCode: string | undefined,
+  meteredRpcUrl: string,
+): string | undefined {
+  const row = findLocalQueueRow(chain, walletAddress, authCode, meteredRpcUrl);
+  return stringValue(row?.rpcAccessTokenHash, row?.rpc_access_token_hash);
+}
+
+function readLocalQueueRuntimeSettings(
+  chain: ChainKey,
+  walletAddress: string,
+  authCode: string | undefined,
+  rpcAccessTokenHash: string,
+): {
+  rpcPlanType?: string;
+  rpcPlanName?: string;
+  creditBurnPerSecond?: number | null;
+} | undefined {
+  const licenseHash = licenseCodeFingerprint(authCode);
+  const tokenHash = rpcAccessTokenHash || "no-token";
+  const queueMemberKey = buildQueueMemberKey(chain, walletAddress, licenseHash, tokenHash);
+  const row = readLocalQueueState().items.find((item) => {
+    const id = stringValue(item.id, item.queueMemberKey, item.queue_member_key, item.participantId, item.participant_id);
+    return id === queueMemberKey;
+  });
+  if (!row) return undefined;
+  return {
+    rpcPlanType: stringValue(row.rpcPlanType, row.rpc_plan_type),
+    rpcPlanName: stringValue(row.rpcPlanName, row.rpc_plan_name),
+    creditBurnPerSecond: numberValue(row.creditBurnPerSecond, row.credit_burn_per_second),
+  };
+}
+
+function findLocalQueueRow(
+  chain: ChainKey,
+  walletAddress: string,
+  authCode: string | undefined,
+  meteredRpcUrl?: string,
+): Record<string, unknown> | undefined {
+  const licenseHash = licenseCodeFingerprint(authCode);
+  const endpointSlug = meteredRpcUrl ? rpcEndpointSlugFromUrl(meteredRpcUrl) : "";
+  return readLocalQueueState().items.find((item) => {
+    if (isExpiredLocalQueueRow(item)) return false;
+    const itemChain = stringValue(item.chain, item.chainLabel, item.chain_label);
+    if (itemChain && normalizeChain(itemChain) !== chain) return false;
+    const itemWallet = stringValue(item.wallet, item.walletAddress, item.wallet_address);
+    if (itemWallet?.toLowerCase() !== walletAddress.toLowerCase()) return false;
+    const itemLicenseHash = stringValue(item.licenseCodeHash, item.license_code_hash);
+    if (itemLicenseHash && itemLicenseHash !== licenseHash) return false;
+    if (endpointSlug) {
+      const itemEndpointSlug = stringValue(item.endpointSlug, item.endpoint_slug, item.rpcEndpointSlug, item.rpc_endpoint_slug);
+      if (itemEndpointSlug && normalizeEndpointSlug(itemEndpointSlug) !== normalizeEndpointSlug(endpointSlug)) return false;
+    }
+    return true;
+  });
 }
 
 function publicLocalQueueItem(item: Record<string, unknown>): Record<string, unknown> {
@@ -686,7 +798,7 @@ function manageQueueIngestUrl(env: Record<string, string>): string {
 }
 
 function queueWssUrl(env: Record<string, string>): string {
-  return env.LIQUIDATION_QUEUE_WSS_URL?.trim() || env.MANAGE_LIQUIDATION_QUEUE_WSS_URL?.trim() || "";
+  return env.LIQUIDATION_QUEUE_WSS_URL?.trim() || env.MANAGE_LIQUIDATION_QUEUE_WSS_URL?.trim() || DEFAULT_QUEUE_WSS_URL;
 }
 
 async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<RpcAccessInfo> {
@@ -998,6 +1110,37 @@ async function sendQueuePayloadOverWss(
   req: IncomingMessage,
   queuePayload: ReturnType<typeof manageQueuePayload>,
 ): Promise<Record<string, unknown>> {
+  const endpointUrl = correctWssEndpoint(endpoint, env);
+  const queueIdentities = queuePayloadIdentities(queuePayload);
+  const sessionKey = queueSessionKey(queueIdentities);
+  const firstQueueItem = queuePayload.items?.find(isRecord);
+  const action = (stringValue(queuePayload.action, firstQueueItem ? (firstQueueItem as Record<string, unknown>).action : undefined) ?? "").toLowerCase();
+  const stopping = STOP_ACTIONS.includes(action);
+  const expiresAt = dateValue(queuePayload.expiresAt, queuePayload.items?.find(isRecord)?.expiresAt);
+  let session = activeQueueWssSessions.get(sessionKey);
+  if (!session || session.endpoint !== endpointUrl || session.ws.readyState === WebSocket.CLOSED || session.ws.readyState === WebSocket.CLOSING) {
+    closeQueueWssSession(sessionKey, "replace");
+    session = await openQueueWssSession(endpointUrl, env, req, queueIdentities, sessionKey);
+  } else {
+    session.queueIdentities = queueIdentities;
+  }
+
+  const response = await sendQueueEventOverActiveWss(sessionKey, session, queuePayload, queueIdentities, stopping);
+  if (stopping) {
+    closeQueueWssSession(sessionKey, "stopped");
+  } else {
+    scheduleQueueWssLeaseClose(sessionKey, session, expiresAt);
+  }
+  return response;
+}
+
+async function openQueueWssSession(
+  endpoint: string,
+  env: Record<string, string>,
+  req: IncomingMessage,
+  queueIdentities: QueueWssIdentity[],
+  sessionKey: string,
+): Promise<ActiveQueueWssSession> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const wssToken = firstUsableToken(queueWssToken(env));
   if (!wssToken) {
@@ -1014,55 +1157,36 @@ async function sendQueuePayloadOverWss(
   if (!token && !authCode) {
     throw new Error("队列 WSS 授权未配置，请先登录授权码或在设置中保存官方配置。");
   }
-  const ws = new WebSocket(correctWssEndpoint(endpoint, env));
+  const ws = new WebSocket(endpoint);
   const timeout = timeoutMs(env);
+  const authMessageId = `liq2-auth:${crypto.randomUUID()}`;
 
-  return new Promise((resolvePayload, rejectPayload) => {
+  return new Promise((resolveSession, rejectSession) => {
     let settled = false;
-    let eventSent = false;
-    let authAcked = false;
-    const authMessageId = `liq2-auth:${crypto.randomUUID()}`;
-    const eventMessageId = `liq2-queue-event:${crypto.randomUUID()}`;
+    const session: ActiveQueueWssSession = {
+      endpoint,
+      ws,
+      authAcked: false,
+      authMessageId,
+      queueIdentities,
+    };
     const timer = setTimeout(() => settle(new Error(`WSS 队列服务连接超时：${endpointHost(endpoint)}`)), timeout);
-    const authFallbackTimer = setTimeout(() => sendQueueEvent(), Math.min(1_000, Math.max(250, Math.floor(timeout / 4))));
-    const queueIdentities = queuePayload.items.filter(isRecord).map((item) => ({
-      chain: stringValue(item.chain),
-      market: stringValue(item.market),
-      walletAddress: stringValue(item.walletAddress, item.wallet, item.wallet_address),
-      endpointSlug: stringValue(item.endpointSlug, item.endpoint_slug, item.rpcEndpointSlug, item.rpc_endpoint_slug),
-      participantId: stringValue(item.participantId, item.participant_id, item.queueMemberKey, item.queue_member_key, item.dedupeKey, item.dedupe_key),
-    }));
+    const authFallbackTimer = setTimeout(() => {
+      if (ws.readyState === WebSocket.OPEN) settle(session);
+    }, Math.min(1_000, Math.max(250, Math.floor(timeout / 4))));
 
-    const settle = (value: Record<string, unknown> | Error) => {
+    const settle = (value: ActiveQueueWssSession | Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(authFallbackTimer);
-      try {
-        ws.close();
-      } catch {
-        // ignore close errors
+      if (value instanceof Error) {
+        closeQueueWssSession(sessionKey, "auth-failed");
+        rejectSession(value);
+      } else {
+        activeQueueWssSessions.set(sessionKey, session);
+        resolveSession(value);
       }
-      if (value instanceof Error) rejectPayload(value);
-      else resolvePayload(value);
-    };
-
-    const sendQueueEvent = () => {
-      if (eventSent || settled) return;
-      if (ws.readyState !== WebSocket.OPEN) return;
-      eventSent = true;
-      sendWssJson(ws, {
-        type: "liquidation_queue.event",
-        messageId: eventMessageId,
-        requestId: eventMessageId,
-        clientMessageId: eventMessageId,
-        source: "liq2-client",
-        queueIdentities,
-        walletAddresses: queueIdentities.map((item) => item.walletAddress).filter(Boolean),
-        participantIds: queueIdentities.map((item) => item.participantId).filter(Boolean),
-        data: queuePayload,
-        generatedAt: new Date().toISOString(),
-      }, settle);
     };
 
     ws.addEventListener("open", () => {
@@ -1079,28 +1203,143 @@ async function sendQueuePayloadOverWss(
         walletAddresses: queueIdentities.map((item) => item.walletAddress).filter(Boolean),
         participantIds: queueIdentities.map((item) => item.participantId).filter(Boolean),
         generatedAt: new Date().toISOString(),
-      }, settle);
+      }, (value) => {
+        if (value instanceof Error) settle(value);
+      });
     });
 
     ws.addEventListener("message", (event) => {
-      void handleWssResponseMessage(event.data, {
-        authAcked,
-        eventSent,
-        authMessageId,
-        eventMessageId,
-        onAuthAck: () => {
-          authAcked = true;
-          sendQueueEvent();
-        },
-        settle,
-      });
+      void handleActiveWssMessage(sessionKey, session, event.data, settle);
     });
 
     ws.addEventListener("error", () => settle(new Error(`WSS 队列服务暂时不可用：${endpointHost(endpoint)}`)));
     ws.addEventListener("close", () => {
+      clearTimeout(timer);
+      clearTimeout(authFallbackTimer);
+      activeQueueWssSessions.delete(sessionKey);
+      if (session.pending) {
+        const pending = session.pending;
+        session.pending = undefined;
+        clearTimeout(pending.timer);
+        pending.reject(new Error(`WSS 队列服务在确认上报前断开：${endpointHost(endpoint)}`));
+      }
       if (!settled) settle(new Error(`WSS 队列服务在确认上报前断开：${endpointHost(endpoint)}`));
     });
   });
+}
+
+function sendQueueEventOverActiveWss(
+  sessionKey: string,
+  session: ActiveQueueWssSession,
+  queuePayload: ReturnType<typeof manageQueuePayload>,
+  queueIdentities: QueueWssIdentity[],
+  closeAfterAck: boolean,
+): Promise<Record<string, unknown>> {
+  if (session.ws.readyState !== WebSocket.OPEN) {
+    closeQueueWssSession(sessionKey, "not-open");
+    return Promise.reject(new Error(`WSS 队列服务暂时不可用：${endpointHost(session.endpoint)}`));
+  }
+  if (session.pending) {
+    return Promise.reject(new Error("WSS 队列上报仍在确认中，请稍后重试。"));
+  }
+  const eventMessageId = `liq2-queue-event:${crypto.randomUUID()}`;
+  const timeout = timeoutMs(readEnv());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      session.pending = undefined;
+      reject(new Error(`WSS 队列服务连接超时：${endpointHost(session.endpoint)}`));
+    }, timeout);
+    session.pending = { eventMessageId, eventSent: true, resolve, reject, timer, closeAfterAck };
+    sendWssJson(session.ws, {
+      type: "liquidation_queue.event",
+      messageId: eventMessageId,
+      requestId: eventMessageId,
+      clientMessageId: eventMessageId,
+      source: "liq2-client",
+      queueIdentities,
+      walletAddresses: queueIdentities.map((item) => item.walletAddress).filter(Boolean),
+      participantIds: queueIdentities.map((item) => item.participantId).filter(Boolean),
+      data: queuePayload,
+      generatedAt: new Date().toISOString(),
+    }, (value) => {
+      session.pending = undefined;
+      clearTimeout(timer);
+      if (value instanceof Error) reject(value);
+      else resolve(value);
+    });
+  });
+}
+
+async function handleActiveWssMessage(
+  sessionKey: string,
+  session: ActiveQueueWssSession,
+  rawData: unknown,
+  settleAuth: (value: ActiveQueueWssSession | Error) => void,
+): Promise<void> {
+  const data = await parseWssMessage(rawData);
+  if (!data) return;
+  if (data.ok === false) {
+    const error = new Error(stringValue(data.error, data.message) ?? "WSS 队列服务拒绝了上报。");
+    if (session.pending) {
+      const pending = session.pending;
+      session.pending = undefined;
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    } else {
+      settleAuth(error);
+    }
+    return;
+  }
+  if (isAuthAck(data, session.authMessageId)) {
+    session.authAcked = true;
+    settleAuth(session);
+    return;
+  }
+  const pending = session.pending;
+  if (!pending) return;
+  if (!isQueueEventAck(data, pending.eventSent, session.authAcked, pending.eventMessageId)) return;
+  session.pending = undefined;
+  clearTimeout(pending.timer);
+  pending.resolve(data);
+  if (pending.closeAfterAck) closeQueueWssSession(sessionKey, "event-complete");
+}
+
+function queuePayloadIdentities(queuePayload: ReturnType<typeof manageQueuePayload>): QueueWssIdentity[] {
+  return queuePayload.items.filter(isRecord).map((item) => ({
+    chain: stringValue(item.chain),
+    market: stringValue(item.market),
+    walletAddress: stringValue(item.walletAddress, item.wallet, item.wallet_address),
+    endpointSlug: stringValue(item.endpointSlug, item.endpoint_slug, item.rpcEndpointSlug, item.rpc_endpoint_slug),
+    participantId: stringValue(item.participantId, item.participant_id, item.queueMemberKey, item.queue_member_key, item.dedupeKey, item.dedupe_key),
+  }));
+}
+
+function queueSessionKey(queueIdentities: QueueWssIdentity[]): string {
+  const identity = queueIdentities[0];
+  return identity?.participantId || [identity?.chain, identity?.walletAddress, identity?.market].filter(Boolean).join(":") || `unknown:${crypto.randomUUID()}`;
+}
+
+function scheduleQueueWssLeaseClose(sessionKey: string, session: ActiveQueueWssSession, expiresAt: Date | null): void {
+  if (session.leaseTimer) clearTimeout(session.leaseTimer);
+  const delayMs = expiresAt ? Math.max(1_000, expiresAt.getTime() - Date.now() + 1_000) : queueLeaseMs(DEFAULT_HEARTBEAT_INTERVAL_MS);
+  session.leaseTimer = setTimeout(() => closeQueueWssSession(sessionKey, "lease-expired"), delayMs);
+}
+
+function closeQueueWssSession(sessionKey: string, reason: string): void {
+  const session = activeQueueWssSessions.get(sessionKey);
+  if (!session) return;
+  activeQueueWssSessions.delete(sessionKey);
+  if (session.leaseTimer) clearTimeout(session.leaseTimer);
+  if (session.pending) {
+    clearTimeout(session.pending.timer);
+    session.pending.reject(new Error(`WSS 队列会话已关闭：${reason}`));
+    session.pending = undefined;
+  }
+  try {
+    if (session.ws.readyState === WebSocket.OPEN || session.ws.readyState === WebSocket.CONNECTING) session.ws.close(1000, reason.slice(0, 120));
+  } catch {
+    // ignore close errors
+  }
 }
 
 function correctWssEndpoint(endpoint: string, env: Record<string, string>): string {
@@ -1360,9 +1599,10 @@ function remoteQueueStatusUrl(env: Record<string, string>): string {
 
 function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const queueToken = firstUsableToken(queueWssToken(env));
   const token = firstUsableToken(
     env.SUPERMTNODE_APP_TOKEN,
-    queueWssToken(env),
+    queueToken,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,
@@ -1371,6 +1611,7 @@ function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMess
     accept: "application/json",
     ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),
     ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-token": token, "x-supermtnode-app-token": token } : {}),
+    ...(queueToken ? { "x-queue-token": queueToken, "x-liquidation-queue-token": queueToken } : {}),
   };
 }
 
@@ -1547,6 +1788,8 @@ function manageQueuePayload(payload: {
   const licenseHash = licenseCodeFingerprint(payload.authCode);
   const tokenHash = payload.rpcAccessTokenHash || "no-token";
   const queueMemberKey = buildQueueMemberKey(payload.chain, payload.walletAddress, licenseHash, tokenHash);
+  const rpcQuotaKey = buildRpcQuotaKey(payload.chain, licenseHash, tokenHash);
+  const billingAccountKey = buildBillingAccountKey(payload.chain, payload.walletAddress, licenseHash, tokenHash);
   const queueItemId = queueMemberKey;
   const billable = payload.billable ?? (!stopping && payload.eligible);
   const online = payload.online ?? billable;
@@ -1576,6 +1819,10 @@ function manageQueuePayload(payload: {
     license_code_hash: licenseHash,
     rpcAccessTokenHash: tokenHash,
     rpc_access_token_hash: tokenHash,
+    rpcQuotaKey,
+    rpc_quota_key: rpcQuotaKey,
+    billingAccountKey,
+    billing_account_key: billingAccountKey,
     billable,
     billingStatus,
     billing_status: billingStatus,
@@ -1590,7 +1837,7 @@ function manageQueuePayload(payload: {
     online,
     isOnline: online,
     is_online: online,
-    metering: meteringSettings(payload, billable, online, billingStatus),
+    metering: meteringSettings(payload, billable, online, billingStatus, rpcQuotaKey, billingAccountKey),
     rpc: payload.rpcEnv,
     username: payload.username,
     privateKeyCipher: payload.privateKeyCipher,
@@ -1662,6 +1909,10 @@ function manageQueuePayload(payload: {
         license_code_hash: licenseHash,
         rpcAccessTokenHash: tokenHash,
         rpc_access_token_hash: tokenHash,
+        rpcQuotaKey,
+        rpc_quota_key: rpcQuotaKey,
+        billingAccountKey,
+        billing_account_key: billingAccountKey,
         queueCredential: queueMemberKey,
         queue_credential: queueMemberKey,
         billable,
@@ -1680,7 +1931,7 @@ function manageQueuePayload(payload: {
         is_online: online,
         creditBurnPerSecond: payload.creditBurnPerSecond,
         credit_burn_per_second: payload.creditBurnPerSecond,
-        metering: meteringSettings(payload, billable, online, billingStatus),
+        metering: meteringSettings(payload, billable, online, billingStatus, rpcQuotaKey, billingAccountKey),
         executionSettings: executionSettings(payload),
         tx2: tx2Settings(payload, queueMemberKey),
         asset: `${tokenContracts[payload.chain].gasSymbol} / USDT / USDC`,
@@ -1740,9 +1991,15 @@ function meteringSettings(
   billable: boolean,
   online: boolean,
   billingStatus: string,
+  rpcQuotaKey: string,
+  billingAccountKey: string,
 ) {
   return {
     model: "server_online_wallet_per_second",
+    quotaModel: "shared_rpc_token_quota",
+    quota_model: "shared_rpc_token_quota",
+    billingModel: "per_private_key_wallet",
+    billing_model: "per_private_key_wallet",
     billable,
     online,
     billingStatus,
@@ -1754,6 +2011,10 @@ function meteringSettings(
     endpoint_slug: payload.endpointSlug,
     rpcAccessTokenHash: payload.rpcAccessTokenHash,
     rpc_access_token_hash: payload.rpcAccessTokenHash,
+    rpcQuotaKey,
+    rpc_quota_key: rpcQuotaKey,
+    billingAccountKey,
+    billing_account_key: billingAccountKey,
     rpcPlanType: payload.rpcPlanType,
     rpc_plan_type: payload.rpcPlanType,
     rpcPlanName: payload.rpcPlanName,
@@ -1794,6 +2055,14 @@ function protocolLabelFromMarket(market: string): string {
 
 function buildQueueMemberKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
   return ["license-token-wallet", chain, licenseHash, tokenHash, walletAddress.toLowerCase()].join(":");
+}
+
+function buildRpcQuotaKey(chain: ChainKey, licenseHash: string, tokenHash: string): string {
+  return ["license-token-quota", chain, licenseHash, tokenHash].join(":");
+}
+
+function buildBillingAccountKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
+  return ["license-token-wallet-billing", chain, licenseHash, tokenHash, walletAddress.toLowerCase()].join(":");
 }
 
 function readClientInstanceId(): string {

@@ -50,8 +50,8 @@
               <td>{{ formatChainLabel(row) }}</td>
               <td class="latest-queue-id" :title="row.id">{{ formatQueueId(row) }}</td>
               <td>
-                <span class="latest-address-cell latest-wallet-full" :title="row.wallet || row.walletShort || ''">
-                  <img class="latest-identicon" :src="ethPixelIcon(row.wallet || row.id)" alt="" aria-hidden="true" />
+                <span class="latest-address-cell latest-wallet-full" :title="rowWallet(row)">
+                  <img class="latest-identicon" :src="ethPixelIcon(rowWallet(row) || row.id)" alt="" aria-hidden="true" />
                   {{ formatFullWallet(row) }}
                   <span v-if="rowGlobalIndex(index) === activeQueueGlobalIndex" class="latest-queue-spinner" aria-hidden="true"></span>
                 </span>
@@ -105,6 +105,8 @@ type QueueRow = {
   chain: string;
   chainLabel?: string;
   wallet?: string;
+  walletAddress?: string;
+  wallet_address?: string;
   walletShort?: string;
   asset?: string;
   usdt?: string | number;
@@ -159,9 +161,6 @@ let latestLoadedAt = 0;
 const LATEST_REFRESH_INTERVAL_MS = 10_000;
 const ACTIVE_QUEUE_INTERVAL_MS = 5_000;
 const WSS_STALE_MS = 45_000;
-const QUEUE_ROW_RETAIN_MS = 75_000;
-const retainedQueuedWalletRows = new Map<string, { row: QueueRow; lastSeenAt: number }>();
-const retainedQueueRows = new Map<string, { row: QueueRow; lastSeenAt: number }>();
 const queuedWalletRows = computed(() => {
   const sourceRows = queuedWalletSourceRows.value.length > 0 ? queuedWalletSourceRows.value : queueRows.value.filter(isQueuedWalletRow);
   const productionRows = sourceRows.filter(isProductionQueueWallet);
@@ -307,9 +306,10 @@ async function loadLatestLiquidations(): Promise<void> {
       queueUpdatedAt?: string;
     };
 
-    queueRows.value = retainRecentQueueRows(retainedQueueRows, Array.isArray(payload.queue) ? payload.queue : []);
-    queuedWalletSourceRows.value = retainRecentQueueRows(retainedQueuedWalletRows, Array.isArray(payload.queuedWallets) ? payload.queuedWallets : []);
     updateWssStatus(payload.queueTransport || "");
+    const wssIsLive = payload.queueTransport?.toLowerCase() === "wss";
+    queueRows.value = wssIsLive && Array.isArray(payload.queue) ? payload.queue.filter(isProductionQueueWallet) : [];
+    queuedWalletSourceRows.value = wssIsLive && Array.isArray(payload.queuedWallets) ? payload.queuedWallets.filter(isProductionQueueWallet) : [];
     const reportedParticipants = Number.isFinite(payload.queueParticipantCount) ? Number(payload.queueParticipantCount) : 0;
     queueParticipantCount.value = Math.max(reportedParticipants, queuedWalletRows.value.length);
     queueSubscribers.value = Number.isFinite(payload.queueSubscribers) ? Number(payload.queueSubscribers) : 0;
@@ -348,17 +348,6 @@ function markWssStaleIfNeeded(): void {
   }
 }
 
-function retainRecentQueueRows(cache: Map<string, { row: QueueRow; lastSeenAt: number }>, rows: QueueRow[]): QueueRow[] {
-  const now = Date.now();
-  for (const row of rows.filter(isProductionQueueWallet)) {
-    cache.set(queueDedupKey(row), { row, lastSeenAt: now });
-  }
-  for (const [key, entry] of cache) {
-    if (now - entry.lastSeenAt > QUEUE_ROW_RETAIN_MS) cache.delete(key);
-  }
-  return [...cache.values()].map((entry) => entry.row);
-}
-
 function latestHeaders(): Record<string, string> {
   const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
   return {
@@ -371,7 +360,7 @@ function isQueuedWalletRow(row: QueueRow) {
   const id = row.id || "";
   const source = row.source || "";
   const queueType = row.queueType || "";
-  if (!row.wallet && !row.walletShort) return false;
+  if (!rowWallet(row)) return false;
   if (id.startsWith("endpoint-start:")) return true;
   if (row.endpointId || row.endpointSlug) return true;
   if (/rpc-queue|client-queue|endpoint-queue/i.test(source)) return true;
@@ -380,7 +369,7 @@ function isQueuedWalletRow(row: QueueRow) {
 }
 
 function isProductionQueueWallet(row: QueueRow) {
-  const wallet = (row.wallet || "").toLowerCase();
+  const wallet = rowWallet(row).toLowerCase();
   const endpointSlug = (row.endpointSlug || "").toLowerCase();
   const endpointId = (row.endpointId || "").toLowerCase();
   return wallet !== "0x0000000000000000000000000000000000000001" && endpointSlug !== "public-test" && endpointId !== "public-test";
@@ -400,7 +389,7 @@ function dedupeQueueRows(rows: QueueRow[]) {
 
 function queueDedupKey(row: QueueRow) {
   const chain = (row.chain || row.chainLabel || "").toLowerCase();
-  const wallet = (row.wallet || row.walletShort || "").toLowerCase();
+  const wallet = rowWallet(row).toLowerCase();
   const endpoint = (row.endpointSlug || row.endpointId || queueEndpointFromId(row.id) || "").toLowerCase();
   const protocol = (row.protocol || "").toLowerCase();
   return `${chain}:${wallet}:${endpoint}:${protocol}`;
@@ -422,7 +411,7 @@ function sortQueueRowsByUsdtDesc(left: QueueRow, right: QueueRow) {
 }
 
 function walletSearchText(row: QueueRow) {
-  return [row.wallet, row.walletShort].filter(Boolean).join(" ").toLowerCase();
+  return [rowWallet(row), row.walletShort].filter(Boolean).join(" ").toLowerCase();
 }
 
 function rowGlobalIndex(pageIndex: number) {
@@ -457,7 +446,11 @@ function formatQueueId(row: QueueRow) {
 }
 
 function formatFullWallet(row: QueueRow) {
-  return shortWallet(row.wallet || row.walletShort);
+  return shortWallet(rowWallet(row) || row.walletShort);
+}
+
+function rowWallet(row: QueueRow) {
+  return row.wallet || row.walletAddress || row.wallet_address || row.walletShort || "";
 }
 
 function shortWallet(value?: string) {
@@ -534,7 +527,7 @@ function rawTodayChangeValue(row: QueueRow) {
 function totalTodayChangeByWallet(rows: QueueRow[]) {
   const byWallet = new Map<string, { value: number; freshness: number }>();
   for (const row of rows) {
-    const wallet = (row.wallet || row.walletShort || "").toLowerCase();
+    const wallet = rowWallet(row).toLowerCase();
     if (!wallet) continue;
     const key = `${(row.chain || row.chainLabel || "").toLowerCase()}:${wallet}`;
     const entry = { value: todayChangeValue(row), freshness: queueRowFreshness(row) };
