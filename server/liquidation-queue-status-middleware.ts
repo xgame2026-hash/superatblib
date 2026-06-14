@@ -243,7 +243,8 @@ async function burnRunningRpc(req: IncomingMessage) {
   const body = (await readJson(req)) as QueueRegisterPayload;
   const chain = normalizeChain(stringValue(body.chain) ?? "");
   assertQueueChainEnabled(chain);
-  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const authCode = requestAuthCode(req, env);
+  assertQueueAuthCodeConfigured(authCode);
   assertOfficialConfig("RPC 运行扣费", env);
   const rpcUrls = meteredRpcUrls(chain, env);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能扣费。`);
@@ -266,7 +267,8 @@ async function registerQueueStatus(req: IncomingMessage) {
   const chain = normalizeChain(stringValue(body.chain) ?? "");
   assertQueueChainEnabled(chain);
   const action = stringValue(body.action)?.toLowerCase() ?? "start";
-  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const authCode = requestAuthCode(req, env);
+  assertQueueAuthCodeConfigured(authCode);
   const stopping = STOP_ACTIONS.includes(action);
   const heartbeat = action === "heartbeat";
   assertOfficialConfig("执行队列上报", env);
@@ -615,7 +617,7 @@ async function fetchStatusPayload(statusUrl: string, env: Record<string, string>
   const endpointId = requestUrl.searchParams.get("endpointId");
   if (endpointId && !url.searchParams.has("endpointId")) url.searchParams.set("endpointId", endpointId);
 
-  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const authCode = requestAuthCode(req, env);
   const headers: Record<string, string> = { accept: "application/json" };
   if (authCode) {
     headers["x-supermtnode-auth-code"] = authCode;
@@ -1141,7 +1143,7 @@ async function openQueueWssSession(
   queueIdentities: QueueWssIdentity[],
   sessionKey: string,
 ): Promise<ActiveQueueWssSession> {
-  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const authCode = requestAuthCode(req, env);
   const wssToken = firstUsableToken(queueWssToken(env));
   if (!wssToken) {
     throw new Error("QUEUE_TOKEN 未配置或已过期；远端 WSS 队列当前要求专用 Token，不能用 SUPERMTNODE_APP_TOKEN 替代。");
@@ -1428,7 +1430,7 @@ async function parseWssMessage(data: unknown): Promise<Record<string, unknown> |
 
 function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
-  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const authCode = requestAuthCode(req, env);
   if (authCode) {
     headers["x-supermtnode-auth-code"] = authCode;
     headers["x-license-code"] = authCode;
@@ -1598,7 +1600,7 @@ function remoteQueueStatusUrl(env: Record<string, string>): string {
 }
 
 function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
-  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
+  const authCode = requestAuthCode(req, env);
   const queueToken = firstUsableToken(queueWssToken(env));
   const token = firstUsableToken(
     env.SUPERMTNODE_APP_TOKEN,
@@ -2475,6 +2477,28 @@ function sleep(ms: number): Promise<void> {
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value.find((item) => item.trim())?.trim();
   return value?.trim() || undefined;
+}
+
+function requestAuthCode(req: IncomingMessage, env: Record<string, string>): string | undefined {
+  return normalizeAuthCode(
+    headerValue(req.headers["x-supermtnode-auth-code"]) ||
+      headerValue(req.headers["x-license-code"]) ||
+      headerValue(req.headers["x-auth-code"]) ||
+      env.AUTH_CODE ||
+      env.SUPERARB_AUTH_CODE ||
+      env.LICENSE_CODE,
+  );
+}
+
+function normalizeAuthCode(value?: string): string | undefined {
+  const normalized = value?.trim().toUpperCase();
+  return normalized || undefined;
+}
+
+function assertQueueAuthCodeConfigured(authCode?: string): asserts authCode is string {
+  if (!authCode) {
+    throw new Error("授权码未配置，不能启动队列。请先在登录页输入有效授权码，或在 .env 中设置 AUTH_CODE。");
+  }
 }
 
 function firstUsableToken(...values: Array<string | undefined>): string {

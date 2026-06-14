@@ -1004,6 +1004,7 @@ function generateEnvText() {
     "# -----------------------------------------------------------------------------",
     `PRIVATE_KEY=${settingsForm.privateKey}`,
     `SUPERMTNODE_APP_TOKEN=${settingsForm.superMtNodeAppToken}`,
+    `AUTH_CODE=${authCode.value.trim().toUpperCase()}`,
     "",
     "# -----------------------------------------------------------------------------",
     "# 2. Execution Policy",
@@ -1063,6 +1064,8 @@ function generateEnvText() {
 }
 
 function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePort?: boolean } = {}) {
+  const envAuthCode = (env.AUTH_CODE || env.SUPERARB_AUTH_CODE || env.LICENSE_CODE || "").trim().toUpperCase();
+  if (!authCode.value.trim() && envAuthCode) authCode.value = envAuthCode;
   settingsForm.privateKey = env.PRIVATE_KEY ?? settingsForm.privateKey;
   settingsForm.language = env.DASHBOARD_LANGUAGE ?? settingsForm.language;
   settingsForm.fundingMode = env.FUNDING_MODE ?? settingsForm.fundingMode;

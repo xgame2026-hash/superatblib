@@ -107,6 +107,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           json(res, 400, { ok: false, error: "Missing SUPERMTNODE_APP_TOKEN." });
           return;
         }
+        if (authCode) writeAuthCodeToEnv(authCode);
         const endpoints = appToken ? await fetchSuperMtNodeEndpointsByToken(appToken, env) : await fetchSuperMtNodeEndpointsByLicense(authCode, env);
         const applied = applyLicenseEndpointsToEnv(endpoints);
         if (!Object.keys(applied).length) {
@@ -377,6 +378,34 @@ function applyLicenseEndpointsToEnv(endpoints: SuperMtNodeEndpoint[]): Record<st
     writeFileSync(ENV_FILE, serializeEnv(env), "utf8");
   }
   return applied;
+}
+
+function writeAuthCodeToEnv(authCode: string): void {
+  const normalized = authCode.trim().toUpperCase();
+  if (!normalized) return;
+  const source = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : existsSync(ENV_EXAMPLE_FILE) ? readFileSync(ENV_EXAMPLE_FILE, "utf8") : "";
+  const next = upsertEnvValue(source, "AUTH_CODE", normalized);
+  writeFileSync(ENV_FILE, normalizeEnv(next), "utf8");
+}
+
+function upsertEnvValue(source: string, key: string, value: string): string {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const keyPattern = new RegExp(`^\\\\s*${escapeRegExp(key)}\\\\s*=`);
+  let updated = false;
+  const nextLines = lines.map((line) => {
+    if (!keyPattern.test(line)) return line;
+    updated = true;
+    return `${key}=${value}`;
+  });
+  if (!updated) {
+    if (nextLines.length && nextLines[nextLines.length - 1]?.trim()) nextLines.push("");
+    nextLines.push(`${key}=${value}`);
+  }
+  return nextLines.join("\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function serializeEnv(env: Record<string, string>): string {
