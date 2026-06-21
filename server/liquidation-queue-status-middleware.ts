@@ -603,11 +603,30 @@ async function syncStateQueueStatus(
   localQueueItem?: Record<string, unknown>,
 ): Promise<void> {
   if (!stateRpcEnabled(env)) return;
+  const action = stringValue(payload.action)?.toLowerCase() ?? "start";
+  const required = action === "start" || STOP_ACTIONS.includes(action);
+  const attempts = required ? 3 : 1;
   try {
-    await stateQueueStatus(env, { ...(localQueueItem ?? {}), ...payload });
+    await retryStateQueueStatus(env, { ...(localQueueItem ?? {}), ...payload }, attempts);
   } catch (error) {
-    console.warn(`[state-queue] sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[state-queue] sync failed: ${message}`);
+    if (required) throw new Error(`State 数据库同步失败，${action === "start" ? "不能启动" : "不能暂停"}：${message}`);
   }
+}
+
+async function retryStateQueueStatus(env: Record<string, string>, payload: Record<string, unknown>, attempts: number): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await stateQueueStatus(env, payload);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await delay(350 * attempt);
+    }
+  }
+  throw lastError;
 }
 
 function backgroundHeartbeatPayload(

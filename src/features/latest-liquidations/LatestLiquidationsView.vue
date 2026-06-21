@@ -461,7 +461,16 @@ function formatChainLabel(row: QueueRow) {
 function formatQueueId(row: QueueRow) {
   const queueId = row.participantId || row.queueMemberKey || row.endpointId || row.id || row.endpointSlug;
   if (!queueId) return "--";
+  const normalized = formatStateQueueId(queueId);
+  if (normalized) return normalized;
   return queueId.length > 28 ? `${queueId.slice(0, 12)}...${queueId.slice(-8)}` : queueId;
+}
+
+function formatStateQueueId(queueId: string): string {
+  const parts = queueId.split(":");
+  if (parts[0] !== "license-token-wallet" || parts.length < 5) return "";
+  const [, chain, licenseHash, tokenHash, wallet] = parts;
+  return [chain, licenseHash.slice(0, 6), tokenHash.slice(0, 6), wallet.slice(-6)].filter(Boolean).join("_");
 }
 
 function formatFullWallet(row: QueueRow) {
