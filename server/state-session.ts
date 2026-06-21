@@ -336,6 +336,7 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
   const balances = isRecord(payload.balances) ? payload.balances : isRecord(payload.wallet) && isRecord(payload.wallet.balances) ? payload.wallet.balances : undefined;
   return {
     action: stringValue(payload.action) || "start",
+    startIntentId: stringValue(payload.startIntentId, payload.start_intent_id),
     chain: stringValue(payload.chain) || "bnb",
     walletAddress: stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? ""),
     walletPublicKey,

@@ -428,6 +428,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     queueType: "endpoint-start",
     version: CLIENT_VERSION,
     action,
+    startIntentId: stringValue(body.startIntentId, body.start_intent_id),
     generatedAt: generatedAtIso,
     lastSeenAt: generatedAtIso,
     heartbeatIntervalMs: heartbeatMs,
