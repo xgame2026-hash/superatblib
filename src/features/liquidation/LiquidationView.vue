@@ -620,12 +620,14 @@ function restoreRunningMarketState() {
   market.value = saved.market;
   queueState.value = "waiting";
   marketRunning.value = false;
-  setTerminalLines([`queue restored: ${saved.market}`, "startup detection: auto reconnect enabled"]);
-  void registerMarketQueueStart(saved.option, "heartbeat")
+  marketStartIntentId = createQueueStartIntentId();
+  setTerminalLines([`queue reconnecting: ${saved.market}`, "startup detection: full queue sync required"]);
+  void registerMarketQueueStart(saved.option, "start")
     .then((payload) => {
       queueState.value = payload.eligible === false ? "waiting" : "queued";
       marketRunning.value = true;
-      persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined);
+      appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
+      persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
       startMarketHeartbeat(payload.heartbeatIntervalMs);
       void loadQueueMonitorStatus();
       void loadCandidateQueueSnapshot();
@@ -689,12 +691,10 @@ function isRecentRunningMarketState(saved: RunningMarketSnapshot) {
 }
 
 function handleClientOffline() {
-  if (marketRunning.value && !currentMarket.value.disabled) sendQueueStopBeacon(currentMarket.value);
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
-  clearRunningMarketState();
-  appendTerminal("network offline: queue exit requested");
+  appendTerminal("network offline: queue heartbeat paused");
   emit("launch-sound", "not-launched");
 }
 
