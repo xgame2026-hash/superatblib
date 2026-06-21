@@ -9,6 +9,7 @@
     "dashboard": "vite --host 127.0.0.1",
     "dashboard:url": "node scripts/dashboard-url.mjs",
     "dashboard:leaderboard": "node scripts/open-dashboard-view.mjs leaderboard",
+    "verify:queue": "node scripts/verify-queue-contract.mjs",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1"
   },

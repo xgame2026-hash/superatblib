@@ -539,6 +539,10 @@ function startMarketHeartbeat(intervalMs: unknown = marketHeartbeatIntervalMs) {
   }, marketHeartbeatIntervalMs);
 }
 
+function resumeMarketHeartbeat() {
+  if (!marketHeartbeatTimer) startMarketHeartbeat(marketHeartbeatIntervalMs);
+}
+
 async function sendMarketHeartbeat() {
   if (!marketRunning.value || currentMarket.value.disabled || marketHeartbeatInFlight) return;
   marketHeartbeatInFlight = true;
@@ -678,7 +682,6 @@ function restoreRecentRunningMarketState() {
     return;
   }
   if (!isRecentRunningMarketState(saved)) {
-    sendQueueStopBeacon(saved.option);
     clearRunningMarketState();
     return;
   }
@@ -691,16 +694,17 @@ function isRecentRunningMarketState(saved: RunningMarketSnapshot) {
 }
 
 function handleClientOffline() {
+  if (!marketRunning.value) return;
   queueState.value = "paused";
-  marketRunning.value = false;
   stopMarketHeartbeat();
   appendTerminal("network offline: queue heartbeat paused");
-  emit("launch-sound", "not-launched");
 }
 
 function handleClientOnline() {
   if (!marketRunning.value || currentMarket.value.disabled) return;
-  void sendMarketHeartbeat();
+  void sendMarketHeartbeat().then(() => {
+    if (marketRunning.value) resumeMarketHeartbeat();
+  });
 }
 
 function handleVisibilityHeartbeat() {
