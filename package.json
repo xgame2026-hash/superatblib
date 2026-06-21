@@ -8,6 +8,7 @@
     "start": "npm run dashboard",
     "dashboard": "vite --host 127.0.0.1",
     "dashboard:url": "node scripts/dashboard-url.mjs",
+    "dashboard:leaderboard": "node scripts/open-dashboard-view.mjs leaderboard",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1"
   },

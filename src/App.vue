@@ -376,7 +376,7 @@ const loginLoading = ref(false);
 const authMessage = ref("");
 const authMessageType = ref<AuthMessageType>("info");
 const isAuthenticated = ref(false);
-const activeView = ref<ViewKey>(readStoredValue(ACTIVE_VIEW_KEY, viewKeys, "overview"));
+const activeView = ref<ViewKey>(readInitialView());
 const settingsSection = ref<SettingsSectionKey>(readStoredValue(SETTINGS_SECTION_KEY, settingsSectionKeys, "general"));
 const settingsSecretsVisible = ref(false);
 const settingsEnvPath = ref(".env");
@@ -559,9 +559,12 @@ let notLaunchedReminderTimer = 0;
 onMounted(() => {
   authCode.value = localStorage.getItem(AUTH_CODE_KEY) ?? sessionStorage.getItem(AUTH_CODE_SESSION_KEY) ?? "";
   isAuthenticated.value = localStorage.getItem(AUTH_STORAGE_KEY) === "authorized";
+  applyViewFromUrl();
+  syncViewHash(activeView.value);
   loadSettings({ syncRuntimePort: true });
   void loadGithubVersion();
   document.addEventListener("pointerdown", closeGithubMenuOnOutside);
+  window.addEventListener("hashchange", applyViewFromUrl);
   if (isAuthenticated.value) {
     void loadNews();
   }
@@ -570,6 +573,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopNotLaunchedReminder();
   document.removeEventListener("pointerdown", closeGithubMenuOnOutside);
+  window.removeEventListener("hashchange", applyViewFromUrl);
 });
 
 watch(launchSoundEnabled, (enabled) => {
@@ -585,6 +589,7 @@ watch(isAuthenticated, async (authorized) => {
 
 watch(activeView, (view) => {
   localStorage.setItem(ACTIVE_VIEW_KEY, view);
+  syncViewHash(view);
 });
 
 watch(settingsSection, (section) => {
@@ -594,6 +599,34 @@ watch(settingsSection, (section) => {
 function readStoredValue<T extends string>(key: string, allowedValues: readonly T[], fallback: T): T {
   const value = localStorage.getItem(key);
   return allowedValues.includes(value as T) ? (value as T) : fallback;
+}
+
+function readInitialView(): ViewKey {
+  return readViewFromUrl() ?? readStoredValue(ACTIVE_VIEW_KEY, viewKeys, "overview");
+}
+
+function readViewFromUrl(): ViewKey | null {
+  const raw = new URLSearchParams(window.location.search).get("view") || window.location.hash.replace(/^#\/?/, "");
+  const value = normalizeViewAlias(raw);
+  return viewKeys.includes(value as ViewKey) ? (value as ViewKey) : null;
+}
+
+function normalizeViewAlias(value: string | null): string {
+  const normalized = (value || "").trim().toLowerCase();
+  if (["leaderboard", "ranking", "rank", "latest", "liquidations", "latest-liquidations"].includes(normalized)) return "execution";
+  if (["control", "dashboard", "analytics"].includes(normalized)) return "analytics";
+  return normalized;
+}
+
+function syncViewHash(view: ViewKey): void {
+  const targetHash = `#${view}`;
+  if (window.location.hash === targetHash) return;
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${targetHash}`);
+}
+
+function applyViewFromUrl(): void {
+  const view = readViewFromUrl();
+  if (view) activeView.value = view;
 }
 
 function formatCode() {

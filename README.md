@@ -36,6 +36,14 @@ npm run dashboard:url --silent
 
 For example, if `4311` is occupied and Vite starts on `4316`, `npm run dashboard:url --silent` prints `http://127.0.0.1:4316/`.
 
+Open the leaderboard without caring which local port is active:
+
+```bash
+npm run dashboard:leaderboard
+```
+
+The leaderboard can also be opened from any active dashboard URL with `#leaderboard` or `#execution`. Leaderboard data is loaded through the current dashboard backend and is not tied to a fixed port.
+
 If `npm run dashboard` reports `Missing script: "dashboard"`, the local checkout is not using the latest root `package.json`. Run these commands from the repository root:
 
 ```bash
