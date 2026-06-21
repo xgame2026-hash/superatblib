@@ -499,7 +499,10 @@ async function registerQueueStatus(req: IncomingMessage) {
   }
 
   if (!stopping) {
-    await syncStateQueueStatus(env, payload, localQueueItem);
+    const stateQueue = await syncStateQueueStatus(env, payload, localQueueItem);
+    if (heartbeat && isStateQueueStopped(stateQueue)) {
+      throw new Error("列队已暂停，请重新点击启动。");
+    }
   }
   if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
 
@@ -604,6 +607,10 @@ async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, str
   } catch (error) {
     session.failureCount += 1;
     session.lastError = error instanceof Error ? error.message : String(error);
+    if (/列队已暂停/.test(session.lastError)) {
+      stopBackgroundQueueHeartbeat(key, "state-stopped");
+      return;
+    }
     if (session.failureCount === 1 || session.failureCount % 6 === 0) {
       console.warn(`[queue-background] heartbeat failed (${session.failureCount}): ${session.lastError}`);
     }
@@ -614,32 +621,44 @@ async function syncStateQueueStatus(
   env: Record<string, string>,
   payload: Parameters<typeof manageQueuePayload>[0],
   localQueueItem?: Record<string, unknown>,
-): Promise<void> {
+): Promise<Record<string, unknown> | undefined> {
   if (!stateRpcEnabled(env)) return;
   const action = stringValue(payload.action)?.toLowerCase() ?? "start";
   const required = action === "start" || STOP_ACTIONS.includes(action);
   const attempts = required ? 3 : 1;
   try {
-    await retryStateQueueStatus(env, { ...(localQueueItem ?? {}), ...payload }, attempts);
+    const stateQueue = await retryStateQueueStatus(env, { ...(localQueueItem ?? {}), ...payload }, attempts);
+    if (action === "heartbeat" && isStateQueueStopped(stateQueue)) {
+      throw new Error("列队已暂停，请重新点击启动。");
+    }
+    return stateQueue;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[state-queue] sync failed: ${message}`);
     if (required) throw new Error(`列队同步失败，${action === "start" ? "不能启动" : "不能暂停"}：${message}`);
+    if (action === "heartbeat" && /列队已暂停/.test(message)) throw new Error(message);
   }
 }
 
-async function retryStateQueueStatus(env: Record<string, string>, payload: Record<string, unknown>, attempts: number): Promise<void> {
+async function retryStateQueueStatus(env: Record<string, string>, payload: Record<string, unknown>, attempts: number): Promise<Record<string, unknown>> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await stateQueueStatus(env, payload);
-      return;
+      return await stateQueueStatus(env, payload);
     } catch (error) {
       lastError = error;
       if (attempt < attempts) await delay(350 * attempt);
     }
   }
   throw lastError;
+}
+
+function isStateQueueStopped(payload: Record<string, unknown> | undefined): boolean {
+  const queue = isRecord(payload?.queue) ? payload.queue : payload;
+  if (!isRecord(queue)) return false;
+  const online = queue.online;
+  const status = stringValue(queue.status)?.toLowerCase();
+  return online === false || status === "stopped" || status === "paused" || status === "offline" || status === "removed";
 }
 
 function backgroundHeartbeatPayload(
