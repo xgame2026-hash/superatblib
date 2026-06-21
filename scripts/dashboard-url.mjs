@@ -14,7 +14,12 @@ const configuredPort = normalizePort(process.env.DASHBOARD_PORT || env.DASHBOARD
 const runtimeAlive = runtime ? await isDashboardPort(runtime.port) : false;
 const port = runtimeAlive ? runtime.port : await discoverDashboardPort(configuredPort);
 
-console.log(`http://127.0.0.1:${port}/`);
+if (!port) {
+  console.error("Dashboard is not running. Start it with: npm run dashboard");
+  process.exitCode = 1;
+} else {
+  console.log(`http://127.0.0.1:${port}/`);
+}
 
 function parseEnv(source) {
   const env = {};
@@ -52,7 +57,7 @@ async function discoverDashboardPort(startPort) {
   for (let port = startPort + 1; port <= 65535; port += 1) {
     if (await isDashboardPort(port)) return port;
   }
-  return startPort;
+  return null;
 }
 
 async function isDashboardPort(port) {
