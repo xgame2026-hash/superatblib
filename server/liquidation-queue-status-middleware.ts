@@ -624,7 +624,7 @@ async function syncStateQueueStatus(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[state-queue] sync failed: ${message}`);
-    if (required) throw new Error(`State 数据库同步失败，${action === "start" ? "不能启动" : "不能暂停"}：${message}`);
+    if (required) throw new Error(`列队同步失败，${action === "start" ? "不能启动" : "不能暂停"}：${message}`);
   }
 }
 
