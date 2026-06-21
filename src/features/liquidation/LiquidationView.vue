@@ -406,8 +406,7 @@ const QUEUE_REQUEST_TIMEOUT_MS = 20_000;
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 
 onMounted(() => {
-  if (autoRestoreRunningMarketEnabled()) restoreRecentRunningMarketState();
-  else stopCachedRunningMarketState();
+  restoreRecentRunningMarketState();
   if (props.active) startVisiblePolling();
   void nextTick(updateOpportunitiesPanelHeight);
   window.addEventListener("resize", updateOpportunitiesPanelHeight);
@@ -684,21 +683,6 @@ function restoreRecentRunningMarketState() {
   restoreRunningMarketState();
 }
 
-function stopCachedRunningMarketState() {
-  const saved = readRunningMarketState();
-  if (!saved) {
-    clearRunningMarketState();
-    return;
-  }
-  sendQueueStopBeacon(saved.option);
-  clearRunningMarketState();
-}
-
-function autoRestoreRunningMarketEnabled() {
-  const configured = String(import.meta.env.VITE_LIQUIDATION_QUEUE_AUTO_RESTORE ?? "").trim().toLowerCase();
-  return ["1", "true", "yes", "enabled", "on"].includes(configured);
-}
-
 function isRecentRunningMarketState(saved: RunningMarketSnapshot) {
   const updatedAt = Date.parse(saved.updatedAt);
   return Number.isFinite(updatedAt) && Date.now() - updatedAt <= RUNNING_MARKET_RESTORE_WINDOW_MS;
@@ -724,7 +708,7 @@ function handleVisibilityHeartbeat() {
 }
 
 function handleClientUnload() {
-  if (marketRunning.value && !currentMarket.value.disabled) sendQueueStopBeacon(currentMarket.value);
+  stopMarketHeartbeat();
 }
 
 function sendQueueStopBeacon(item: MarketOption) {
