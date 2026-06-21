@@ -286,10 +286,11 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
     return null;
   });
   if (stateQueuedWallets) {
-    response.queuedWallets = stateQueuedWallets;
-    response.queueTransport = "state";
-    response.queueSource = "supermt-state-leaderboard";
-    response.queueParticipantCount = stateQueuedWallets.length;
+    const mergedQueuedWallets = mergeStateAndQueueRows(stateQueuedWallets, response.queuedWallets);
+    response.queuedWallets = mergedQueuedWallets;
+    response.queueTransport = stateQueuedWallets.length === mergedQueuedWallets.length ? "state" : "state+wss";
+    response.queueSource = stateQueuedWallets.length === mergedQueuedWallets.length ? "supermt-state-leaderboard" : "supermt-state-leaderboard+private-member-wss";
+    response.queueParticipantCount = mergedQueuedWallets.length;
     response.queueUpdatedAt = new Date().toISOString();
   }
   response.queue = response.queue.filter(isLicensedQueueRow);
@@ -304,6 +305,26 @@ async function readStateLeaderboardQueuedWallets(env: Record<string, string>): P
   if (isRecord(payload) && payload.ok === false) return null;
   const rows = isRecord(payload) && Array.isArray(payload.queuedWallets) ? readQueue(payload.queuedWallets) : [];
   return rows;
+}
+
+function mergeStateAndQueueRows(stateRows: SnapshotQueueRow[], queueRows: SnapshotQueueRow[]): SnapshotQueueRow[] {
+  const merged = new Map<string, SnapshotQueueRow>();
+  for (const row of queueRows) {
+    if (isExpiredQueueRow(row)) continue;
+    merged.set(queueMergeKey(row), row);
+  }
+  for (const row of stateRows) {
+    merged.set(queueMergeKey(row), row);
+  }
+  return [...merged.values()].sort((left, right) => {
+    const rightUsdt = Number((right.balances as { usdt?: { formatted?: string } } | undefined)?.usdt?.formatted ?? "0");
+    const leftUsdt = Number((left.balances as { usdt?: { formatted?: string } } | undefined)?.usdt?.formatted ?? "0");
+    return (Number.isFinite(rightUsdt) ? rightUsdt : 0) - (Number.isFinite(leftUsdt) ? leftUsdt : 0);
+  });
+}
+
+function queueMergeKey(row: SnapshotQueueRow): string {
+  return [row.chain || row.chainLabel || "unknown", row.wallet.toLowerCase()].join(":");
 }
 
 async function fetchSnapshotPayload(snapshotUrl: string, env: Record<string, string>, req: IncomingMessage): Promise<SnapshotPayload> {

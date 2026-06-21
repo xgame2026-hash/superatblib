@@ -459,7 +459,7 @@ function formatChainLabel(row: QueueRow) {
 }
 
 function formatQueueId(row: QueueRow) {
-  const queueId = row.endpointSlug || row.endpointId || row.id;
+  const queueId = row.participantId || row.queueMemberKey || row.endpointId || row.id || row.endpointSlug;
   if (!queueId) return "--";
   return queueId.length > 28 ? `${queueId.slice(0, 12)}...${queueId.slice(-8)}` : queueId;
 }
