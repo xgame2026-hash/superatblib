@@ -64,6 +64,12 @@ function checkClientContract() {
   if (!queueMiddleware.includes("列队已暂停")) {
     fail("old heartbeats must be rejected after pause");
   }
+  const localStopIndex = queueMiddleware.indexOf("isLocalQueueStopped(stopTombstoneKey)");
+  const localMissingIndex = queueMiddleware.indexOf("!heartbeatLocalQueueRow");
+  const sessionIndex = queueMiddleware.indexOf("await ensureStateSession(env)");
+  if (localStopIndex < 0 || localMissingIndex < 0 || sessionIndex < 0 || sessionIndex < localStopIndex || sessionIndex < localMissingIndex) {
+    fail("old heartbeat guards must run before state session refresh");
+  }
   if (!latestMiddleware.includes("supermt-state-leaderboard")) {
     fail("leaderboard must read from the state queue source");
   }

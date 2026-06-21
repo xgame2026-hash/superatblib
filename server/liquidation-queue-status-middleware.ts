@@ -350,13 +350,6 @@ async function registerQueueStatus(req: IncomingMessage) {
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
   const stopTombstoneKey = localQueueStopKey(chain, walletAddress, authCode);
   if (!stopping && !heartbeat) clearLocalQueueStop(stopTombstoneKey);
-  if (!stopping && stateRpcEnabled(env)) {
-    try {
-      await ensureStateSession(env);
-    } catch (error) {
-      console.warn(`[state-session] unavailable, continuing with queue fallback: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   const meteredRpcUrl = env[chainEnvKeys[chain]]?.trim();
   const rpcUrls = balanceRpcUrls(chain, env);
   if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
@@ -367,6 +360,13 @@ async function registerQueueStatus(req: IncomingMessage) {
   const heartbeatLocalQueueRow = heartbeat ? findLocalQueueRow(chain, walletAddress, authCode, meteredRpcUrl) : undefined;
   if (heartbeat && !heartbeatLocalQueueRow) {
     throw new Error("本地队列已停止，忽略旧心跳；请重新点击启动。");
+  }
+  if (!stopping && stateRpcEnabled(env)) {
+    try {
+      await ensureStateSession(env);
+    } catch (error) {
+      console.warn(`[state-session] unavailable, continuing with queue fallback: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   const rpcAccess = stopping || heartbeat ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   const rpcAccessTokenHash =
