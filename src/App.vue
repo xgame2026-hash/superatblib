@@ -27,7 +27,7 @@
         <main class="login-panel">
           <div class="login-brand-row">
             <img class="login-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-            <span class="login-version">1.4.9</span>
+            <span class="login-version">1.5.0</span>
           </div>
 
           <el-form class="auth-form" @submit.prevent="submitLogin">
@@ -84,7 +84,7 @@
       <header class="topbar">
         <div class="topbar-left">
           <img class="system-wordmark" :src="miniLogoUrl" alt="SuperARB" />
-          <span class="topbar-version">1.4.9</span>
+          <span class="topbar-version">1.5.0</span>
         </div>
         <div class="topbar-right">
           <button
@@ -364,7 +364,7 @@ const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.4.9";
+const appVersion = "1.5.0";
 
 const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
 const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "settings"] satisfies ViewKey[];
@@ -996,7 +996,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.4.9 internal settings.",
+    "# Generated from SuperARB 1.5.0 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",

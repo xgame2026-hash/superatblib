@@ -395,17 +395,19 @@ let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
 let marketHeartbeatInFlight = false;
 let marketHeartbeatFailureCount = 0;
+let marketStartIntentId = "";
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
-const MARKET_HEARTBEAT_INTERVAL_MS = 1_000;
+const MARKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const MARKET_HEARTBEAT_MAX_FAILURES = 6;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const RUNNING_MARKET_RESTORE_WINDOW_MS = 5 * 60_000;
-const QUEUE_REQUEST_TIMEOUT_MS = 12_000;
+const QUEUE_REQUEST_TIMEOUT_MS = 20_000;
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 
 onMounted(() => {
-  restoreRecentRunningMarketState();
+  if (autoRestoreRunningMarketEnabled()) restoreRecentRunningMarketState();
+  else stopCachedRunningMarketState();
   if (props.active) startVisiblePolling();
   void nextTick(updateOpportunitiesPanelHeight);
   window.addEventListener("resize", updateOpportunitiesPanelHeight);
@@ -459,6 +461,7 @@ function stopVisiblePolling() {
 }
 
 async function startMarketExecution() {
+  marketStartIntentId = createQueueStartIntentId();
   queueState.value = "waiting";
   marketRunning.value = true;
   setTerminalLines([`market selected: ${currentMarketLabel.value}`]);
@@ -486,6 +489,7 @@ async function startMarketExecution() {
     await loadQueueMonitorStatus();
     await loadCandidateQueueSnapshot();
   } catch (error) {
+    marketStartIntentId = "";
     queueState.value = "idle";
     marketRunning.value = false;
     clearRunningMarketState();
@@ -567,7 +571,7 @@ async function sendMarketHeartbeat() {
 
 function normalizeHeartbeatIntervalMs(value: unknown): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 1_000 ? Math.min(parsed, 15_000) : MARKET_HEARTBEAT_INTERVAL_MS;
+  return Number.isFinite(parsed) && parsed >= 10_000 ? Math.min(parsed, 60_000) : MARKET_HEARTBEAT_INTERVAL_MS;
 }
 
 function stopMarketHeartbeat() {
@@ -641,6 +645,7 @@ function restoreRunningMarketState() {
 }
 
 function clearRunningMarketState() {
+  marketStartIntentId = "";
   localStorage.removeItem(RUNNING_MARKET_STORAGE_KEY);
   window.dispatchEvent(new CustomEvent(OVERVIEW_REFRESH_EVENT, { detail: { stopped: true } }));
 }
@@ -677,6 +682,21 @@ function restoreRecentRunningMarketState() {
     return;
   }
   restoreRunningMarketState();
+}
+
+function stopCachedRunningMarketState() {
+  const saved = readRunningMarketState();
+  if (!saved) {
+    clearRunningMarketState();
+    return;
+  }
+  sendQueueStopBeacon(saved.option);
+  clearRunningMarketState();
+}
+
+function autoRestoreRunningMarketEnabled() {
+  const configured = String(import.meta.env.VITE_LIQUIDATION_QUEUE_AUTO_RESTORE ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "enabled", "on"].includes(configured);
 }
 
 function isRecentRunningMarketState(saved: RunningMarketSnapshot) {
@@ -760,7 +780,13 @@ function queueRequestBody(item: MarketOption, action: string) {
     protocol: item.label.split("/").pop()?.trim() || "",
     strategyId: item.value,
     action,
+    startIntentId: action === "start" ? marketStartIntentId : undefined,
   };
+}
+
+function createQueueStartIntentId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `liq2-start-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function loadQueueMonitorStatus(): Promise<void> {

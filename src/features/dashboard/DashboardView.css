@@ -38,14 +38,21 @@
   color: #ff7b7b;
 }
 
+.overview-stat.is-safety-operation strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  min-width: 17ch;
+  white-space: nowrap;
+}
+
 .overview-stat div {
   display: grid;
   min-width: 0;
   gap: 8px;
 }
 
-.overview-stat.is-liquidation-started div,
-.overview-stat.is-wss-queue div {
+.overview-stat.is-liquidation-started div {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
@@ -74,34 +81,6 @@
 
 .trend-flat {
   color: var(--muted);
-}
-
-.wss-queue-refresh {
-  height: 32px;
-  min-width: 54px;
-  border: 1px solid rgba(174, 126, 255, 0.36);
-  border-radius: 8px;
-  background: rgba(35, 24, 61, 0.58);
-  color: #d9caff;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 900;
-  padding: 0 12px;
-  transition:
-    border-color 0.18s ease,
-    background 0.18s ease,
-    color 0.18s ease;
-}
-
-.wss-queue-refresh:hover:not(:disabled) {
-  border-color: rgba(174, 126, 255, 0.68);
-  background: rgba(104, 57, 179, 0.68);
-  color: #fff;
-}
-
-.wss-queue-refresh:disabled {
-  cursor: wait;
-  opacity: 0.62;
 }
 
 .liquidation-state-icon {

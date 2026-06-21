@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { assertOfficialConfig } from "./official-config";
 import { PHASE1_LIQUIDATION_STRATEGIES, type Phase1Strategy } from "./phase1-liquidation-strategies";
 import { queueWssToken } from "./queue-token";
+import { stateLeaderboard, stateRpc, stateRpcEnabledForChain } from "./state-session";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
@@ -280,11 +281,29 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const wssQueue = options.fast ? emptyWssQueueSnapshot() : await fetchWssQueuedWallets(env, req).catch(() => emptyWssQueueSnapshot());
   const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
   const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
+  const stateQueuedWallets = await readStateLeaderboardQueuedWallets(env).catch((error) => {
+    console.warn(`[state-leaderboard] fallback to queue source: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  });
+  if (stateQueuedWallets) {
+    response.queuedWallets = stateQueuedWallets;
+    response.queueTransport = "state";
+    response.queueSource = "supermt-state-leaderboard";
+    response.queueParticipantCount = stateQueuedWallets.length;
+    response.queueUpdatedAt = new Date().toISOString();
+  }
   response.queue = response.queue.filter(isLicensedQueueRow);
   response.queuedWallets = response.queuedWallets.filter(isLicensedQueueRow);
   const queuedWallets = await enrichQueuedWalletBalances(dedupeEndpointQueueRows(response.queuedWallets), env);
   response.queuedWallets = options.queueOnly ? queuedWallets : await enrichExactTodayContractChanges(queuedWallets, env, authCode);
   return response;
+}
+
+async function readStateLeaderboardQueuedWallets(env: Record<string, string>): Promise<SnapshotQueueRow[] | null> {
+  const payload = await stateLeaderboard(env, "bnb", 100);
+  if (isRecord(payload) && payload.ok === false) return null;
+  const rows = isRecord(payload) && Array.isArray(payload.queuedWallets) ? readQueue(payload.queuedWallets) : [];
+  return rows;
 }
 
 async function fetchSnapshotPayload(snapshotUrl: string, env: Record<string, string>, req: IncomingMessage): Promise<SnapshotPayload> {
@@ -557,6 +576,8 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
     assetChange7d: stringValue(row.assetChange7d, row.asset_change_7d),
     assetChange7Days: stringValue(row.assetChange7Days, row.asset_change_7_days),
     change7d: stringValue(row.change7d, row.change_7d),
+    todayAssetChange: stringValue(row.todayAssetChange, row.today_asset_change),
+    todayContractChange: stringValue(row.todayContractChange, row.today_contract_change),
     balances,
     protocol: stringValue(row.protocol, row.market) ?? "--",
     rpc: stringValue(row.rpc, row.rpcKey, row.rpc_key) ?? "--",
@@ -1386,6 +1407,14 @@ async function getLogsWithFallback(
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
+  const chain = chainFromRpcUrl(rpcUrl, env);
+  if (chain && stateRpcEnabledForChain(chain, env)) {
+    try {
+      return await stateRpc<T>(chain, env, method, params);
+    } catch (error) {
+      console.warn(`[state-rpc] ${chain} ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   let lastError: unknown;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
@@ -1414,6 +1443,18 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Re
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function chainFromRpcUrl(rpcUrl: string, env: Record<string, string>): ChainKey | undefined {
+  const normalized = normalizeRpcUrl(rpcUrl);
+  if (normalized && normalized === normalizeRpcUrl(env.ETHEREUM_RPC_URL?.trim() || env.ETH_RPC_URL?.trim() || "")) return "ethereum";
+  if (normalized && normalized === normalizeRpcUrl(env.BNB_RPC_URL?.trim() || env.BSC_RPC_URL?.trim() || "")) return "bnb";
+  if (normalized && normalized === normalizeRpcUrl(env.ARBITRUM_RPC_URL?.trim() || env.ARB_RPC_URL?.trim() || "")) return "arbitrum";
+  return undefined;
+}
+
+function normalizeRpcUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "");
 }
 
 function sleep(ms: number): Promise<void> {

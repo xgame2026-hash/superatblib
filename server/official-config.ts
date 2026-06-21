@@ -2,6 +2,7 @@ import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { hasConfiguredQueueWssToken, queueWssToken } from "./queue-token";
+import { stateRpc, stateRpcEnabled } from "./state-session";
 
 export type SecurityCheckItem = {
   scope: string;
@@ -383,7 +384,7 @@ async function checkBnbRpc(
   if (!rpcUrl) return { scope, key: "BNB_RPC_URL", label: "BNB RPC", value: "", ok: false, message: "本地未配置" };
 
   try {
-    const chainId = await rpc<string>(rpcUrl, "eth_chainId", []);
+    const chainId = await rpc<string>(rpcUrl, "eth_chainId", [], env);
     const isBnb = chainId.toLowerCase() === "0x38";
     const bindingSource = bindingSources.find((source) => source.endpoints.some((item) => matchSuperMtNodeEndpoint(item, "bnb", rpcUrl)));
     const requiresBinding = bindingSources.length > 0;
@@ -410,7 +411,14 @@ async function checkBnbRpc(
   }
 }
 
-async function rpc<T>(rpcUrl: string, method: string, params: unknown[]): Promise<T> {
+async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: Record<string, string>): Promise<T> {
+  if (env && stateRpcEnabled(env) && normalizeComparableUrl(rpcUrl) === normalizeComparableUrl(env.BNB_RPC_URL?.trim())) {
+    try {
+      return await stateRpc<T>("bnb", env, method, params);
+    } catch (error) {
+      console.warn(`[state-rpc] bnb ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const response = await fetch(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },

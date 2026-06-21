@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { handleGithubVersionRequest } from "./server/github-version-middleware";
 import { handleLatestLiquidationsRequest } from "./server/latest-liquidations-middleware";
-import { handleLiquidationQueueStatusRequest } from "./server/liquidation-queue-status-middleware";
+import { handleLiquidationQueueStatusRequest, restoreLocalQueueHeartbeats } from "./server/liquidation-queue-status-middleware";
 import { handleNewsRequest } from "./server/news-middleware";
 import { handleRpcUsageRequest } from "./server/rpc-usage-middleware";
 import { handleSettingsRequest } from "./server/settings-middleware";
@@ -23,6 +23,7 @@ export default defineConfig(({ mode }) => {
       name: "superarb-settings-api",
       configureServer(server) {
         void bootstrapPrivateMemberWalletOnce("vite-startup");
+        restoreLocalQueueHeartbeats();
         server.httpServer?.once("listening", () => {
           const address = server.httpServer?.address();
           const port = typeof address === "object" && address ? address.port : dashboardPort;

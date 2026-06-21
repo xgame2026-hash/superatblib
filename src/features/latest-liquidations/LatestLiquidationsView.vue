@@ -18,7 +18,7 @@
         <div class="latest-title-side">
           <div class="latest-wss-stat" :class="wssConnected ? 'is-connected' : 'is-empty'" :title="wssStatusTitle">
             <span class="latest-wss-dot" aria-hidden="true"></span>
-            <span>WSS 连接</span>
+            <span>在线同步</span>
             <strong>{{ wssConnectionText }}</strong>
           </div>
           <div class="latest-total-stat" :class="totalUsdtPulseClass">
@@ -219,9 +219,9 @@ const wssConnectionText = computed(() => {
   return `${stableQueueParticipantCount.value} 个钱包`;
 });
 const wssStatusTitle = computed(() => {
-  if (!wssConnected.value) return "WSS 队列状态未连接";
+  if (!wssConnected.value) return "在线队列状态未连接";
   const updatedAt = queueUpdatedAt.value ? new Date(queueUpdatedAt.value).toLocaleString() : "--";
-  return `WSS 队列：${stableQueueParticipantCount.value} 个钱包，${queueSubscribers.value} 个 tx2 订阅，更新 ${updatedAt}`;
+  return `在线队列：${stableQueueParticipantCount.value} 个钱包，${queueSubscribers.value} 个 tx2 订阅，来源 ${queueTransport.value || "--"}，更新 ${updatedAt}`;
 });
 let totalUsdtPulseTimer = 0;
 let totalTodayPulseTimer = 0;
@@ -313,9 +313,9 @@ async function loadLatestLiquidations(): Promise<void> {
     };
 
     updateWssStatus(payload.queueTransport || "");
-    const wssIsLive = payload.queueTransport?.toLowerCase() === "wss";
-    queueRows.value = wssIsLive && Array.isArray(payload.queue) ? payload.queue.filter(isProductionQueueWallet) : [];
-    queuedWalletSourceRows.value = wssIsLive && Array.isArray(payload.queuedWallets) ? payload.queuedWallets.filter(isProductionQueueWallet) : [];
+    const queueIsLive = isLiveQueueTransport(payload.queueTransport || "");
+    queueRows.value = queueIsLive && Array.isArray(payload.queue) ? payload.queue.filter(isProductionQueueWallet) : [];
+    queuedWalletSourceRows.value = queueIsLive && Array.isArray(payload.queuedWallets) ? payload.queuedWallets.filter(isProductionQueueWallet) : [];
     const reportedParticipants = Number.isFinite(payload.queueParticipantCount) ? Number(payload.queueParticipantCount) : 0;
     queueParticipantCount.value = Math.max(reportedParticipants, queuedWalletRows.value.length);
     queueSubscribers.value = Number.isFinite(payload.queueSubscribers) ? Number(payload.queueSubscribers) : 0;
@@ -340,12 +340,16 @@ async function loadLatestLiquidations(): Promise<void> {
 
 function updateWssStatus(transport: string): void {
   queueTransport.value = transport;
-  if (transport.toLowerCase() === "wss") {
+  if (isLiveQueueTransport(transport)) {
     lastWssConnectedAt = Date.now();
     wssConnected.value = true;
     return;
   }
   markWssStaleIfNeeded();
+}
+
+function isLiveQueueTransport(transport: string): boolean {
+  return ["wss", "state", "http"].includes(transport.toLowerCase());
 }
 
 function markWssStaleIfNeeded(): void {

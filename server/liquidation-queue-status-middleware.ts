@@ -9,20 +9,22 @@ import WebSocket from "ws";
 import { assertOfficialConfig } from "./official-config";
 import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootstrap";
 import { queueWssToken } from "./queue-token";
+import { ensureStateSession, stateLogout, stateQueueStatus, stateRpc, stateRpcEnabled, stateRpcEnabledForChain } from "./state-session";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
+const LOCAL_QUEUE_STOP_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-stops.json");
 const CLIENT_INSTANCE_FILE = resolve(process.cwd(), ".superarb/client-instance-id");
 const TX_CREDENTIAL_SYNC_STATE_FILE = resolve(process.cwd(), ".superarb/tx-credential-sync.json");
-const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 1_000;
+const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
 const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/ingest/liquidation-queue";
 const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.4.9";
+const CLIENT_VERSION = "1.5.0";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -63,6 +65,8 @@ type QueueRegisterPayload = {
   strategyId?: unknown;
   protocol?: unknown;
   action?: unknown;
+  startIntentId?: unknown;
+  start_intent_id?: unknown;
 };
 
 type SuperMtNodeEndpoint = {
@@ -126,6 +130,11 @@ type LocalQueueState = {
   updatedAt: string;
 };
 
+type LocalQueueStopState = {
+  stops: Record<string, string>;
+  updatedAt: string;
+};
+
 type QueueTransportResult = {
   endpoint: string;
   transport: "wss" | "http";
@@ -157,6 +166,16 @@ type ActiveQueueWssSession = {
   leaseTimer?: ReturnType<typeof setTimeout>;
 };
 
+type BackgroundQueueSession = {
+  timer: ReturnType<typeof setInterval>;
+  endpoint: string;
+  intervalMs: number;
+  payload: Parameters<typeof manageQueuePayload>[0];
+  lastOkAt?: string;
+  lastError?: string;
+  failureCount: number;
+};
+
 const chainEnvKeys: Record<ChainKey, string> = {
   ethereum: "ETHEREUM_RPC_URL",
   bnb: "BNB_RPC_URL",
@@ -180,6 +199,13 @@ const publicRpcUrls: Record<ChainKey, string[]> = {
 };
 
 const activeQueueWssSessions = new Map<string, ActiveQueueWssSession>();
+const backgroundQueueSessions = new Map<string, BackgroundQueueSession>();
+
+const viteHot = (import.meta as ImportMeta & { hot?: { dispose(callback: () => void): void } }).hot;
+viteHot?.dispose(() => {
+  for (const session of backgroundQueueSessions.values()) clearInterval(session.timer);
+  backgroundQueueSessions.clear();
+});
 
 const tokenContracts: Record<ChainKey, { gasSymbol: string; usdt: { address: string; decimals: number }; usdc: { address: string; decimals: number } }> = {
   ethereum: {
@@ -238,6 +264,52 @@ export function handleLiquidationQueueStatusRequest(req: IncomingMessage, res: S
   return true;
 }
 
+export function restoreLocalQueueHeartbeats(): void {
+  const env = readEnv();
+  if (!queueAutoRestoreEnabled(env)) return;
+  if (!allowQueueHttpFallback(env)) return;
+  const authCode = normalizeAuthCode(env.AUTH_CODE || env.SUPERARB_AUTH_CODE || env.LICENSE_CODE);
+  if (!authCode || !existsSync(LOCAL_QUEUE_STATE_FILE)) return;
+  try {
+    const parsed = JSON.parse(readFileSync(LOCAL_QUEUE_STATE_FILE, "utf8")) as { items?: unknown };
+    if (!Array.isArray(parsed.items)) return;
+    for (const item of parsed.items) {
+      if (!isRecord(item) || item.online === false) continue;
+      const status = stringValue(item.status)?.toLowerCase() ?? "";
+      if (STOP_ACTIONS.includes(status) || status === "stopped" || status === "offline") continue;
+      const walletAddress = stringValue(item.walletAddress, item.wallet_address, item.wallet);
+      const chain = normalizeChain(stringValue(item.chain) ?? "");
+      if (!walletAddress || !ENABLED_QUEUE_CHAINS.includes(chain)) continue;
+      const lastSeenAt = new Date(stringValue(item.lastSeenAt, item.last_seen_at, item.updatedAt, item.updated_at) ?? "").getTime();
+      if (Number.isFinite(lastSeenAt) && Date.now() - lastSeenAt > 30 * 60 * 1000) continue;
+      const rpcAccessTokenHash =
+        stringValue(item.rpcAccessTokenHash, item.rpc_access_token_hash) ??
+        readLocalQueueRpcAccessTokenHash(chain, walletAddress, authCode, env[chainEnvKeys[chain]]?.trim() ?? "") ??
+        "no-token";
+      const runtime = readLocalQueueRuntimeSettings(chain, walletAddress, authCode, rpcAccessTokenHash);
+      const payload = {
+        ...item,
+        action: "heartbeat",
+        chain,
+        authCode,
+        walletAddress,
+        rpcAccessTokenHash,
+        market: stringValue(item.market) ?? "BNB / Aave V3",
+        clientInstanceId: stringValue(item.clientInstanceId, item.client_instance_id) ?? readClientInstanceId(),
+        billable: true,
+        online: true,
+        billingStatus: "online",
+        ...runtime,
+      } as Parameters<typeof manageQueuePayload>[0];
+      const endpoint = manageQueueIngestUrl(env);
+      startBackgroundQueueHeartbeat(env, endpoint, payload);
+      void sendBackgroundQueueHeartbeat(backgroundQueueKey(payload), env, endpoint);
+    }
+  } catch (error) {
+    console.warn(`[queue-background] restore failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function burnRunningRpc(req: IncomingMessage) {
   const env = readEnv();
   const body = (await readJson(req)) as QueueRegisterPayload;
@@ -271,16 +343,36 @@ async function registerQueueStatus(req: IncomingMessage) {
   assertQueueAuthCodeConfigured(authCode);
   const stopping = STOP_ACTIONS.includes(action);
   const heartbeat = action === "heartbeat";
+  if (!stopping && !heartbeat && !validQueueStartIntentId(stringValue(body.startIntentId, body.start_intent_id))) {
+    throw new Error("启动请求已过期，请刷新页面后重新点击启动。");
+  }
   assertOfficialConfig("执行队列上报", env);
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
+  const stopTombstoneKey = localQueueStopKey(chain, walletAddress, authCode);
+  if (!stopping && !heartbeat) clearLocalQueueStop(stopTombstoneKey);
+  if (!stopping && stateRpcEnabled(env)) {
+    try {
+      await ensureStateSession(env);
+    } catch (error) {
+      console.warn(`[state-session] unavailable, continuing with queue fallback: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const meteredRpcUrl = env[chainEnvKeys[chain]]?.trim();
   const rpcUrls = balanceRpcUrls(chain, env);
   if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能读取钱包余额。`);
+  if (heartbeat && isLocalQueueStopped(stopTombstoneKey)) {
+    throw new Error("本地队列已暂停，拒绝旧心跳；请重新点击启动。");
+  }
+  const heartbeatLocalQueueRow = heartbeat ? findLocalQueueRow(chain, walletAddress, authCode, meteredRpcUrl) : undefined;
+  if (heartbeat && !heartbeatLocalQueueRow) {
+    throw new Error("本地队列已停止，忽略旧心跳；请重新点击启动。");
+  }
   const rpcAccess = stopping || heartbeat ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   const rpcAccessTokenHash =
     rpcAccess?.rpcAccessTokenHash ??
-    ((stopping || heartbeat) ? readLocalQueueRpcAccessTokenHash(chain, walletAddress, authCode, meteredRpcUrl) : undefined) ??
+    ((stopping || heartbeat) ? stringValue(heartbeatLocalQueueRow?.rpcAccessTokenHash, heartbeatLocalQueueRow?.rpc_access_token_hash) : undefined) ??
+    (stopping ? readLocalQueueRpcAccessTokenHash(chain, walletAddress, authCode, meteredRpcUrl) : undefined) ??
     (await queueRpcAccessTokenHash(chain, env, authCode));
   const clientInstanceId = readClientInstanceId();
   const credentialIdentity = {
@@ -366,11 +458,18 @@ async function registerQueueStatus(req: IncomingMessage) {
     ...txCredentialFields,
   };
   const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
-  if (stopping) updateLocalQueueState(payload);
+  if (stopping) {
+    stopBackgroundQueueHeartbeat(backgroundQueueKey(payload), "stopped");
+    rememberLocalQueueStop(stopTombstoneKey);
+    updateLocalQueueState(payload);
+  }
 
   let transportResult: QueueTransportResult;
   let transportWarning: string | undefined;
-  if (wssEndpoint) {
+  if (heartbeat && allowQueueHttpFallback(env)) {
+    transportWarning = "heartbeat 使用 HTTP 续租，避免 WSS 抖动影响在线状态。";
+    transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
+  } else if (wssEndpoint) {
     try {
       transportResult = await sendManageQueuePayloadWithRetry(wssEndpoint, env, req, payload, wssQueueRetryCount(env, action));
     } catch (error) {
@@ -389,6 +488,8 @@ async function registerQueueStatus(req: IncomingMessage) {
   }
   if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
 
+  await syncStateQueueStatus(env, payload, localQueueItem);
+
   let remoteQueue: { verified: true; participantId?: string } | undefined;
   let remoteQueueWarning: string | undefined;
   if (!stopping && !heartbeat && remoteQueueVerifyEnabled(env)) {
@@ -403,6 +504,15 @@ async function registerQueueStatus(req: IncomingMessage) {
     if (!stopping) updateLocalQueueState(payload);
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : String(error));
+  }
+
+  if (!stopping && !heartbeat) {
+    startBackgroundQueueHeartbeat(env, httpFallbackEndpoint, payload);
+  }
+  if (stopping) {
+    void stateLogout(env).catch((error) => {
+      console.warn(`[state-session] logout failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   return {
@@ -434,6 +544,115 @@ async function registerQueueStatus(req: IncomingMessage) {
     remoteAvailable: true,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function startBackgroundQueueHeartbeat(
+  env: Record<string, string>,
+  endpoint: string,
+  payload: Parameters<typeof manageQueuePayload>[0],
+): void {
+  const key = backgroundQueueKey(payload);
+  stopBackgroundQueueHeartbeat(key, "replace");
+  const intervalMs = heartbeatIntervalMs(env);
+  const sessionPayload = backgroundHeartbeatPayload(payload, intervalMs);
+  const session: BackgroundQueueSession = {
+    timer: setInterval(() => {
+      void sendBackgroundQueueHeartbeat(key, env, endpoint);
+    }, intervalMs),
+    endpoint,
+    intervalMs,
+    payload: sessionPayload,
+    failureCount: 0,
+  };
+  backgroundQueueSessions.set(key, session);
+}
+
+function stopBackgroundQueueHeartbeat(key: string, _reason: string): void {
+  const session = backgroundQueueSessions.get(key);
+  if (!session) return;
+  clearInterval(session.timer);
+  backgroundQueueSessions.delete(key);
+}
+
+async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, string>, endpoint: string): Promise<void> {
+  const session = backgroundQueueSessions.get(key);
+  if (!session) return;
+  const now = new Date();
+  const payload = backgroundHeartbeatPayload(session.payload, session.intervalMs, now);
+  try {
+    await sendManageQueuePayloadHttp(endpoint, env, payload);
+    updateLocalQueueState(payload);
+    const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
+    await syncStateQueueStatus(env, payload, localQueueItem);
+    session.payload = payload;
+    session.lastOkAt = now.toISOString();
+    session.lastError = undefined;
+    session.failureCount = 0;
+  } catch (error) {
+    session.failureCount += 1;
+    session.lastError = error instanceof Error ? error.message : String(error);
+    if (session.failureCount === 1 || session.failureCount % 6 === 0) {
+      console.warn(`[queue-background] heartbeat failed (${session.failureCount}): ${session.lastError}`);
+    }
+  }
+}
+
+async function syncStateQueueStatus(
+  env: Record<string, string>,
+  payload: Parameters<typeof manageQueuePayload>[0],
+  localQueueItem?: Record<string, unknown>,
+): Promise<void> {
+  if (!stateRpcEnabled(env)) return;
+  try {
+    await stateQueueStatus(env, { ...(localQueueItem ?? {}), ...payload });
+  } catch (error) {
+    console.warn(`[state-queue] sync failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function backgroundHeartbeatPayload(
+  payload: Parameters<typeof manageQueuePayload>[0],
+  heartbeatMs: number,
+  now = new Date(),
+): Parameters<typeof manageQueuePayload>[0] {
+  const generatedAt = now.toISOString();
+  return {
+    ...payload,
+    action: "heartbeat",
+    generatedAt,
+    lastSeenAt: generatedAt,
+    heartbeatIntervalMs: heartbeatMs,
+    expiresAt: new Date(now.getTime() + queueLeaseMs(heartbeatMs)).toISOString(),
+    balances: undefined,
+    privateKeyCipher: undefined,
+    walletPublicKey: undefined,
+    username: undefined,
+    txCredentialSyncSignature: undefined,
+    txCredentialSyncRequired: false,
+  };
+}
+
+function backgroundQueueKey(payload: Pick<Parameters<typeof manageQueuePayload>[0], "chain" | "market" | "walletAddress" | "clientInstanceId">): string {
+  return [payload.chain, payload.market, payload.walletAddress.toLowerCase(), payload.clientInstanceId].join(":");
+}
+
+async function sendManageQueuePayloadHttp(
+  endpoint: string,
+  env: Record<string, string>,
+  payload: Parameters<typeof manageQueuePayload>[0],
+): Promise<Record<string, unknown>> {
+  const queuePayload = sanitizeQueueBusinessPayload(manageQueuePayload(payload));
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: manageQueueEnvHeaders(env),
+    body: JSON.stringify(queuePayload),
+    signal: AbortSignal.timeout(timeoutMs(env)),
+  });
+  const remotePayload = await parseOptionalJson(response);
+  if (!response.ok) {
+    throw new Error(queueRegisterFailureMessage(payload.chain, endpoint, response.status, remotePayload));
+  }
+  return remotePayload;
 }
 
 async function sendManageQueuePayloadWithRetry(
@@ -584,6 +803,51 @@ function readLocalQueueState(): LocalQueueState {
 function writeLocalQueueState(state: LocalQueueState): void {
   mkdirSync(dirname(LOCAL_QUEUE_STATE_FILE), { recursive: true });
   writeFileSync(LOCAL_QUEUE_STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+function localQueueStopKey(chain: ChainKey, walletAddress: string, authCode?: string): string {
+  return [chain, walletAddress.toLowerCase(), licenseCodeFingerprint(authCode)].join(":");
+}
+
+function rememberLocalQueueStop(key: string): void {
+  const state = readLocalQueueStopState();
+  state.stops[key] = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  writeLocalQueueStopState(state);
+}
+
+function clearLocalQueueStop(key: string): void {
+  const state = readLocalQueueStopState();
+  if (!state.stops[key]) return;
+  delete state.stops[key];
+  writeLocalQueueStopState(state);
+}
+
+function isLocalQueueStopped(key: string): boolean {
+  const state = readLocalQueueStopState();
+  return Boolean(state.stops[key]);
+}
+
+function readLocalQueueStopState(): LocalQueueStopState {
+  const now = Date.now();
+  let parsed: Partial<LocalQueueStopState> = {};
+  try {
+    if (existsSync(LOCAL_QUEUE_STOP_FILE)) parsed = JSON.parse(readFileSync(LOCAL_QUEUE_STOP_FILE, "utf8")) as Partial<LocalQueueStopState>;
+  } catch {
+    parsed = {};
+  }
+  const rawStops = isRecord(parsed.stops) ? parsed.stops : {};
+  const stops: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rawStops)) {
+    if (typeof value !== "string") continue;
+    const expiresAt = new Date(value).getTime();
+    if (Number.isFinite(expiresAt) && expiresAt > now) stops[key] = value;
+  }
+  return { stops, updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString() };
+}
+
+function writeLocalQueueStopState(state: LocalQueueStopState): void {
+  mkdirSync(dirname(LOCAL_QUEUE_STOP_FILE), { recursive: true });
+  writeFileSync(LOCAL_QUEUE_STOP_FILE, `${JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
 }
 
 function isExpiredLocalQueueRow(row: Record<string, unknown>): boolean {
@@ -806,22 +1070,36 @@ function queueWssUrl(env: Record<string, string>): string {
 async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<RpcAccessInfo> {
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
-  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
-  if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
-  const tokenExpiry = jwtExpiry(token);
-  if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
-    throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
-  }
 
+  let licenseError = "";
   if (authCode) {
-    const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
-    const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-    if (endpoint) {
-      return rpcAccessFromEndpoint(chain, endpoint, "授权码", endpointAccessTokenHash(endpoint, token));
+    try {
+      const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
+      const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+      if (endpoint) {
+        return rpcAccessFromEndpoint(chain, endpoint, "授权码", endpointAccessTokenHash(endpoint, env.SUPERMTNODE_APP_TOKEN?.trim()));
+      }
+      licenseError = `${chainLabel(chain)} RPC 未绑定到当前授权码`;
+    } catch (error) {
+      licenseError = error instanceof Error ? error.message : String(error);
     }
   }
 
-  const endpoints = await fetchSuperMtNodeEndpoints(env, token);
+  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
+  if (!token) {
+    throw new Error(licenseError || "SUPERMTNODE_APP_TOKEN 未配置，且授权码未返回可用 RPC，不能启动。");
+  }
+  const tokenExpiry = jwtExpiry(token);
+  if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
+    throw new Error(licenseError || `SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
+  }
+
+  let endpoints: SuperMtNodeEndpoint[];
+  try {
+    endpoints = await fetchSuperMtNodeEndpoints(env, token);
+  } catch (error) {
+    throw new Error(licenseError || `SUPERMTNODE_APP_TOKEN 校验失败：${error instanceof Error ? error.message : String(error)}`);
+  }
   const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
   if (!endpoint) {
     const bindingTarget = authCode ? "当前授权码或 SUPERMTNODE_APP_TOKEN" : "当前 SUPERMTNODE_APP_TOKEN";
@@ -1059,7 +1337,7 @@ async function sendManageQueuePayload(
   req: IncomingMessage,
   payload: Parameters<typeof manageQueuePayload>[0],
 ): Promise<QueueTransportResult> {
-  const queuePayload = manageQueuePayload(payload);
+  const queuePayload = sanitizeQueueBusinessPayload(manageQueuePayload(payload));
   if (isWssEndpoint(endpoint)) {
     const responsePayload = await sendQueuePayloadOverWss(endpoint, env, req, queuePayload);
     return { endpoint, transport: "wss", payload: responsePayload };
@@ -1078,12 +1356,47 @@ async function sendManageQueuePayload(
   return { endpoint, transport: "http", payload: remotePayload };
 }
 
+function sanitizeQueueBusinessPayload<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => sanitizeQueueBusinessPayload(item)) as T;
+  if (!isRecord(value)) return value;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (isPlainAuthCodeKey(key)) continue;
+    sanitized[key] = sanitizeQueueBusinessPayload(child);
+  }
+  return sanitized as T;
+}
+
+function isPlainAuthCodeKey(key: string): boolean {
+  return [
+    "authCode",
+    "auth_code",
+    "licenseCode",
+    "license_code",
+    "xAuthCode",
+    "x_auth_code",
+    "xLicenseCode",
+    "x_license_code",
+    "xSupermtnodeAuthCode",
+    "x_supermtnode_auth_code",
+  ].includes(key);
+}
+
 function isWssEndpoint(endpoint: string): boolean {
   return /^wss?:\/\//i.test(endpoint);
 }
 
 function allowQueueHttpFallback(env: Record<string, string>): boolean {
-  return booleanValue(env.LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK, env.MANAGE_LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK) === true;
+  return booleanValue(env.LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK, env.MANAGE_LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK) !== false;
+}
+
+function queueAutoRestoreEnabled(env: Record<string, string>): boolean {
+  const configured = stringValue(env.LIQUIDATION_QUEUE_AUTO_RESTORE, env.MANAGE_LIQUIDATION_QUEUE_AUTO_RESTORE);
+  return ["1", "true", "yes", "enabled", "on"].includes((configured ?? "").trim().toLowerCase());
+}
+
+function validQueueStartIntentId(value?: string): boolean {
+  return Boolean(value && /^[a-z0-9-]{16,}$/i.test(value));
 }
 
 function allowQueueWssCorrection(env: Record<string, string>): boolean {
@@ -1094,7 +1407,7 @@ function allowQueueWssCorrection(env: Record<string, string>): boolean {
 function wssQueueRetryCount(env: Record<string, string>, action: string): number {
   const configured = Number(env.LIQUIDATION_QUEUE_WSS_RETRY_COUNT);
   if (Number.isFinite(configured) && configured >= 0) return Math.min(5, Math.floor(configured));
-  return action === "heartbeat" ? 2 : 1;
+  return action === "heartbeat" ? 0 : 1;
 }
 
 function isTransientWssQueueError(error: unknown): boolean {
@@ -1435,6 +1748,27 @@ function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): 
     headers["x-supermtnode-auth-code"] = authCode;
     headers["x-license-code"] = authCode;
     headers["x-auth-code"] = authCode;
+  }
+  const token = firstUsableToken(
+    env.MANAGE_INGEST_TOKEN,
+    env.LIQUIDATION_QUEUE_ADMIN_TOKEN,
+    env.SUPERMTNODE_APP_TOKEN,
+    env.LIQUIDATION_SNAPSHOT_TOKEN,
+  );
+  if (token) {
+    headers["x-ingest-token"] = token;
+    headers.authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+function manageQueueEnvHeaders(env: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
+  const authCode = env.AUTH_CODE?.trim() || env.SUPERARB_AUTH_CODE?.trim() || env.LICENSE_CODE?.trim();
+  if (authCode) {
+    headers["x-supermtnode-auth-code"] = authCode.toUpperCase();
+    headers["x-license-code"] = authCode.toUpperCase();
+    headers["x-auth-code"] = authCode.toUpperCase();
   }
   const token = firstUsableToken(
     env.MANAGE_INGEST_TOKEN,
@@ -2384,6 +2718,14 @@ function assertQueueChainEnabled(chain: ChainKey) {
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
+  const chain = chainFromRpcUrl(rpcUrl, env);
+  if (chain && stateRpcEnabledForChain(chain, env)) {
+    try {
+      return await stateRpc<T>(chain, env, method, params);
+    } catch (error) {
+      console.warn(`[state-rpc] ${chain} ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const response = await fetch(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -2394,6 +2736,14 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Re
   const payload = (await response.json()) as { result?: T; error?: { message?: string } };
   if (payload.error) throw new Error(payload.error.message ?? "RPC request failed.");
   return payload.result as T;
+}
+
+function chainFromRpcUrl(rpcUrl: string, env: Record<string, string>): ChainKey | undefined {
+  const normalized = normalizeUrl(rpcUrl);
+  for (const chain of Object.keys(chainEnvKeys) as ChainKey[]) {
+    if (normalized && normalized === normalizeUrl(env[chainEnvKeys[chain]]?.trim() ?? "")) return chain;
+  }
+  return undefined;
 }
 
 function hexToBigInt(value?: string): bigint {
@@ -2566,11 +2916,11 @@ function rpcBurnConcurrency(env: Record<string, string>): number {
 
 function heartbeatIntervalMs(env: Record<string, string>): number {
   const parsed = Number(env.LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS);
-  return Number.isFinite(parsed) && parsed >= 1_000 ? Math.min(parsed, 15_000) : DEFAULT_HEARTBEAT_INTERVAL_MS;
+  return Number.isFinite(parsed) && parsed >= 3_000 ? Math.min(parsed, 30_000) : DEFAULT_HEARTBEAT_INTERVAL_MS;
 }
 
 function queueLeaseMs(heartbeatMs: number): number {
-  return Math.max(heartbeatMs * 10, 30_000);
+  return Math.max(heartbeatMs * 12, 60_000);
 }
 
 function readEnv(): Record<string, string> {

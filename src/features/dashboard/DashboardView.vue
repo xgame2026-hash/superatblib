@@ -7,16 +7,6 @@
           <strong :class="metric.tone === 'danger' ? 'is-danger' : ''">{{ displayOverviewValue(metric) }}</strong>
           <em :class="metric.tone === 'ready' ? 'trend-up' : 'trend-flat'">{{ metric.note }}</em>
         </span>
-        <button
-          v-if="metric.label === 'WSS 排队'"
-          class="wss-queue-refresh"
-          type="button"
-          :disabled="wssQueueRefreshing"
-          aria-label="刷新排队状态"
-          @click="refreshWssQueueMetric"
-        >
-          {{ wssQueueRefreshing ? "刷新中" : "刷新" }}
-        </button>
         <span
           v-if="metric.label === '清算启动'"
           class="liquidation-state-icon"
@@ -190,7 +180,6 @@ const marketStatusUpdatedAt = ref("--");
 const marketSources = ref<MarketSourceRow[]>([]);
 const overviewMetrics = ref<OverviewMetric[]>(createOverviewMetrics());
 const animatedOverviewValues = ref<Record<string, number>>({});
-const wssQueueRefreshing = ref(false);
 const overviewValueTargets = new Map<string, number>();
 const overviewValueAnimationTimers = new Map<string, number>();
 const AUTH_CODE_KEY = "liq2-auth-code";
@@ -199,6 +188,8 @@ const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const OVERVIEW_METRICS_CACHE_KEY = "liq2-overview-metrics-cache";
 const MARKET_STATUS_CACHE_KEY = "liq2-market-status-cache";
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
+const SAFETY_OPERATION_START_DATE = "2026-02-16";
+const SAFETY_OPERATION_START_LABEL = "2026年2月16日";
 let overviewRefreshTimer = 0;
 let overviewRuntimeTicker = 0;
 let marketStatusRequested = false;
@@ -244,7 +235,12 @@ function startDashboardView() {
     void loadOverviewMetrics();
   }
   if (!overviewRefreshTimer) overviewRefreshTimer = window.setInterval(loadOverviewMetrics, 30_000);
-  if (!overviewRuntimeTicker) overviewRuntimeTicker = window.setInterval(tickRunningRpcMetric, 1_000);
+  if (!overviewRuntimeTicker) {
+    overviewRuntimeTicker = window.setInterval(() => {
+      updateOverviewMetric(readSafetyOperationMetric());
+      tickRunningRpcMetric();
+    }, 1_000);
+  }
 }
 
 function stopDashboardView() {
@@ -258,21 +254,21 @@ function createOverviewMetrics(): OverviewMetric[] {
   return [
     { label: "BNB", value: "--", note: "钱包资产", tone: "flat" },
     { label: "BNB RPC", value: "--", note: "到期 --", tone: "flat" },
-    { label: "WSS 排队", value: "--", note: "读取中", tone: "flat" },
+    readSafetyOperationMetric(),
     { label: "清算启动", value: "--", note: "本地状态", tone: "flat" },
   ];
 }
 
 async function loadOverviewMetrics() {
   updateOverviewMetric(readLiquidationStartedMetric());
+  updateOverviewMetric(readSafetyOperationMetric());
   void readBnbUsdtMetric().then(updateOverviewMetric);
   void readBnbRpcMetric().then(updateOverviewMetric);
-  void readWssQueueMetric().then(updateOverviewMetric);
 }
 
 function handleOverviewRuntimeEvent() {
   updateOverviewMetric(readLiquidationStartedMetric());
-  updateOverviewMetric(readLocalWssQueueMetric());
+  updateOverviewMetric(readSafetyOperationMetric());
   tickRunningRpcMetric();
   void readBnbRpcMetric().then(updateOverviewMetric);
 }
@@ -288,13 +284,41 @@ function restoreOverviewMetricsCache() {
   if (!raw) return;
   try {
     const cached = JSON.parse(raw) as { metrics?: OverviewMetric[] };
-    if (Array.isArray(cached.metrics) && cached.metrics.length === overviewMetrics.value.length) {
+    const expectedLabels = overviewMetrics.value.map((metric) => metric.label).join("|");
+    const cachedLabels = Array.isArray(cached.metrics) ? cached.metrics.map((metric) => metric.label).join("|") : "";
+    if (Array.isArray(cached.metrics) && cached.metrics.length === overviewMetrics.value.length && cachedLabels === expectedLabels) {
       overviewMetrics.value = cached.metrics;
       animateOverviewValues(cached.metrics);
     }
   } catch {
     localStorage.removeItem(scopedStorageKey(OVERVIEW_METRICS_CACHE_KEY));
   }
+}
+
+function readSafetyOperationMetric(): OverviewMetric {
+  return {
+    label: "安全运营",
+    value: safetyOperationDuration(),
+    note: `零事故 · 始于 ${SAFETY_OPERATION_START_LABEL}`,
+    tone: "ready",
+  };
+}
+
+function safetyOperationDuration(): string {
+  const start = new Date(`${SAFETY_OPERATION_START_DATE}T00:00:00+07:00`).getTime();
+  const now = Date.now();
+  if (!Number.isFinite(start) || now < start) return "0天 0小时 0分钟 0秒";
+  const elapsedSeconds = Math.floor((now - start) / 1000);
+  const days = Math.floor(elapsedSeconds / 86_400) + 1;
+  const secondsInCurrentDay = elapsedSeconds % 86_400;
+  const hours = Math.floor(secondsInCurrentDay / 3_600);
+  const minutes = Math.floor((secondsInCurrentDay % 3_600) / 60);
+  const seconds = secondsInCurrentDay % 60;
+  return `${days}天 ${padTimeUnit(hours)}小时 ${padTimeUnit(minutes)}分钟 ${padTimeUnit(seconds)}秒`;
+}
+
+function padTimeUnit(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
 function saveOverviewMetricsCache() {
@@ -343,47 +367,6 @@ async function readBnbRpcMetric(): Promise<OverviewMetric> {
     return { label: "BNB RPC", value: used, note: `到期 ${expiry}`, tone: configured ? "ready" : "flat" };
   } catch {
     return { label: "BNB RPC", value: "--", note: "到期 --", tone: "flat" };
-  }
-}
-
-async function readWssQueueMetric(): Promise<OverviewMetric> {
-  const runningMarket = readRunningMarketState();
-  if (!runningMarket) {
-    return { label: "WSS 排队", value: "未排队", note: "清算未启动", tone: "danger" };
-  }
-  try {
-    const response = await fetch(`/api/latest-liquidations?fast=1&t=${Date.now()}`, {
-      cache: "no-store",
-      headers: latestHeaders(),
-    });
-    const payload = (await response.json().catch(() => ({}))) as {
-      queuedWallets?: Array<{ chain?: string; wallet?: string; walletShort?: string; endpointSlug?: string; endpointId?: string; id?: string; status?: string }>;
-    };
-    const currentWallet = runningMarketWallet(runningMarket);
-    const currentChain = runningMarketChain(runningMarket);
-    const row = payload.queuedWallets?.find((item) => {
-      return String(item.chain).toLowerCase() === currentChain && sameWallet(item.wallet || item.walletShort, currentWallet);
-    });
-    if (!row) return readLocalWssQueueMetric(runningMarket);
-    return { label: "WSS 排队", value: "已排队", note: `排队ID ${formatQueueId(row)}`, tone: "ready" };
-  } catch {
-    return readLocalWssQueueMetric(runningMarket);
-  }
-}
-
-function readLocalWssQueueMetric(state = readRunningMarketState()): OverviewMetric {
-  if (!state) return { label: "WSS 排队", value: "未排队", note: "清算未启动", tone: "danger" };
-  return { label: "WSS 排队", value: "已排队", note: `排队ID ${formatQueueId(state)}`, tone: "ready" };
-}
-
-async function refreshWssQueueMetric() {
-  if (wssQueueRefreshing.value) return;
-  wssQueueRefreshing.value = true;
-  try {
-    const nextMetric = await readWssQueueMetric();
-    overviewMetrics.value = overviewMetrics.value.map((metric) => (metric.label === "WSS 排队" ? nextMetric : metric));
-  } finally {
-    wssQueueRefreshing.value = false;
   }
 }
 
@@ -438,7 +421,7 @@ function tickRunningRpcMetric() {
 function metricClass(metric: OverviewMetric) {
   return {
     "is-liquidation-started": metric.label === "清算启动",
-    "is-wss-queue": metric.label === "WSS 排队",
+    "is-safety-operation": metric.label === "安全运营",
   };
 }
 
@@ -486,6 +469,7 @@ function formatAssetAmount(value?: string): string {
 }
 
 function displayOverviewValue(metric: OverviewMetric): string {
+  if (metric.label === "安全运营") return metric.value;
   const target = parseOverviewNumericValue(metric.value);
   if (target === null) return metric.value;
   const animated = animatedOverviewValues.value[metric.label] ?? target;
@@ -495,6 +479,7 @@ function displayOverviewValue(metric: OverviewMetric): string {
 
 function animateOverviewValues(metrics: OverviewMetric[]) {
   for (const metric of metrics) {
+    if (metric.label === "安全运营") continue;
     const target = parseOverviewNumericValue(metric.value);
     if (target === null) continue;
     const previousTarget = overviewValueTargets.get(metric.label);
@@ -572,10 +557,6 @@ function readRunningMarketState(): RunningMarketState | null {
   }
 }
 
-function runningMarketWallet(state: RunningMarketState): string {
-  return typeof state.walletAddress === "string" ? state.walletAddress : "";
-}
-
 function runningMarketChain(state: RunningMarketState): string {
   return normalizeChainKey(typeof state.chain === "string" ? state.chain : state.option?.chain ?? "");
 }
@@ -585,16 +566,6 @@ function normalizeChainKey(value: string): string {
   if (normalized.includes("bnb")) return "bnb";
   if (normalized.includes("arb")) return "arbitrum";
   return "ethereum";
-}
-
-function sameWallet(left?: string, right?: string): boolean {
-  if (!left || !right) return false;
-  return left.toLowerCase() === right.toLowerCase();
-}
-
-function formatQueueId(row: { endpointSlug?: string; endpointId?: string; id?: string }): string {
-  const value = row.endpointSlug || row.endpointId || row.id || "--";
-  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
 }
 
 function strategyToMarketSource(strategy: MarketStrategyRow): MarketSourceRow {

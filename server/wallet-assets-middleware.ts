@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
+import { stateRpc, stateRpcEnabledForChain } from "./state-session";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const BALANCE_OF_SELECTOR = "0x70a08231";
@@ -89,10 +90,10 @@ async function fetchChainAssets(chain: ChainKey, walletAddress: string, env: Rec
   const errors: string[] = [];
   for (const rpcUrl of rpcUrls) {
     try {
-      const gas = await rpc<string>(rpcUrl, "eth_getBalance", [walletAddress, "latest"]).then((value) => formatUnits(hexToBigInt(value), 18, 4));
+      const gas = await rpc<string>(chain, rpcUrl, "eth_getBalance", [walletAddress, "latest"], env).then((value) => formatUnits(hexToBigInt(value), 18, 4));
       const [usdc, usdt] = await Promise.all([
-        readOptionalTokenBalance(rpcUrl, tokenContracts[chain].usdc, walletAddress),
-        readOptionalTokenBalance(rpcUrl, tokenContracts[chain].usdt, walletAddress),
+        readOptionalTokenBalance(chain, rpcUrl, tokenContracts[chain].usdc, walletAddress, env),
+        readOptionalTokenBalance(chain, rpcUrl, tokenContracts[chain].usdt, walletAddress, env),
       ]);
       return { key: chain, gas, usdc, usdt, rpcStatus: publicRpcUrls[chain]?.includes(rpcUrl) ? "公共 RPC" : "已配置 RPC" };
     } catch (error) {
@@ -137,21 +138,28 @@ function rpcEndpointLabel(value: string): string {
   }
 }
 
-async function readTokenBalance(rpcUrl: string, token: { address: string; decimals: number }, walletAddress: string): Promise<string> {
+async function readTokenBalance(chain: ChainKey, rpcUrl: string, token: { address: string; decimals: number }, walletAddress: string, env: Record<string, string>): Promise<string> {
   const data = `${BALANCE_OF_SELECTOR}${walletAddress.slice(2).padStart(64, "0")}`;
-  const value = await rpc<string>(rpcUrl, "eth_call", [{ to: token.address, data }, "latest"]);
+  const value = await rpc<string>(chain, rpcUrl, "eth_call", [{ to: token.address, data }, "latest"], env);
   return formatUnits(hexToBigInt(value), token.decimals, 2);
 }
 
-async function readOptionalTokenBalance(rpcUrl: string, token: { address: string; decimals: number }, walletAddress: string): Promise<string> {
+async function readOptionalTokenBalance(chain: ChainKey, rpcUrl: string, token: { address: string; decimals: number }, walletAddress: string, env: Record<string, string>): Promise<string> {
   try {
-    return await readTokenBalance(rpcUrl, token, walletAddress);
+    return await readTokenBalance(chain, rpcUrl, token, walletAddress, env);
   } catch {
     return "--";
   }
 }
 
-async function rpc<T>(rpcUrl: string, method: string, params: unknown[]): Promise<T> {
+async function rpc<T>(chain: ChainKey, rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
+  if (stateRpcEnabledForChain(chain, env)) {
+    try {
+      return await stateRpc<T>(chain, env, method, params);
+    } catch (error) {
+      console.warn(`[state-rpc] ${chain} ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const response = await fetch(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
