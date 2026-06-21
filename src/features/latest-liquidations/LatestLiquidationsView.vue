@@ -168,7 +168,7 @@ const LATEST_REFRESH_INTERVAL_MS = 10_000;
 const ACTIVE_QUEUE_INTERVAL_MS = 5_000;
 const WSS_STALE_MS = 45_000;
 const queuedWalletRows = computed(() => {
-  const sourceRows = queuedWalletSourceRows.value.length > 0 ? queuedWalletSourceRows.value : queueRows.value.filter(isQueuedWalletRow);
+  const sourceRows = queuedWalletSourceRows.value;
   const productionRows = sourceRows.filter(isProductionQueueWallet);
   return dedupeQueueRows(productionRows).sort(sortQueueRowsByUsdtDesc);
 });

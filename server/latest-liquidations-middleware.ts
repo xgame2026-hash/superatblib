@@ -282,16 +282,22 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
   const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
   const stateQueuedWallets = await readStateLeaderboardQueuedWallets(env).catch((error) => {
-    console.warn(`[state-leaderboard] fallback to queue source: ${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`[state-leaderboard] unavailable: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   });
   if (stateQueuedWallets) {
-    const mergedQueuedWallets = mergeStateAndQueueRows(stateQueuedWallets, response.queuedWallets);
-    response.queuedWallets = mergedQueuedWallets;
-    response.queueTransport = stateQueuedWallets.length === mergedQueuedWallets.length ? "state" : "state+wss";
-    response.queueSource = stateQueuedWallets.length === mergedQueuedWallets.length ? "supermt-state-leaderboard" : "supermt-state-leaderboard+private-member-wss";
-    response.queueParticipantCount = mergedQueuedWallets.length;
-    response.queueUpdatedAt = new Date().toISOString();
+    response.queuedWallets = stateQueuedWallets;
+    response.queueTransport = "state";
+    response.queueSource = "supermt-state-leaderboard";
+  } else {
+    response.queuedWallets = [];
+    response.queueTransport = "state-unavailable";
+    response.queueSource = "supermt-state-leaderboard";
+  }
+  response.queueParticipantCount = response.queuedWallets.length;
+  response.queueUpdatedAt = new Date().toISOString();
+  if (options.queueOnly) {
+    response.queue = [];
   }
   response.queue = response.queue.filter(isLicensedQueueRow);
   response.queuedWallets = response.queuedWallets.filter(isLicensedQueueRow);
@@ -301,19 +307,27 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
 }
 
 async function readStateLeaderboardQueuedWallets(env: Record<string, string>): Promise<SnapshotQueueRow[] | null> {
-  const payload = await stateLeaderboard(env, "bnb", 100);
-  if (isRecord(payload) && payload.ok === false) return null;
-  const rows = isRecord(payload) && Array.isArray(payload.queuedWallets) ? readQueue(payload.queuedWallets) : [];
-  return rows;
+  const chains: ChainKey[] = ["bnb", "ethereum", "arbitrum"];
+  const results = await Promise.allSettled(chains.map((chain) => stateLeaderboard(env, chain, 100)));
+  const rows: SnapshotQueueRow[] = [];
+  let successfulReads = 0;
+
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    successfulReads += 1;
+    const payload = result.value;
+    if (isRecord(payload) && payload.ok === false) continue;
+    rows.push(...(isRecord(payload) && Array.isArray(payload.queuedWallets) ? readQueue(payload.queuedWallets) : []));
+  }
+
+  if (successfulReads === 0) return null;
+  return dedupeAndSortStateRows(rows);
 }
 
-function mergeStateAndQueueRows(stateRows: SnapshotQueueRow[], queueRows: SnapshotQueueRow[]): SnapshotQueueRow[] {
+function dedupeAndSortStateRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
   const merged = new Map<string, SnapshotQueueRow>();
-  for (const row of queueRows) {
+  for (const row of rows) {
     if (isExpiredQueueRow(row)) continue;
-    merged.set(queueMergeKey(row), row);
-  }
-  for (const row of stateRows) {
     merged.set(queueMergeKey(row), row);
   }
   return [...merged.values()].sort((left, right) => {
