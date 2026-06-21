@@ -462,9 +462,14 @@ async function registerQueueStatus(req: IncomingMessage) {
     stopBackgroundQueueHeartbeat(backgroundQueueKey(payload), "stopped");
     rememberLocalQueueStop(stopTombstoneKey);
     updateLocalQueueState(payload);
+    await syncStateQueueStatus(env, payload, localQueueItem);
   }
 
-  let transportResult: QueueTransportResult;
+  let transportResult: QueueTransportResult = {
+    endpoint: "state",
+    transport: "http",
+    payload: { ok: true, source: "supermt-state-stop" },
+  };
   let transportWarning: string | undefined;
   if (heartbeat && allowQueueHttpFallback(env)) {
     transportWarning = "heartbeat 使用 HTTP 续租，避免 WSS 抖动影响在线状态。";
@@ -474,21 +479,28 @@ async function registerQueueStatus(req: IncomingMessage) {
       transportResult = await sendManageQueuePayloadWithRetry(wssEndpoint, env, req, payload, wssQueueRetryCount(env, action));
     } catch (error) {
       transportWarning = error instanceof Error ? error.message : String(error);
-      if (!allowQueueHttpFallback(env)) {
+      if (stopping) {
+        transportWarning = `旧队列清理失败，state 已暂停：${transportWarning}`;
+      } else if (!allowQueueHttpFallback(env)) {
         throw new Error(`WSS 队列上报失败：${transportWarning}`);
+      } else {
+        transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
       }
-      transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
     }
-  } else {
+  } else if (!stopping) {
     if (!allowQueueHttpFallback(env)) {
       throw new Error("LIQUIDATION_QUEUE_WSS_URL 未配置，不能启动 WSS 队列。");
     }
     transportWarning = "LIQUIDATION_QUEUE_WSS_URL 未配置，已使用 HTTP fallback。";
     transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
+  } else {
+    transportWarning = "LIQUIDATION_QUEUE_WSS_URL 未配置，state 已暂停。";
+  }
+
+  if (!stopping) {
+    await syncStateQueueStatus(env, payload, localQueueItem);
   }
   if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
-
-  await syncStateQueueStatus(env, payload, localQueueItem);
 
   let remoteQueue: { verified: true; participantId?: string } | undefined;
   let remoteQueueWarning: string | undefined;
