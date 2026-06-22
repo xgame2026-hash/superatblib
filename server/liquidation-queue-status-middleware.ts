@@ -499,8 +499,8 @@ async function registerQueueStatus(req: IncomingMessage) {
   }
 
   if (!stopping) {
-    const stateSync = await syncStateQueueStatus(env, payload, localQueueItem);
-    if (heartbeat && isStateQueueStopped(stateSync.payload)) {
+    const stateQueue = await syncStateQueueStatus(env, payload, localQueueItem);
+    if (heartbeat && isStateQueueStopped(stateQueue)) {
       throw new Error("列队已暂停，请重新点击启动。");
     }
   }
@@ -620,8 +620,8 @@ async function syncStateQueueStatus(
   env: Record<string, string>,
   payload: Parameters<typeof manageQueuePayload>[0],
   localQueueItem?: Record<string, unknown>,
-): Promise<{ payload?: Record<string, unknown>; warning?: string }> {
-  if (!stateRpcEnabled(env)) return {};
+): Promise<Record<string, unknown> | undefined> {
+  if (!stateRpcEnabled(env)) return;
   const action = stringValue(payload.action)?.toLowerCase() ?? "start";
   const required = action === "start" || STOP_ACTIONS.includes(action);
   const attempts = required ? 3 : 1;
@@ -630,20 +630,13 @@ async function syncStateQueueStatus(
     if (action === "heartbeat" && isStateQueueStopped(stateQueue)) {
       throw new Error("列队已暂停，请重新点击启动。");
     }
-    return { payload: stateQueue };
+    return stateQueue;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[state-queue] sync failed: ${message}`);
+    if (required) throw new Error(`列队同步失败，${action === "start" ? "不能启动" : "不能暂停"}：${message}`);
     if (action === "heartbeat" && /列队已暂停/.test(message)) throw new Error(message);
-    return { warning: `state 辅助队列同步失败，已继续使用主队列：${friendlyStateQueueError(message)}` };
   }
-}
-
-function friendlyStateQueueError(message: string): string {
-  if (/invalid credential|INVALID_CREDENTIAL/i.test(message)) {
-    return "授权同步暂未放行";
-  }
-  return message.replace(/^State queue HTTP \d+:\s*/i, "");
 }
 
 async function retryStateQueueStatus(env: Record<string, string>, payload: Record<string, unknown>, attempts: number): Promise<Record<string, unknown>> {
@@ -2447,7 +2440,7 @@ function protocolLabelFromMarket(market: string): string {
 }
 
 function buildQueueMemberKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
-  return ["license-token-wallet", chain, licenseHash, tokenHash, walletAddress.toLowerCase()].join(":");
+  return ["license-token-wallet", chain, licenseHash, tokenHash, walletTail(walletAddress)].join(":");
 }
 
 function buildRpcQuotaKey(chain: ChainKey, licenseHash: string, tokenHash: string): string {
@@ -2455,7 +2448,12 @@ function buildRpcQuotaKey(chain: ChainKey, licenseHash: string, tokenHash: strin
 }
 
 function buildBillingAccountKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
-  return ["license-token-wallet-billing", chain, licenseHash, tokenHash, walletAddress.toLowerCase()].join(":");
+  return ["license-token-wallet-billing", chain, licenseHash, tokenHash, walletTail(walletAddress)].join(":");
+}
+
+function walletTail(walletAddress: string): string {
+  const normalized = walletAddress.toLowerCase().replace(/^0x/i, "");
+  return normalized.slice(-4) || "unknown";
 }
 
 function readClientInstanceId(): string {

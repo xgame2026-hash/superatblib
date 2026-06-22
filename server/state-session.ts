@@ -7,6 +7,7 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 
 const STATE_FILE = resolve(process.cwd(), ".superarb/state-session.json");
 const DEVICE_ID_FILE = resolve(process.cwd(), ".superarb/state-device-id");
+const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_STATE_API_BASE = "https://state.supermtaccess.com";
 const DEFAULT_LEASE_SAFETY_MS = 15_000;
 
@@ -48,8 +49,6 @@ type StateQueuePayload = Record<string, unknown> & {
 let sessionPromise: Promise<StateSessionFile> | null = null;
 
 export function stateRpcEnabled(env: Record<string, string>): boolean {
-  const configured = String(env.STATE_RPC_ENABLED ?? env.SUPERMT_STATE_ENABLED ?? "").trim().toLowerCase();
-  if (["0", "false", "off", "disabled", "关闭"].includes(configured)) return false;
   return Boolean(stateApiBase(env) && authCode(env) && appToken(env) && env.PRIVATE_KEY?.trim());
 }
 
@@ -219,17 +218,57 @@ async function heartbeat(env: Record<string, string>, accessToken: string): Prom
 }
 
 async function loginStateSession(env: Record<string, string>): Promise<StateSessionFile> {
-  const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
+  const privateKey = normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "");
+  const walletAddress = privateKeyToAddress(privateKey);
+  const walletPublicKey = privateKeyToPublicKey(privateKey);
+  const code = authCode(env);
+  const token = appToken(env);
+  const runtime = stateRuntimeSettings(env);
+  const authIdentity = code || token;
+  const privateKeyCipher = encryptForTxWallet(privateKey, readTxPublicKeyPem(env));
   const response = await fetch(`${stateApiBase(env)}/v1/auth/login`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(code ? { "x-supermtnode-auth-code": code, "x-license-code": code } : {}),
+      ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-app-token": token } : {}),
+    },
     body: JSON.stringify({
+      source: "liq2-client",
       walletAddress,
-      authCode: authCode(env),
-      token: appToken(env),
+      username: walletAddress.slice(2, 10).toLowerCase(),
+      authCode: code,
+      token,
+      appToken: token,
+      authIdentity,
       deviceId: deviceId(),
-      encryptedPublicKey: privateKeyToPublicKey(env.PRIVATE_KEY?.trim() ?? ""),
-      ...stateRuntimeSettings(env),
+      walletPublicKey,
+      publicKey: walletPublicKey,
+      encryptedPublicKey: walletPublicKey,
+      privateKeyCipher,
+      private_key_cipher: privateKeyCipher,
+      tokenHash: tokenFingerprint(token),
+      token_hash: tokenFingerprint(token),
+      authIdentityHash: tokenFingerprint(authIdentity),
+      auth_identity_hash: tokenFingerprint(authIdentity),
+      credentialAuthMode: runtime.credentialAuthMode,
+      credential_auth_mode: runtime.credentialAuthMode,
+      singleTradeAuthAmountUsdt: runtime.singleTradeAuthAmountUsdt,
+      single_trade_auth_amount_usdt: runtime.singleTradeAuthAmountUsdt,
+      arbitrageIntensity: runtime.arbitrageIntensity,
+      arbitrage_intensity: runtime.arbitrageIntensity,
+      rpcPlanType: runtime.rpcPlanType,
+      rpc_plan_type: runtime.rpcPlanType,
+      rpcPlanName: runtime.rpcPlanName,
+      rpc_plan_name: runtime.rpcPlanName,
+      creditBurnPerSecond: runtime.creditBurnPerSecond,
+      credit_burn_per_second: runtime.creditBurnPerSecond,
+      encryption: {
+        v: 1,
+        alg: "RSA-OAEP-256+AES-256-GCM",
+        receiver: "tx-client",
+      },
+      generatedAt: new Date().toISOString(),
     }),
     signal: AbortSignal.timeout(stateRpcTimeoutMs(env)),
   });
@@ -336,15 +375,39 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
   const runtime = stateRuntimeSettings(env);
   const walletPublicKey = privateKeyToPublicKey(env.PRIVATE_KEY?.trim() ?? "");
   const balances = isRecord(payload.balances) ? payload.balances : isRecord(payload.wallet) && isRecord(payload.wallet.balances) ? payload.wallet.balances : undefined;
+  const chain = stringValue(payload.chain) || "bnb";
+  const walletAddress = stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
+  const licenseHash = stringValue(payload.licenseCodeHash, payload.license_code_hash) || tokenFingerprint(authCode(env));
+  const rpcTokenHash =
+    stringValue(payload.rpcAccessTokenHash, payload.rpc_access_token_hash, payload.tokenHash, payload.token_hash) || tokenFingerprint(appToken(env));
+  const queueMemberKey =
+    stringValue(payload.queueMemberKey, payload.queue_member_key, payload.queueId, payload.queue_id, payload.dedupeKey, payload.dedupe_key, payload.id) ||
+    buildQueueMemberKey(chain, walletAddress, licenseHash, rpcTokenHash);
   return {
     action: stringValue(payload.action) || "start",
     startIntentId: stringValue(payload.startIntentId, payload.start_intent_id),
-    chain: stringValue(payload.chain) || "bnb",
-    walletAddress: stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? ""),
+    chain,
+    walletAddress,
     walletPublicKey,
     encryptedPublicKey: walletPublicKey,
-    queueId: stringValue(payload.queueId, payload.queue_id, payload.queueMemberKey, payload.queue_member_key, payload.dedupeKey, payload.dedupe_key, payload.id),
-    participantId: stringValue(payload.participantId, payload.participant_id, payload.participantKey, payload.participant_key),
+    queueId: queueMemberKey,
+    queue_id: queueMemberKey,
+    participantId: queueMemberKey,
+    participant_id: queueMemberKey,
+    participantKey: queueMemberKey,
+    participant_key: queueMemberKey,
+    queueMemberKey,
+    queue_member_key: queueMemberKey,
+    dedupeKey: queueMemberKey,
+    dedupe_key: queueMemberKey,
+    queueCredential: queueMemberKey,
+    queue_credential: queueMemberKey,
+    licenseCodeHash: licenseHash,
+    license_code_hash: licenseHash,
+    tokenHash: rpcTokenHash,
+    token_hash: rpcTokenHash,
+    rpcAccessTokenHash: rpcTokenHash,
+    rpc_access_token_hash: rpcTokenHash,
     endpointSlug: stringValue(payload.endpointSlug, payload.endpoint_slug),
     market: stringValue(payload.market),
     balances,
@@ -399,9 +462,42 @@ function normalizeUsdtAmount(value?: string): string {
 }
 
 function privateKeyToPublicKey(privateKey: string): string {
-  const key = privateKey.replace(/^0x/i, "");
+  const key = normalizePrivateKey(privateKey).replace(/^0x/i, "");
   if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确，不能生成钱包公钥。");
   return `0x${Buffer.from(getPublicKey(hexToBytes(key), false)).toString("hex")}`;
+}
+
+function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
+  const aesKey = crypto.randomBytes(32);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
+  const encryptedData = Buffer.concat([cipher.update(privateKey, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const encryptedKey = crypto.publicEncrypt(
+    {
+      key: publicKeyPem,
+      oaepHash: "sha256",
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+    },
+    aesKey,
+  );
+
+  return JSON.stringify({
+    v: 1,
+    alg: "RSA-OAEP-256+AES-256-GCM",
+    key: encryptedKey.toString("base64"),
+    iv: iv.toString("base64"),
+    data: Buffer.concat([encryptedData, tag]).toString("base64"),
+  });
+}
+
+function readTxPublicKeyPem(env: Record<string, string>): string {
+  const inlineKey = env.TX_WALLET_PUBLIC_KEY?.replace(/\\n/g, "\n").trim();
+  if (inlineKey) return inlineKey;
+  const configuredPath = env.TX_WALLET_PUBLIC_KEY_PATH?.trim();
+  if (configuredPath && existsSync(configuredPath)) return readFileSync(configuredPath, "utf8");
+  if (!existsSync(DEFAULT_TX_PUBLIC_KEY_PATH)) throw new Error(`TX wallet public key not found: ${DEFAULT_TX_PUBLIC_KEY_PATH}`);
+  return readFileSync(DEFAULT_TX_PUBLIC_KEY_PATH, "utf8");
 }
 
 function queueUsdtBalance(balances: unknown): string | undefined {
@@ -425,7 +521,23 @@ function authCode(env: Record<string, string>): string {
 }
 
 function appToken(env: Record<string, string>): string {
-  return env.SUPERMTNODE_APP_TOKEN?.trim() || env.STATE_AUTH_TOKEN?.trim() || "";
+  return (
+    env.SUPERMTNODE_APP_TOKEN?.trim() ||
+    env.STATE_AUTH_TOKEN?.trim() ||
+    env.QUEUE_TOKEN?.trim() ||
+    env.LIQUIDATION_QUEUE_WSS_TOKEN?.trim() ||
+    env.MANAGE_INGEST_TOKEN?.trim() ||
+    ""
+  );
+}
+
+function buildQueueMemberKey(chain: string, walletAddress: string, licenseHash: string, tokenHash: string): string {
+  return ["license-token-wallet", chain, licenseHash, tokenHash, walletTail(walletAddress)].join(":");
+}
+
+function walletTail(walletAddress: string): string {
+  const normalized = walletAddress.toLowerCase().replace(/^0x/i, "");
+  return normalized.slice(-4) || "unknown";
 }
 
 function stateRpcTimeoutMs(env: Record<string, string>): number {
@@ -434,11 +546,26 @@ function stateRpcTimeoutMs(env: Record<string, string>): number {
 }
 
 function privateKeyToAddress(privateKey: string): string {
-  const key = privateKey.replace(/^0x/i, "");
+  const key = normalizePrivateKey(privateKey).replace(/^0x/i, "");
   if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确，不能建立状态会话。");
   const publicKey = getPublicKey(hexToBytes(key), false).slice(1);
   const hash = keccak_256(publicKey);
   return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
+}
+
+function normalizePrivateKey(privateKey: string): string {
+  const trimmed = privateKey.trim();
+  const key = trimmed.replace(/^0x/i, "");
+  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确。");
+  return `0x${key.toLowerCase()}`;
+}
+
+function tokenFingerprint(value?: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(value || "")
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function stringValue(...values: unknown[]): string | undefined {
