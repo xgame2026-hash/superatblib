@@ -5,3 +5,4 @@ dist/
 *.local
 .superarb/
 efft.md
+server/state-api-rust/target/

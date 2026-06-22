@@ -231,17 +231,15 @@ async function loginStateSession(env: Record<string, string>): Promise<StateSess
   const privateKey = normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "");
   const walletAddress = privateKeyToAddress(privateKey);
   const walletPublicKey = privateKeyToPublicKey(privateKey);
-  const code = authCode(env);
   const token = appToken(env);
-  const submittedCode = token ? "" : code;
+  const submittedCode = "";
   const runtime = stateRuntimeSettings(env);
-  const authIdentity = token || submittedCode;
+  const authIdentity = token;
   const privateKeyCipher = encryptForTxWallet(privateKey, readTxPublicKeyPem(env));
   const response = await fetch(`${stateApiBase(env)}/v1/auth/login`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(submittedCode ? { "x-supermtnode-auth-code": submittedCode, "x-license-code": submittedCode } : {}),
       ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-app-token": token } : {}),
     },
     body: JSON.stringify({
@@ -407,8 +405,7 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
   const chain = stringValue(payload.chain) || "bnb";
   const walletAddress = stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
   const token = appToken(env);
-  const code = authCode(env);
-  const authIdentity = stringValue(payload.authCode, payload.auth_code, payload.authIdentity, payload.auth_identity) || token || code;
+  const authIdentity = token;
   const licenseHash = stringValue(payload.licenseCodeHash, payload.license_code_hash) || tokenFingerprint(authCode(env) || appToken(env));
   const rpcTokenHash =
     stringValue(payload.rpcAccessTokenHash, payload.rpc_access_token_hash, payload.tokenHash, payload.token_hash) || tokenFingerprint(token);
@@ -428,6 +425,8 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
     app_token: token,
     token,
     walletPublicKey,
+    privateKeyCipher: stringValue(payload.privateKeyCipher, payload.private_key_cipher),
+    private_key_cipher: stringValue(payload.privateKeyCipher, payload.private_key_cipher),
     encryptedPublicKey: walletPublicKey,
     encrypted_public_key: walletPublicKey,
     privateKeyEncryptedPublicKey: walletPublicKey,
@@ -585,8 +584,8 @@ function appToken(env: Record<string, string>): string {
   );
 }
 
-function buildQueueMemberKey(chain: string, walletAddress: string, licenseHash: string, tokenHash: string): string {
-  return ["license-token-wallet", chain, licenseHash, tokenHash, walletTail(walletAddress)].join(":");
+function buildQueueMemberKey(chain: string, walletAddress: string, _licenseHash: string, tokenHash: string): string {
+  return ["license-token-wallet", chain, tokenHash, walletTail(walletAddress)].join(":");
 }
 
 function walletTail(walletAddress: string): string {

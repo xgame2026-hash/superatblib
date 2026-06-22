@@ -638,7 +638,10 @@ async function syncStateQueueStatus(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[state-queue] sync failed: ${message}`);
-    if (required && action !== "start") throw new Error(`列队同步失败，不能暂停：${message}`);
+    if (required) {
+      const actionText = action === "start" ? "启动" : "暂停";
+      throw new Error(`列队同步失败，不能${actionText}：${message}`);
+    }
     if (action === "heartbeat" && /列队已暂停/.test(message)) throw new Error(message);
   }
 }
@@ -2464,8 +2467,8 @@ function protocolLabelFromMarket(market: string): string {
   return "Aave V3";
 }
 
-function buildQueueMemberKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
-  return ["license-token-wallet", chain, licenseHash, tokenHash, walletTail(walletAddress)].join(":");
+function buildQueueMemberKey(chain: ChainKey, walletAddress: string, _licenseHash: string, tokenHash: string): string {
+  return ["license-token-wallet", chain, tokenHash, walletTail(walletAddress)].join(":");
 }
 
 function buildRpcQuotaKey(chain: ChainKey, licenseHash: string, tokenHash: string): string {
