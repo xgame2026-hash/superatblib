@@ -1,7 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { execSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { handleGithubVersionRequest } from "./server/github-version-middleware";
 import { handleLatestLiquidationsRequest } from "./server/latest-liquidations-middleware";
@@ -91,10 +91,13 @@ export default defineConfig(({ mode }) => {
 });
 
 function shortGitCommit(): string {
+  const configured = process.env.SUPERARB_BUILD_COMMIT?.trim();
+  if (configured) return configured;
   try {
     return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
-    return "";
+    const buildCommitFile = resolve(process.cwd(), ".superarb-build-commit");
+    return existsSync(buildCommitFile) ? readFileSync(buildCommitFile, "utf8").trim() : "";
   }
 }
 

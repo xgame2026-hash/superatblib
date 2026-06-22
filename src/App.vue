@@ -101,7 +101,7 @@
             <button class="github-version-button" type="button" aria-label="GitHub 版本状态" @click="githubMenuOpen = !githubMenuOpen">
               <span class="github-version-main">
                 <img :src="githubIconUrl" alt="" aria-hidden="true" />
-                <span>GitHub v{{ githubLatestVersion }}</span>
+                <span>GitHub v{{ githubLatestDisplayVersion }}</span>
               </span>
               <span class="github-version-arrow" :class="{ active: githubMenuOpen }" aria-hidden="true">
                 <img :src="arrowIconUrl" alt="" />
@@ -114,9 +114,9 @@
               </strong>
               <div class="github-version-lines">
                 <span>当前版本</span>
-                <strong>v{{ appVersion }}</strong>
+                <strong>v{{ displayVersion }}</strong>
                 <span>GitHub 最新</span>
-                <strong>v{{ githubLatestVersion }}</strong>
+                <strong>v{{ githubLatestDisplayVersion }}</strong>
               </div>
               <p v-if="githubVersionMessage">{{ githubVersionMessage }}</p>
             </div>
@@ -548,6 +548,9 @@ const githubVersionTitle = computed(() => {
   if (githubVersionState.value === "error") return "版本检测失败";
   return "已经是最新版";
 });
+const githubLatestDisplayVersion = computed(() => {
+  return normalizeVersionLabel(githubLatestVersion.value) === appVersion ? displayVersion : githubLatestVersion.value;
+});
 
 const metrics = ref([
   { label: "候选账户", value: "0", trend: 0 },
@@ -619,6 +622,10 @@ function normalizeViewAlias(value: string | null): string {
   if (["leaderboard", "ranking", "rank", "latest", "liquidations", "latest-liquidations"].includes(normalized)) return "execution";
   if (["control", "dashboard", "analytics"].includes(normalized)) return "analytics";
   return normalized;
+}
+
+function normalizeVersionLabel(source: string): string {
+  return source.trim().replace(/^v/i, "").split("+")[0] || source;
 }
 
 function syncViewHash(view: ViewKey): void {
