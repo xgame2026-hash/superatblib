@@ -24,7 +24,7 @@ const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.5.2";
+const CLIENT_VERSION = "1.5.3";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
