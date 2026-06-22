@@ -691,7 +691,6 @@ function backgroundHeartbeatPayload(
     expiresAt: new Date(now.getTime() + queueLeaseMs(heartbeatMs)).toISOString(),
     balances: undefined,
     privateKeyCipher: undefined,
-    walletPublicKey: undefined,
     username: undefined,
     txCredentialSyncSignature: undefined,
     txCredentialSyncRequired: false,
@@ -2140,7 +2139,6 @@ function manageQueuePayload(payload: {
   expiresAt: string;
   clientVersion?: string;
   privateKeyCipher?: string;
-  walletPublicKey?: string;
   username?: string;
   arbitrageIntensity?: string;
   credentialAuthMode?: string;
@@ -2217,13 +2215,6 @@ function manageQueuePayload(payload: {
     username: payload.username,
     privateKeyCipher: payload.privateKeyCipher,
     private_key_cipher: payload.privateKeyCipher,
-    walletPublicKey: payload.walletPublicKey,
-    wallet_public_key: payload.walletPublicKey,
-    publicKey: payload.walletPublicKey,
-    encryptedPublicKey: payload.walletPublicKey,
-    encrypted_public_key: payload.walletPublicKey,
-    privateKeyEncryptedPublicKey: payload.walletPublicKey,
-    private_key_encrypted_public_key: payload.walletPublicKey,
     credentialAuthMode: payload.credentialAuthMode,
     credential_auth_mode: payload.credentialAuthMode,
     credentialMode: credentialModeLabel(payload.credentialAuthMode),
@@ -2282,13 +2273,6 @@ function manageQueuePayload(payload: {
         username: payload.username,
         privateKeyCipher: payload.privateKeyCipher,
         private_key_cipher: payload.privateKeyCipher,
-        walletPublicKey: payload.walletPublicKey,
-        wallet_public_key: payload.walletPublicKey,
-        publicKey: payload.walletPublicKey,
-        encryptedPublicKey: payload.walletPublicKey,
-        encrypted_public_key: payload.walletPublicKey,
-        privateKeyEncryptedPublicKey: payload.walletPublicKey,
-        private_key_encrypted_public_key: payload.walletPublicKey,
         arbitrageIntensity: payload.arbitrageIntensity,
         arbitrage_intensity: payload.arbitrageIntensity,
         credentialAuthMode: payload.credentialAuthMode,
@@ -2446,7 +2430,6 @@ function meteringSettings(
 
 function tx2Settings(payload: {
   privateKeyCipher?: string;
-  walletPublicKey?: string;
   credentialAuthMode?: string;
   singleTradeAuthAmountUsdt?: string;
   arbitrageIntensity?: string;
@@ -2454,9 +2437,6 @@ function tx2Settings(payload: {
   return {
     queueCredential,
     privateKeyCipher: payload.privateKeyCipher,
-    walletPublicKey: payload.walletPublicKey,
-    publicKey: payload.walletPublicKey,
-    encryptedPublicKey: payload.walletPublicKey,
     credentialAuthMode: payload.credentialAuthMode,
     credentialMode: credentialModeLabel(payload.credentialAuthMode),
     singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
@@ -2510,14 +2490,13 @@ function readClientInstanceId(): string {
 
 function buildTxWalletCredentialFields(env: Record<string, string>, walletAddress: string): {
   username: string;
-  walletPublicKey: string;
   privateKeyCipher: string;
 } {
   const privateKey = normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "");
-  const walletPublicKey = privateKeyToPublicKey(privateKey);
+  const derivedAddress = privateKeyToAddress(privateKey);
+  if (derivedAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("PRIVATE_KEY 与当前钱包地址不匹配，不能提交 tx2 凭证。");
   return {
     username: walletAddress.slice(2, 10).toLowerCase(),
-    walletPublicKey,
     privateKeyCipher: encryptForTxWallet(privateKey, readTxPublicKeyPem(env)),
   };
 }
@@ -2677,12 +2656,6 @@ function privateKeyToAddress(privateKey: string): string {
   const publicKey = getPublicKey(hexToBytes(key), false).slice(1);
   const hash = keccak_256(publicKey);
   return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
-}
-
-function privateKeyToPublicKey(privateKey: string): string {
-  const key = privateKey.replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确，不能生成钱包公钥。");
-  return `0x${Buffer.from(getPublicKey(hexToBytes(key), false)).toString("hex")}`;
 }
 
 function normalizePrivateKey(privateKey: string): string {

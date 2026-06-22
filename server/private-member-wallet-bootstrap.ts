@@ -112,7 +112,6 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
 
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
-    const walletPublicKey = privateKeyToPublicKey(normalizedPrivateKey);
     const username = walletAddress.slice(2, 10).toLowerCase();
     const endpoint = privateMemberBootstrapEndpoint(env);
     const txPublicKeyPem = readTxPublicKeyPem(env);
@@ -153,8 +152,6 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
         authCode,
         authIdentity,
         walletAddress,
-        walletPublicKey,
-        publicKey: walletPublicKey,
         privateKeyCipher,
         arbitrageIntensity: tradeSettings.arbitrageIntensity,
         arbitrage_intensity: tradeSettings.arbitrageIntensity,
@@ -177,21 +174,21 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       return { ok: false, skipped: true, username, walletAddress, endpoint, reason: "remote_bootstrap_endpoint_not_found" };
     }
     if (response.status === 409 || isAlreadySubmittedPayload(payload)) {
-      markSubmitted(state, stateKey, { username, walletAddress, walletPublicKey, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
+      markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
       writeState(state);
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
     }
     if (!response.ok || payload.ok === false) {
       const message = stringValue(payload.error, payload.message) || `private.superarb.ai returned HTTP ${response.status}`;
       if (isAlreadySubmittedMessage(message)) {
-        markSubmitted(state, stateKey, { username, walletAddress, walletPublicKey, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
+        markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
         writeState(state);
         return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
       }
       throw new Error(message);
     }
 
-    markSubmitted(state, stateKey, { username, walletAddress, walletPublicKey, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
+    markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
     writeState(state);
     return { ok: true, skipped: Boolean(payload.skipped), username, walletAddress, endpoint };
   } catch (error) {
@@ -207,7 +204,6 @@ function markSubmitted(
   payload: {
     username: string;
     walletAddress: string;
-    walletPublicKey: string;
     txPublicKeyPem: string;
     authIdentity: string;
     endpoint: string;
@@ -218,7 +214,7 @@ function markSubmitted(
     rpcPlanName: string;
   },
 ): void {
-  const { walletPublicKey: _walletPublicKey, txPublicKeyPem, authIdentity, ...publicPayload } = payload;
+  const { txPublicKeyPem, authIdentity, ...publicPayload } = payload;
   state.submitted[stateKey] = {
     ...publicPayload,
     txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
@@ -303,12 +299,6 @@ function privateKeyToAddress(privateKey: string): string {
   const publicKey = getPublicKey(hexToBytes(key), false).slice(1);
   const hash = keccak_256(publicKey);
   return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
-}
-
-function privateKeyToPublicKey(privateKey: string): string {
-  const key = privateKey.replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY format is invalid.");
-  return `0x${Buffer.from(getPublicKey(hexToBytes(key), false)).toString("hex")}`;
 }
 
 function normalizePrivateKey(privateKey: string): string {

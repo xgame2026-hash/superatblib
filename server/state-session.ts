@@ -54,6 +54,7 @@ export function stateRpcEnabled(env: Record<string, string>): boolean {
 
 export function stateRpcEnabledForChain(chain: ChainKey, env: Record<string, string>): boolean {
   if (!stateRpcEnabled(env)) return false;
+  if (!stateRpcProxyEnabled(env)) return false;
   return stateRpcChains(env).includes(chain);
 }
 
@@ -230,12 +231,10 @@ async function heartbeat(env: Record<string, string>, accessToken: string): Prom
 async function loginStateSession(env: Record<string, string>): Promise<StateSessionFile> {
   const privateKey = normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "");
   const walletAddress = privateKeyToAddress(privateKey);
-  const walletPublicKey = privateKeyToPublicKey(privateKey);
   const token = appToken(env);
-  const submittedCode = "";
+  const submittedCode = authCode(env);
   const runtime = stateRuntimeSettings(env);
-  const authIdentity = token;
-  const privateKeyCipher = encryptForTxWallet(privateKey, readTxPublicKeyPem(env));
+  const authIdentity = submittedCode || token;
   const response = await fetch(`${stateApiBase(env)}/v1/auth/login`, {
     method: "POST",
     headers: {
@@ -247,18 +246,13 @@ async function loginStateSession(env: Record<string, string>): Promise<StateSess
       walletAddress,
       username: walletAddress.slice(2, 10).toLowerCase(),
       authCode: submittedCode,
+      auth_code: submittedCode,
       token,
       appToken: token,
+      app_token: token,
       authIdentity,
+      auth_identity: authIdentity,
       deviceId: deviceId(),
-      walletPublicKey,
-      publicKey: walletPublicKey,
-      encryptedPublicKey: walletPublicKey,
-      encrypted_public_key: walletPublicKey,
-      privateKeyEncryptedPublicKey: walletPublicKey,
-      private_key_encrypted_public_key: walletPublicKey,
-      privateKeyCipher,
-      private_key_cipher: privateKeyCipher,
       tokenHash: tokenFingerprint(token),
       token_hash: tokenFingerprint(token),
       authIdentityHash: tokenFingerprint(authIdentity),
@@ -400,7 +394,6 @@ function stateNetwork(chain: ChainKey, env: Record<string, string>): string {
 
 function stateQueuePayload(env: Record<string, string>, payload: StateQueuePayload): Record<string, unknown> {
   const runtime = stateRuntimeSettings(env);
-  const walletPublicKey = privateKeyToPublicKey(env.PRIVATE_KEY?.trim() ?? "");
   const balances = isRecord(payload.balances) ? payload.balances : isRecord(payload.wallet) && isRecord(payload.wallet.balances) ? payload.wallet.balances : undefined;
   const chain = stringValue(payload.chain) || "bnb";
   const walletAddress = stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
@@ -424,13 +417,8 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
     appToken: token,
     app_token: token,
     token,
-    walletPublicKey,
     privateKeyCipher: stringValue(payload.privateKeyCipher, payload.private_key_cipher),
     private_key_cipher: stringValue(payload.privateKeyCipher, payload.private_key_cipher),
-    encryptedPublicKey: walletPublicKey,
-    encrypted_public_key: walletPublicKey,
-    privateKeyEncryptedPublicKey: walletPublicKey,
-    private_key_encrypted_public_key: walletPublicKey,
     queueId: queueMemberKey,
     queue_id: queueMemberKey,
     participantId: queueMemberKey,
@@ -514,12 +502,6 @@ function normalizeUsdtAmount(value?: string): string {
   return numeric.toString();
 }
 
-function privateKeyToPublicKey(privateKey: string): string {
-  const key = normalizePrivateKey(privateKey).replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确，不能生成钱包公钥。");
-  return `0x${Buffer.from(getPublicKey(hexToBytes(key), false)).toString("hex")}`;
-}
-
 function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
   const aesKey = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
@@ -567,6 +549,11 @@ function stateRpcChains(env: Record<string, string>): ChainKey[] {
     .map((value) => value.trim().toLowerCase())
     .filter((value): value is ChainKey => value === "ethereum" || value === "bnb" || value === "arbitrum");
   return chains.length ? chains : ["bnb"];
+}
+
+function stateRpcProxyEnabled(env: Record<string, string>): boolean {
+  const configured = String(env.STATE_RPC_ENABLED ?? env.STATE_RPC_PROXY_ENABLED ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "enabled", "on"].includes(configured);
 }
 
 function authCode(env: Record<string, string>): string {

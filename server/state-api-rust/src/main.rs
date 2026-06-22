@@ -64,6 +64,12 @@ struct LoginRequest {
     wallet_address: String,
     token: String,
     #[serde(default)]
+    auth_code: Option<String>,
+    #[serde(default)]
+    app_token: Option<String>,
+    #[serde(default)]
+    auth_identity: Option<String>,
+    #[serde(default)]
     device_id: String,
     #[serde(default)]
     encrypted_public_key: Option<String>,
@@ -196,8 +202,13 @@ async fn health(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 
 async fn login(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body): Json<LoginRequest>) -> ApiResult<Json<LoginResponse>> {
     let wallet = normalize_wallet(&body.wallet_address)?;
-    let token = non_empty(&body.token, "token")?;
+    let token_value = first_string(&[Some(body.token.as_str()), body.app_token.as_deref(), body.auth_identity.as_deref()]).unwrap_or_default();
+    let token = non_empty(&token_value, "token")?;
     let token_hash = sha256_hex(token);
+    let submitted_auth_code = first_string(&[body.auth_code.as_deref()])
+        .or_else(|| string_field(&body.extra, "authCode"))
+        .or_else(|| string_field(&body.extra, "auth_code"));
+    let auth_code_hash = submitted_auth_code.as_deref().map(sha256_hex);
     let access_token = random_token(state.access_token_bytes);
     let access_hash = sha256_hex(&access_token);
     let device_id = if body.device_id.trim().is_empty() { "default-device".to_string() } else { body.device_id.trim().chars().take(160).collect() };
@@ -214,38 +225,40 @@ async fn login(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body
     let mut client = db(&state).await?;
     let tx = client.transaction().await.map_err(|err| db_error_at("login begin", err))?;
 
-    let license_row = tx.query_one(
+    let license_row = tx.query_opt(
         r#"
-        INSERT INTO licenses (auth_code_hash, token_hash, status, max_concurrent_sessions, expires_at)
-        VALUES ($1, $1, 'active', 10, now() + interval '30 days')
-        ON CONFLICT (token_hash) DO UPDATE
-          SET status = 'active',
-              expires_at = GREATEST(licenses.expires_at, now() + interval '30 days'),
-              max_concurrent_sessions = GREATEST(licenses.max_concurrent_sessions, 10),
-              updated_at = now()
-        RETURNING id::text, expires_at::text
+        SELECT
+          l.id::text,
+          l.expires_at::text,
+          l.status::text,
+          l.starts_at::text,
+          COALESCE((c.total_units - c.used_units - c.reserved_units)::text, '0') AS remaining_units
+        FROM licenses l
+        LEFT JOIN rpc_credits c ON c.license_id = l.id
+        WHERE l.token_hash = $1 OR ($2::text IS NOT NULL AND l.auth_code_hash = $2)
+        ORDER BY CASE WHEN l.token_hash = $1 THEN 0 ELSE 1 END
+        LIMIT 1
         "#,
-        &[&token_hash],
-    ).await.map_err(|err| db_error_at("login upsert license", err))?;
+        &[&token_hash, &auth_code_hash],
+    ).await.map_err(|err| db_error_at("login read license", err))?;
+    let license_row = license_row.ok_or_else(|| ApiError::unauthorized("INVALID_CREDENTIAL", "Invalid credential"))?;
     let license_id: String = license_row.get(0);
     let license_expires_at: String = license_row.get(1);
-
-    tx.execute(
-        r#"
-        INSERT INTO rpc_credits (license_id, total_units, used_units, reserved_units)
-        VALUES ($1::text::uuid, 1000000000000, 0, 0)
-        ON CONFLICT (license_id) DO UPDATE
-          SET total_units = GREATEST(rpc_credits.total_units, 1000000000000),
-              updated_at = now()
-        "#,
-        &[&license_id],
-    ).await.map_err(|err| db_error_at("login upsert credits", err))?;
-
-    let credit_row = tx.query_one(
-        "SELECT (total_units - used_units - reserved_units)::text AS remaining_units FROM rpc_credits WHERE license_id = $1::text::uuid",
-        &[&license_id],
-    ).await.map_err(|err| db_error_at("login read credits", err))?;
-    let remaining_units: String = credit_row.get(0);
+    let license_status: String = license_row.get(2);
+    let license_starts_at: String = license_row.get(3);
+    let remaining_units: String = license_row.get(4);
+    if license_status != "active" {
+        return Err(ApiError::payment_required("TOKEN_NOT_ACTIVE", "Token is not active"));
+    }
+    if parse_time(&license_starts_at)? > Utc::now() {
+        return Err(ApiError::payment_required("TOKEN_NOT_STARTED", "Token is not active yet"));
+    }
+    if parse_time(&license_expires_at)? <= Utc::now() {
+        return Err(ApiError::payment_required("TOKEN_EXPIRED", "Token expired"));
+    }
+    if remaining_units.parse::<i128>().unwrap_or(0) <= 0 {
+        return Err(ApiError::payment_required("NO_CREDIT", "No RPC credit"));
+    }
 
     let user_row = tx.query_one(
         r#"
@@ -343,7 +356,7 @@ async fn queue_status(State(state): State<Arc<AppState>>, headers: HeaderMap, Js
     if action == "start" && string_field(&body.extra, "startIntentId").or(body.start_intent_id.clone()).unwrap_or_default().is_empty() {
         return Err(ApiError::bad_request("START_INTENT_REQUIRED", "Missing startIntentId"));
     }
-    if action == "start" && (encrypted_public_key.is_none() || runtime.rpc_plan_type.is_empty() || runtime.rpc_plan_name.is_empty() || runtime.credit_burn_per_second <= 0) {
+    if action == "start" && (runtime.rpc_plan_type.is_empty() || runtime.rpc_plan_name.is_empty() || runtime.credit_burn_per_second <= 0) {
         return Err(ApiError::bad_request("QUEUE_RUNTIME_REQUIRED", "Missing queue runtime fields"));
     }
 
@@ -357,11 +370,20 @@ async fn queue_status(State(state): State<Arc<AppState>>, headers: HeaderMap, Js
             &[&session.license_id, &wallet, &metadata_json],
         ).await.map_err(|err| db_error_at("queue stop user_wallets", err))?;
         tx.execute(
-            "DELETE FROM leaderboard_current WHERE chain = $1 AND wallet_address = $2",
-            &[&chain, &wallet],
+            r#"
+            UPDATE leaderboard_current
+               SET online = false,
+                   status = 'stopped',
+                   last_seen_at = now(),
+                   expires_at = now(),
+                   metadata = metadata || $3::text::jsonb,
+                   updated_at = now()
+             WHERE chain = $1 AND wallet_address = $2
+            "#,
+            &[&chain, &wallet, &metadata_json],
         ).await.map_err(|err| db_error_at("queue stop leaderboard", err))?;
         tx.commit().await.map_err(db_error)?;
-        return Ok(Json(json!({ "ok": true, "queue": { "chain": chain, "wallet_address": wallet, "online": false, "status": "removed" } })));
+        return Ok(Json(json!({ "ok": true, "queue": { "chain": chain, "wallet_address": wallet, "online": false, "status": "stopped" } })));
     }
 
     upsert_user_wallet(&tx, session.user_id.as_deref(), &session.license_id, &wallet, encrypted_public_key.as_deref(), "online", &metadata, action == "start").await?;
@@ -369,17 +391,17 @@ async fn queue_status(State(state): State<Arc<AppState>>, headers: HeaderMap, Js
 
     let usdt_balance = usdt_balance(&body.extra, body.balances.as_ref());
     let today_delta = "0";
-    let queue_id = first_string(&[
+    let queue_id = normalize_queue_id(first_string(&[
         body.queue_id.as_deref(),
         body.queue_member_key.as_deref(),
         body.dedupe_key.as_deref(),
         body.id.as_deref(),
-    ]);
-    let participant_id = first_string(&[
+    ]));
+    let participant_id = normalize_queue_id(first_string(&[
         body.participant_id.as_deref(),
         body.participant_key.as_deref(),
         queue_id.as_deref(),
-    ]);
+    ]));
     let endpoint_slug = body.endpoint_slug.clone().or_else(|| string_field(&body.extra, "endpointSlug"));
     let market = body.market.clone().or_else(|| string_field(&body.extra, "market"));
     let expires_at = body.expires_at.clone().or_else(|| string_field(&body.extra, "expiresAt"));
@@ -442,6 +464,17 @@ async fn leaderboard(State(state): State<Arc<AppState>>, Query(query): Query<Lea
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let include_offline = query.include_offline.unwrap_or_default().eq_ignore_ascii_case("true");
     let client = db(&state).await?;
+    client.execute(
+        r#"
+        UPDATE leaderboard_current
+           SET online = false,
+               status = 'offline',
+               updated_at = now()
+         WHERE online = true
+           AND (last_seen_at <= now() - make_interval(mins => $1) OR expires_at <= now())
+        "#,
+        &[&state.offline_logout_minutes],
+    ).await.map_err(|err| db_error_at("leaderboard mark offline", err))?;
     let rows = client.query(
         r#"
         SELECT
@@ -616,7 +649,8 @@ impl RuntimeSettings {
 fn leaderboard_row(row: Row) -> Value {
     let chain: String = row.get(0);
     let wallet: String = row.get(1);
-    let queue_id: Option<String> = row.get(2);
+    let queue_id = normalize_queue_id(row.get::<_, Option<String>>(2));
+    let participant_id = normalize_queue_id(row.get::<_, Option<String>>(3));
     let chain_label = if chain == "bnb" { "BNB".to_string() } else { chain.clone() };
     json!({
         "id": queue_id.clone().unwrap_or_else(|| format!("{chain}:{wallet}")),
@@ -625,7 +659,7 @@ fn leaderboard_row(row: Row) -> Value {
         "wallet": wallet,
         "walletAddress": row.get::<_, String>(1),
         "endpointId": queue_id,
-        "participantId": row.get::<_, Option<String>>(3),
+        "participantId": participant_id,
         "endpointSlug": row.get::<_, Option<String>>(4),
         "market": row.get::<_, Option<String>>(5),
         "usdt": row.get::<_, String>(6),
@@ -654,6 +688,40 @@ fn normalize_wallet(value: &str) -> ApiResult<String> {
     } else {
         Err(ApiError::bad_request("INVALID_WALLET", "Invalid walletAddress"))
     }
+}
+
+fn normalize_queue_id(value: Option<String>) -> Option<String> {
+    let raw = value?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if parts.first() == Some(&"license-token-wallet") {
+        if parts.len() >= 5 {
+            return Some(format!(
+                "license-token-wallet:{}:{}:{}",
+                normalize_chain(Some(parts[1])),
+                parts[3].trim(),
+                queue_wallet_tail(parts[4]),
+            ));
+        }
+        if parts.len() >= 4 {
+            return Some(format!(
+                "license-token-wallet:{}:{}:{}",
+                normalize_chain(Some(parts[1])),
+                parts[2].trim(),
+                queue_wallet_tail(parts[3]),
+            ));
+        }
+    }
+    Some(trimmed.to_string())
+}
+
+fn queue_wallet_tail(value: &str) -> String {
+    let normalized = value.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let tail: String = normalized.chars().rev().take(4).collect();
+    tail.chars().rev().collect::<String>().to_lowercase()
 }
 
 fn normalize_chain(value: Option<&str>) -> String {

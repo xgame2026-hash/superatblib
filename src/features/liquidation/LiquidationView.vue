@@ -625,14 +625,18 @@ function displayQueueId(payload: Record<string, any>) {
   if (!queueId) return "--";
   const parts = queueId.split(":");
   if (parts[0] === "license-token-wallet" && parts.length >= 5) {
-    const [, chain, licenseHash, tokenHash, walletTail] = parts;
-    return [chain, licenseHash.slice(0, 6), tokenHash.slice(0, 6), walletTail].filter(Boolean).join("_");
+    const [, chain, , tokenHash, wallet] = parts;
+    return [chain, tokenHash.slice(0, 6), queueWalletTail(wallet)].filter(Boolean).join("_");
   }
   if (parts[0] === "license-token-wallet" && parts.length >= 4) {
-    const [, chain, tokenHash, walletTail] = parts;
-    return [chain, tokenHash.slice(0, 6), walletTail].filter(Boolean).join("_");
+    const [, chain, tokenHash, wallet] = parts;
+    return [chain, tokenHash.slice(0, 6), queueWalletTail(wallet)].filter(Boolean).join("_");
   }
   return queueId.length > 36 ? `${queueId.slice(0, 16)}...${queueId.slice(-10)}` : queueId;
+}
+
+function queueWalletTail(value: string): string {
+  return value.replace(/^0x/i, "").slice(-4);
 }
 
 function restoreRunningMarketState() {

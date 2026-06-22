@@ -469,12 +469,16 @@ function formatQueueId(row: QueueRow) {
 function formatStateQueueId(queueId: string): string {
   const parts = queueId.split(":");
   if (parts[0] === "license-token-wallet" && parts.length >= 5) {
-    const [, chain, licenseHash, tokenHash, wallet] = parts;
-    return [chain, licenseHash.slice(0, 6), tokenHash.slice(0, 6), wallet.slice(-6)].filter(Boolean).join("_");
+    const [, chain, , tokenHash, wallet] = parts;
+    return [chain, tokenHash.slice(0, 6), walletTail(wallet)].filter(Boolean).join("_");
   }
   if (parts[0] !== "license-token-wallet" || parts.length < 4) return "";
   const [, chain, tokenHash, wallet] = parts;
-  return [chain, tokenHash.slice(0, 6), wallet.slice(-6)].filter(Boolean).join("_");
+  return [chain, tokenHash.slice(0, 6), walletTail(wallet)].filter(Boolean).join("_");
+}
+
+function walletTail(value: string): string {
+  return value.replace(/^0x/i, "").slice(-4);
 }
 
 function formatFullWallet(row: QueueRow) {
