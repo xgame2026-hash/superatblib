@@ -552,6 +552,12 @@ const githubVersionTitle = computed(() => {
 const githubLatestDisplayVersion = computed(() => {
   return versionWithCommit(githubLatestVersion.value, githubLatestCommit.value);
 });
+const githubIsLatestBuild = computed(() => {
+  const latestVersion = normalizeVersionLabel(githubLatestVersion.value);
+  if (compareVersionLabels(appVersion, latestVersion) !== 0) return compareVersionLabels(appVersion, latestVersion) > 0;
+  if (appGitCommit && githubLatestCommit.value) return appGitCommit === githubLatestCommit.value.slice(0, 7);
+  return true;
+});
 
 const metrics = ref([
   { label: "候选账户", value: "0", trend: 0 },
@@ -633,6 +639,26 @@ function versionWithCommit(version: string, commit: string): string {
   const normalizedVersion = normalizeVersionLabel(version);
   const normalizedCommit = commit.trim().slice(0, 7);
   return normalizedCommit ? `${normalizedVersion}+${normalizedCommit}` : normalizedVersion;
+}
+
+function compareVersionLabels(left: string, right: string): number {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart > rightPart) return 1;
+    if (leftPart < rightPart) return -1;
+  }
+  return 0;
+}
+
+function versionParts(source: string): number[] {
+  return normalizeVersionLabel(source)
+    .split(/[.+-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
 }
 
 function syncViewHash(view: ViewKey): void {
@@ -815,7 +841,7 @@ async function loadGithubVersion() {
     };
     githubLatestVersion.value = payload.latestVersion || appVersion;
     githubLatestCommit.value = payload.latestCommit || "";
-    githubVersionState.value = payload.configured === false ? "unconfigured" : payload.isLatest ? "latest" : "update";
+    githubVersionState.value = payload.configured === false ? "unconfigured" : githubIsLatestBuild.value ? "latest" : "update";
     githubVersionMessage.value = payload.message ?? "";
   } catch (error) {
     githubLatestVersion.value = appVersion;
