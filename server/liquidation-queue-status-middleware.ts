@@ -459,13 +459,11 @@ async function registerQueueStatus(req: IncomingMessage) {
     ...txCredentialFields,
   };
   const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
-  let stateQueueWarning: string | undefined;
   if (stopping) {
     stopBackgroundQueueHeartbeat(backgroundQueueKey(payload), "stopped");
     rememberLocalQueueStop(stopTombstoneKey);
     updateLocalQueueState(payload);
-    const stateSync = await syncStateQueueStatus(env, payload, localQueueItem);
-    stateQueueWarning = stateSync.warning;
+    await syncStateQueueStatus(env, payload, localQueueItem);
   }
 
   let transportResult: QueueTransportResult = {
@@ -502,7 +500,6 @@ async function registerQueueStatus(req: IncomingMessage) {
 
   if (!stopping) {
     const stateSync = await syncStateQueueStatus(env, payload, localQueueItem);
-    stateQueueWarning = stateSync.warning;
     if (heartbeat && isStateQueueStopped(stateSync.payload)) {
       throw new Error("列队已暂停，请重新点击启动。");
     }
@@ -518,8 +515,6 @@ async function registerQueueStatus(req: IncomingMessage) {
       remoteQueueWarning = error instanceof Error ? error.message : String(error);
     }
   }
-  const queueWarning = [stateQueueWarning, remoteQueueWarning].filter(Boolean).join("；") || undefined;
-
   try {
     if (!stopping) updateLocalQueueState(payload);
   } catch (error) {
@@ -559,7 +554,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     queue: isRecord(transportResult.payload.queue) ? transportResult.payload.queue : localQueueItem,
     remoteQueueVerified: remoteQueue?.verified ?? false,
     remoteQueueParticipantId: remoteQueue?.participantId,
-    remoteQueueWarning: queueWarning,
+    remoteQueueWarning,
     remote: transportResult.payload,
     remoteAvailable: true,
     updatedAt: new Date().toISOString(),
