@@ -238,7 +238,7 @@ async function loginStateSession(env: Record<string, string>): Promise<StateSess
       source: "liq2-client",
       walletAddress,
       username: walletAddress.slice(2, 10).toLowerCase(),
-      authCode: authIdentity,
+      authCode: submittedCode,
       token,
       appToken: token,
       authIdentity,

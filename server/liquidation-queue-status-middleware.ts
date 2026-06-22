@@ -1124,6 +1124,21 @@ function queueWssUrl(env: Record<string, string>): string {
 async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<RpcAccessInfo> {
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
+  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
+  if (token) {
+    const tokenExpiry = jwtExpiry(token);
+    if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
+      throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
+    }
+    try {
+      const endpoints = await fetchSuperMtNodeEndpoints(env, token);
+      const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+      if (!endpoint) throw new Error(`${chainLabel(chain)} RPC 未绑定到当前 SUPERMTNODE_APP_TOKEN`);
+      return rpcAccessFromEndpoint(chain, endpoint, "SUPERMTNODE_APP_TOKEN", endpointAccessTokenHash(endpoint, token));
+    } catch (error) {
+      throw new Error(`SUPERMTNODE_APP_TOKEN 校验失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   let licenseError = "";
   if (authCode) {
@@ -1139,28 +1154,7 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
     }
   }
 
-  const token = env.SUPERMTNODE_APP_TOKEN?.trim();
-  if (!token) {
-    throw new Error(licenseError || "SUPERMTNODE_APP_TOKEN 未配置，且授权码未返回可用 RPC，不能启动。");
-  }
-  const tokenExpiry = jwtExpiry(token);
-  if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
-    throw new Error(licenseError || `SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
-  }
-
-  let endpoints: SuperMtNodeEndpoint[];
-  try {
-    endpoints = await fetchSuperMtNodeEndpoints(env, token);
-  } catch (error) {
-    throw new Error(licenseError || `SUPERMTNODE_APP_TOKEN 校验失败：${error instanceof Error ? error.message : String(error)}`);
-  }
-  const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-  if (!endpoint) {
-    const bindingTarget = authCode ? "当前授权码或 SUPERMTNODE_APP_TOKEN" : "当前 SUPERMTNODE_APP_TOKEN";
-    throw new Error(`${chainLabel(chain)} RPC 未绑定到${bindingTarget}，不能启动。`);
-  }
-
-  return rpcAccessFromEndpoint(chain, endpoint, "SUPERMTNODE_APP_TOKEN", endpointAccessTokenHash(endpoint, token));
+  throw new Error(licenseError || "SUPERMTNODE_APP_TOKEN 未配置，且授权码未返回可用 RPC，不能启动。");
 }
 
 function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, authLabel: string, rpcAccessTokenHash: string): RpcAccessInfo {
@@ -1280,21 +1274,21 @@ async function queueRpcAccessTokenHash(chain: ChainKey, env: Record<string, stri
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
   if (!rpcUrl) return tokenFingerprint(token);
 
-  if (authCode) {
-    try {
-      const endpoint = (await fetchSuperMtNodeEndpointsByLicense(env, authCode)).find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-      if (endpoint) return endpointAccessTokenHash(endpoint, token);
-    } catch {
-      // Stop/unregister must stay best-effort even if the license lookup is temporarily unavailable.
-    }
-  }
-
   if (token) {
     try {
       const endpoint = (await fetchSuperMtNodeEndpoints(env, token)).find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
       if (endpoint) return endpointAccessTokenHash(endpoint, token);
     } catch {
       // Fall through to the local token fingerprint.
+    }
+  }
+
+  if (authCode) {
+    try {
+      const endpoint = (await fetchSuperMtNodeEndpointsByLicense(env, authCode)).find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
+      if (endpoint) return endpointAccessTokenHash(endpoint, token);
+    } catch {
+      // Stop/unregister must stay best-effort even if the license lookup is temporarily unavailable.
     }
   }
 
@@ -2927,7 +2921,7 @@ function requestAuthCode(req: IncomingMessage, env: Record<string, string>): str
 }
 
 function queueAuthIdentity(env: Record<string, string>, authCode?: string): string | undefined {
-  return authCode || firstUsableToken(env.SUPERMTNODE_APP_TOKEN, env.STATE_AUTH_TOKEN, env.QUEUE_TOKEN, env.LIQUIDATION_QUEUE_WSS_TOKEN, env.MANAGE_INGEST_TOKEN);
+  return firstUsableToken(env.SUPERMTNODE_APP_TOKEN, env.STATE_AUTH_TOKEN, env.QUEUE_TOKEN, env.LIQUIDATION_QUEUE_WSS_TOKEN, env.MANAGE_INGEST_TOKEN) || authCode;
 }
 
 function normalizeAuthCode(value?: string): string | undefined {
