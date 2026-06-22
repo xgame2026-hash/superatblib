@@ -9,7 +9,7 @@ import WebSocket from "ws";
 import { assertOfficialConfig } from "./official-config";
 import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootstrap";
 import { queueWssToken } from "./queue-token";
-import { ensureStateSession, stateLogout, stateQueueStatus, stateRpc, stateRpcEnabled, stateRpcEnabledForChain } from "./state-session";
+import { stateLogout, stateQueueStatus, stateRpc, stateRpcEnabled, stateRpcEnabledForChain } from "./state-session";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
@@ -361,13 +361,6 @@ async function registerQueueStatus(req: IncomingMessage) {
   const heartbeatLocalQueueRow = heartbeat ? findLocalQueueRow(chain, walletAddress, authIdentity, meteredRpcUrl) : undefined;
   if (heartbeat && !heartbeatLocalQueueRow) {
     throw new Error("本地队列已停止，忽略旧心跳；请重新点击启动。");
-  }
-  if (!stopping && stateRpcEnabled(env)) {
-    try {
-      await ensureStateSession(env);
-    } catch (error) {
-      console.warn(`[state-session] unavailable, continuing with queue fallback: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
   const rpcAccess = stopping || heartbeat ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   const rpcAccessTokenHash =

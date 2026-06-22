@@ -2,7 +2,7 @@ import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { hasConfiguredQueueWssToken, queueWssToken } from "./queue-token";
-import { stateRpc, stateRpcEnabled } from "./state-session";
+import { stateRpc, stateRpcEnabledForChain } from "./state-session";
 
 export type SecurityCheckItem = {
   scope: string;
@@ -412,7 +412,7 @@ async function checkBnbRpc(
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: Record<string, string>): Promise<T> {
-  if (env && stateRpcEnabled(env) && normalizeComparableUrl(rpcUrl) === normalizeComparableUrl(env.BNB_RPC_URL?.trim())) {
+  if (env && stateRpcEnabledForChain("bnb", env) && normalizeComparableUrl(rpcUrl) === normalizeComparableUrl(env.BNB_RPC_URL?.trim())) {
     try {
       return await stateRpc<T>("bnb", env, method, params);
     } catch (error) {

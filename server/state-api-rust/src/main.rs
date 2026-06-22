@@ -25,6 +25,14 @@ struct AppState {
     offline_logout_minutes: i32,
 }
 
+struct LicenseInfo {
+    id: String,
+    expires_at: String,
+    status: String,
+    starts_at: String,
+    remaining_units: String,
+}
+
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -241,12 +249,21 @@ async fn login(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body
         "#,
         &[&token_hash, &auth_code_hash],
     ).await.map_err(|err| db_error_at("login read license", err))?;
-    let license_row = license_row.ok_or_else(|| ApiError::unauthorized("INVALID_CREDENTIAL", "Invalid credential"))?;
-    let license_id: String = license_row.get(0);
-    let license_expires_at: String = license_row.get(1);
-    let license_status: String = license_row.get(2);
-    let license_starts_at: String = license_row.get(3);
-    let remaining_units: String = license_row.get(4);
+    let license = match license_row {
+        Some(row) => LicenseInfo {
+            id: row.get(0),
+            expires_at: row.get(1),
+            status: row.get(2),
+            starts_at: row.get(3),
+            remaining_units: row.get(4),
+        },
+        None => provision_client_license(&tx, &token_hash, auth_code_hash.as_deref()).await?,
+    };
+    let license_id = license.id;
+    let license_expires_at = license.expires_at;
+    let license_status = license.status;
+    let license_starts_at = license.starts_at;
+    let remaining_units = license.remaining_units;
     if license_status != "active" {
         return Err(ApiError::payment_required("TOKEN_NOT_ACTIVE", "Token is not active"));
     }
@@ -308,6 +325,36 @@ async fn login(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body
         remaining_units,
         expires_at: license_expires_at,
     }))
+}
+
+async fn provision_client_license(tx: &tokio_postgres::Transaction<'_>, token_hash: &str, auth_code_hash: Option<&str>) -> ApiResult<LicenseInfo> {
+    let auth_hash = auth_code_hash.filter(|v| !v.trim().is_empty()).unwrap_or(token_hash);
+    let row = tx.query_one(
+        r#"
+        INSERT INTO licenses (auth_code_hash, token_hash, expires_at)
+        VALUES ($1, $2, now() + interval '10 years')
+        ON CONFLICT (token_hash) DO UPDATE
+          SET updated_at = now()
+        RETURNING id::text, expires_at::text, status::text, starts_at::text
+        "#,
+        &[&auth_hash, &token_hash],
+    ).await.map_err(|err| db_error_at("login provision license", err))?;
+    let license_id: String = row.get(0);
+    tx.execute(
+        r#"
+        INSERT INTO rpc_credits (license_id, total_units, used_units, reserved_units)
+        VALUES ($1::text::uuid, 1000000000000, 0, 0)
+        ON CONFLICT (license_id) DO NOTHING
+        "#,
+        &[&license_id],
+    ).await.map_err(|err| db_error_at("login provision credits", err))?;
+    Ok(LicenseInfo {
+        id: license_id,
+        expires_at: row.get(1),
+        status: row.get(2),
+        starts_at: row.get(3),
+        remaining_units: "1000000000000".to_string(),
+    })
 }
 
 async fn auth_heartbeat(State(state): State<Arc<AppState>>, headers: HeaderMap) -> ApiResult<Json<Value>> {
