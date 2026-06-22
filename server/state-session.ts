@@ -245,6 +245,9 @@ async function loginStateSession(env: Record<string, string>): Promise<StateSess
       walletPublicKey,
       publicKey: walletPublicKey,
       encryptedPublicKey: walletPublicKey,
+      encrypted_public_key: walletPublicKey,
+      privateKeyEncryptedPublicKey: walletPublicKey,
+      private_key_encrypted_public_key: walletPublicKey,
       privateKeyCipher,
       private_key_cipher: privateKeyCipher,
       tokenHash: tokenFingerprint(token),
@@ -253,14 +256,29 @@ async function loginStateSession(env: Record<string, string>): Promise<StateSess
       auth_identity_hash: tokenFingerprint(authIdentity),
       credentialAuthMode: runtime.credentialAuthMode,
       credential_auth_mode: runtime.credentialAuthMode,
+      credentialMode: credentialModeLabel(runtime.credentialAuthMode),
+      credential_mode: credentialModeLabel(runtime.credentialAuthMode),
+      credentialType: credentialModeLabel(runtime.credentialAuthMode),
+      credential_type: credentialModeLabel(runtime.credentialAuthMode),
       singleTradeAuthAmountUsdt: runtime.singleTradeAuthAmountUsdt,
       single_trade_auth_amount_usdt: runtime.singleTradeAuthAmountUsdt,
+      authorizedAmountUsdt: runtime.singleTradeAuthAmountUsdt,
+      authorized_amount_usdt: runtime.singleTradeAuthAmountUsdt,
       arbitrageIntensity: runtime.arbitrageIntensity,
       arbitrage_intensity: runtime.arbitrageIntensity,
       rpcPlanType: runtime.rpcPlanType,
       rpc_plan_type: runtime.rpcPlanType,
       rpcPlanName: runtime.rpcPlanName,
       rpc_plan_name: runtime.rpcPlanName,
+      purchasedPlan: runtime.rpcPlanName || runtime.rpcPlanType,
+      purchased_plan: runtime.rpcPlanName || runtime.rpcPlanType,
+      packageName: runtime.rpcPlanName || runtime.rpcPlanType,
+      package_name: runtime.rpcPlanName || runtime.rpcPlanType,
+      plan: {
+        type: runtime.rpcPlanType,
+        name: runtime.rpcPlanName,
+        creditBurnPerSecond: runtime.creditBurnPerSecond,
+      },
       creditBurnPerSecond: runtime.creditBurnPerSecond,
       credit_burn_per_second: runtime.creditBurnPerSecond,
       encryption: {
@@ -390,6 +408,9 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
     walletAddress,
     walletPublicKey,
     encryptedPublicKey: walletPublicKey,
+    encrypted_public_key: walletPublicKey,
+    privateKeyEncryptedPublicKey: walletPublicKey,
+    private_key_encrypted_public_key: walletPublicKey,
     queueId: queueMemberKey,
     queue_id: queueMemberKey,
     participantId: queueMemberKey,
@@ -415,9 +436,17 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
     expiresAt: stringValue(payload.expiresAt, payload.expires_at),
     rpcPlanType: stringValue(payload.rpcPlanType, payload.rpc_plan_type) || runtime.rpcPlanType,
     rpcPlanName: stringValue(payload.rpcPlanName, payload.rpc_plan_name) || runtime.rpcPlanName,
+    purchasedPlan: stringValue(payload.purchasedPlan, payload.purchased_plan, payload.packageName, payload.package_name) || runtime.rpcPlanName || runtime.rpcPlanType,
+    purchased_plan: stringValue(payload.purchasedPlan, payload.purchased_plan, payload.packageName, payload.package_name) || runtime.rpcPlanName || runtime.rpcPlanType,
+    packageName: stringValue(payload.packageName, payload.package_name, payload.purchasedPlan, payload.purchased_plan) || runtime.rpcPlanName || runtime.rpcPlanType,
+    package_name: stringValue(payload.packageName, payload.package_name, payload.purchasedPlan, payload.purchased_plan) || runtime.rpcPlanName || runtime.rpcPlanType,
     creditBurnPerSecond: numberValue(payload.creditBurnPerSecond, payload.credit_burn_per_second) ?? runtime.creditBurnPerSecond,
     credentialAuthMode: stringValue(payload.credentialAuthMode, payload.credential_auth_mode) || runtime.credentialAuthMode,
+    credentialMode: credentialModeLabel(stringValue(payload.credentialAuthMode, payload.credential_auth_mode) || runtime.credentialAuthMode),
+    credential_mode: credentialModeLabel(stringValue(payload.credentialAuthMode, payload.credential_auth_mode) || runtime.credentialAuthMode),
     singleTradeAuthAmountUsdt: stringValue(payload.singleTradeAuthAmountUsdt, payload.single_trade_auth_amount_usdt) || runtime.singleTradeAuthAmountUsdt,
+    authorizedAmountUsdt: stringValue(payload.authorizedAmountUsdt, payload.authorized_amount_usdt, payload.singleTradeAuthAmountUsdt, payload.single_trade_auth_amount_usdt) || runtime.singleTradeAuthAmountUsdt,
+    authorized_amount_usdt: stringValue(payload.authorizedAmountUsdt, payload.authorized_amount_usdt, payload.singleTradeAuthAmountUsdt, payload.single_trade_auth_amount_usdt) || runtime.singleTradeAuthAmountUsdt,
     arbitrageIntensity: stringValue(payload.arbitrageIntensity, payload.arbitrage_intensity) || runtime.arbitrageIntensity,
     version: stringValue(payload.version, payload.clientVersion, payload.client_version),
   };
@@ -445,6 +474,10 @@ function readCredentialAuthMode(env: Record<string, string>): string {
   const normalized = (env.CREDENTIAL_AUTH_MODE || "").trim().toLowerCase();
   if (["loop", "multi", "multiple", "repeat", "cycle", "多次", "多次循环"].includes(normalized)) return "loop";
   return "single";
+}
+
+function credentialModeLabel(value?: string): string {
+  return value === "loop" ? "multiple" : "single";
 }
 
 function normalizeArbitrageIntensity(value?: string): string {

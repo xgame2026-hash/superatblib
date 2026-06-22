@@ -473,9 +473,11 @@ async function startMarketExecution() {
   }
   appendTerminal(`snapshot source: ${currentMarket.value.endpoint}`);
   appendTerminal(`strategy status: ${currentMarket.value.apiStatus}`);
+  appendTerminal("正在进入队列");
   try {
     const payload = await registerMarketQueueStart(currentMarket.value);
     queueState.value = payload.eligible === false ? "waiting" : "queued";
+    appendTerminal(`排队成功: ${displayQueueId(payload)}`);
     appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
     if (payload.transport === "http" && typeof payload.transportWarning === "string") {
       appendTerminal(`wss fallback: ${payload.transportWarning}`);
@@ -616,6 +618,17 @@ function runtimeCreditBurn(runtime?: Record<string, any>): number | null {
   if (plan === "scale") return 75;
   if (plan === "business") return 500;
   return null;
+}
+
+function displayQueueId(payload: Record<string, any>) {
+  const queueId = String(payload.queueId || payload.participantId || payload.remoteQueueParticipantId || payload.queue?.queueId || payload.queue?.participantId || "");
+  if (!queueId) return "--";
+  const parts = queueId.split(":");
+  if (parts[0] === "license-token-wallet" && parts.length >= 5) {
+    const [, chain, licenseHash, tokenHash, walletTail] = parts;
+    return [chain, licenseHash.slice(0, 6), tokenHash.slice(0, 6), walletTail].filter(Boolean).join("_");
+  }
+  return queueId.length > 36 ? `${queueId.slice(0, 16)}...${queueId.slice(-10)}` : queueId;
 }
 
 function restoreRunningMarketState() {

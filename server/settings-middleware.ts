@@ -17,6 +17,20 @@ type SettingsPayload = {
 
 type SuperMtNodeEndpoint = {
   chain?: unknown;
+  planId?: unknown;
+  plan_id?: unknown;
+  planKey?: unknown;
+  plan_key?: unknown;
+  planName?: unknown;
+  plan_name?: unknown;
+  packageName?: unknown;
+  package_name?: unknown;
+  rpcPlanType?: unknown;
+  rpc_plan_type?: unknown;
+  rpcPlanName?: unknown;
+  rpc_plan_name?: unknown;
+  creditBurnPerSecond?: unknown;
+  credit_burn_per_second?: unknown;
   status?: unknown;
   httpUrl?: unknown;
   http_url?: unknown;
@@ -140,7 +154,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
 
   if (req.method === "PUT") {
     readBody(req)
-      .then((body) => {
+      .then(async (body) => {
         const payload = JSON.parse(body || "{}") as SettingsPayload;
         if (typeof payload.env !== "string") {
           json(res, 400, { ok: false, error: "Missing env text." });
@@ -149,7 +163,8 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
         const submittedEnv = parseEnv(payload.env);
         preserveSavedQueueToken(submittedEnv, savedEnv);
-        const normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(serializeEnvWithPreservedValues(payload.env, submittedEnv)));
+        let normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(serializeEnvWithPreservedValues(payload.env, submittedEnv)));
+        normalizedEnv = await enrichEnvWithSuperMtNodePlan(normalizedEnv);
         writeFileSync(ENV_FILE, normalizedEnv, "utf8");
         json(res, 200, { ok: true, file: ".env", path: ENV_FILE });
       })
@@ -387,10 +402,53 @@ function applyLicenseEndpointsToEnv(endpoints: SuperMtNodeEndpoint[]): Record<st
     env[envKey] = httpUrl;
     applied[envKey] = httpUrl;
   }
+  const plan = superMtNodePlanInfo(endpoints);
+  if (plan.rpcPlanType) {
+    env.RPC_PLAN_TYPE = plan.rpcPlanType;
+    applied.RPC_PLAN_TYPE = plan.rpcPlanType;
+  }
+  if (plan.rpcPlanName) {
+    env.RPC_PLAN_NAME = plan.rpcPlanName;
+    applied.RPC_PLAN_NAME = plan.rpcPlanName;
+  }
+  if (plan.creditBurnPerSecond) {
+    env.CREDIT_BURN_PER_SECOND = plan.creditBurnPerSecond;
+    applied.CREDIT_BURN_PER_SECOND = plan.creditBurnPerSecond;
+  }
   if (Object.keys(applied).length) {
     writeFileSync(ENV_FILE, serializeEnv(env), "utf8");
   }
   return applied;
+}
+
+async function enrichEnvWithSuperMtNodePlan(source: string): Promise<string> {
+  const env = parseEnv(source);
+  const appToken = env.SUPERMTNODE_APP_TOKEN?.trim();
+  if (!appToken) return source;
+  try {
+    const endpoints = await fetchSuperMtNodeEndpointsByToken(appToken, env);
+    const plan = superMtNodePlanInfo(endpoints);
+    let next = source;
+    if (plan.rpcPlanType) next = upsertEnvValue(next, "RPC_PLAN_TYPE", plan.rpcPlanType);
+    if (plan.rpcPlanName) next = upsertEnvValue(next, "RPC_PLAN_NAME", plan.rpcPlanName);
+    if (plan.creditBurnPerSecond) next = upsertEnvValue(next, "CREDIT_BURN_PER_SECOND", plan.creditBurnPerSecond);
+    return normalizeEnv(next);
+  } catch (error) {
+    console.warn(`[settings] SUPERMTNODE_APP_TOKEN plan sync skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return source;
+  }
+}
+
+function superMtNodePlanInfo(endpoints: SuperMtNodeEndpoint[]): { rpcPlanType?: string; rpcPlanName?: string; creditBurnPerSecond?: string } {
+  const active = endpoints.find((endpoint) => {
+    const status = stringValue(endpoint.status)?.toLowerCase();
+    return !status || status === "active" || status === "pending";
+  });
+  if (!active) return {};
+  const rpcPlanType = stringValue(active.rpcPlanType, active.rpc_plan_type, active.planKey, active.plan_key, active.planId, active.plan_id);
+  const rpcPlanName = stringValue(active.rpcPlanName, active.rpc_plan_name, active.planName, active.plan_name, active.packageName, active.package_name, active.planKey, active.plan_key, active.planId, active.plan_id);
+  const creditBurnPerSecond = stringValue(active.creditBurnPerSecond, active.credit_burn_per_second);
+  return { rpcPlanType, rpcPlanName, creditBurnPerSecond };
 }
 
 function writeAuthCodeToEnv(authCode: string): void {
