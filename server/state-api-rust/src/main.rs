@@ -15,7 +15,7 @@ use std::{env, net::SocketAddr, sync::Arc};
 use tokio_postgres::{Client, NoTls, Row};
 use tower_http::cors::CorsLayer;
 
-const VERSION: &str = "1.5.3";
+const VERSION: &str = "1.5.4";
 
 #[derive(Clone)]
 struct AppState {

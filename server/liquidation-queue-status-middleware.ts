@@ -24,7 +24,7 @@ const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.5.3";
+const CLIENT_VERSION = "1.5.4";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -174,6 +174,7 @@ type BackgroundQueueSession = {
   lastOkAt?: string;
   lastError?: string;
   failureCount: number;
+  inFlight: boolean;
 };
 
 const chainEnvKeys: Record<ChainKey, string> = {
@@ -582,6 +583,7 @@ function startBackgroundQueueHeartbeat(
     intervalMs,
     payload: sessionPayload,
     failureCount: 0,
+    inFlight: false,
   };
   backgroundQueueSessions.set(key, session);
 }
@@ -596,6 +598,8 @@ function stopBackgroundQueueHeartbeat(key: string, _reason: string): void {
 async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, string>, endpoint: string): Promise<void> {
   const session = backgroundQueueSessions.get(key);
   if (!session) return;
+  if (session.inFlight) return;
+  session.inFlight = true;
   const now = new Date();
   const payload = backgroundHeartbeatPayload(session.payload, session.intervalMs, now);
   try {
@@ -619,6 +623,8 @@ async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, str
     if (session.failureCount === 1 || session.failureCount % 6 === 0) {
       console.warn(`[queue-background] heartbeat failed (${session.failureCount}): ${session.lastError}`);
     }
+  } finally {
+    session.inFlight = false;
   }
 }
 
