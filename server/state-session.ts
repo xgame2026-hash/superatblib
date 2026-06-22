@@ -48,6 +48,8 @@ type StateQueuePayload = Record<string, unknown> & {
 let sessionPromise: Promise<StateSessionFile> | null = null;
 
 export function stateRpcEnabled(env: Record<string, string>): boolean {
+  const configured = String(env.STATE_RPC_ENABLED ?? env.SUPERMT_STATE_ENABLED ?? "").trim().toLowerCase();
+  if (["0", "false", "off", "disabled", "关闭"].includes(configured)) return false;
   return Boolean(stateApiBase(env) && authCode(env) && appToken(env) && env.PRIVATE_KEY?.trim());
 }
 
