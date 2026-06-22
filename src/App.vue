@@ -392,6 +392,7 @@ const settingsSecurityItems = ref<SecurityCheckItem[]>([]);
 const settingsSecurityCheckedAt = ref("");
 const selectedNewsId = ref("");
 const githubLatestVersion = ref(appVersion);
+const githubLatestCommit = ref("");
 const githubVersionState = ref<GithubVersionState>("checking");
 const githubVersionMessage = ref("正在检查 GitHub 最新版本...");
 const githubMenuOpen = ref(false);
@@ -549,7 +550,7 @@ const githubVersionTitle = computed(() => {
   return "已经是最新版";
 });
 const githubLatestDisplayVersion = computed(() => {
-  return normalizeVersionLabel(githubLatestVersion.value) === appVersion ? displayVersion : githubLatestVersion.value;
+  return versionWithCommit(githubLatestVersion.value, githubLatestCommit.value);
 });
 
 const metrics = ref([
@@ -626,6 +627,12 @@ function normalizeViewAlias(value: string | null): string {
 
 function normalizeVersionLabel(source: string): string {
   return source.trim().replace(/^v/i, "").split("+")[0] || source;
+}
+
+function versionWithCommit(version: string, commit: string): string {
+  const normalizedVersion = normalizeVersionLabel(version);
+  const normalizedCommit = commit.trim().slice(0, 7);
+  return normalizedCommit ? `${normalizedVersion}+${normalizedCommit}` : normalizedVersion;
 }
 
 function syncViewHash(view: ViewKey): void {
@@ -801,14 +808,18 @@ async function loadGithubVersion() {
       configured?: boolean;
       currentVersion?: string;
       latestVersion?: string;
+      currentCommit?: string;
+      latestCommit?: string;
       isLatest?: boolean;
       message?: string;
     };
     githubLatestVersion.value = payload.latestVersion || appVersion;
+    githubLatestCommit.value = payload.latestCommit || "";
     githubVersionState.value = payload.configured === false ? "unconfigured" : payload.isLatest ? "latest" : "update";
     githubVersionMessage.value = payload.message ?? "";
   } catch (error) {
     githubLatestVersion.value = appVersion;
+    githubLatestCommit.value = "";
     githubVersionState.value = "error";
     githubVersionMessage.value = error instanceof Error ? error.message : "GitHub 版本检测失败";
   }

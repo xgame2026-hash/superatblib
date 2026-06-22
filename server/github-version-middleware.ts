@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { execSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const PACKAGE_FILE = resolve(process.cwd(), "package.json");
+const BUILD_COMMIT_FILE = resolve(process.cwd(), ".superarb-build-commit");
 const DEFAULT_GITHUB_REPOSITORY = "xgame2026-hash/superatblib";
 
 type GithubVersionPayload = {
@@ -11,6 +13,8 @@ type GithubVersionPayload = {
   configured: boolean;
   currentVersion: string;
   latestVersion: string;
+  currentCommit?: string;
+  latestCommit?: string;
   isLatest: boolean;
   source?: string;
   message?: string;
@@ -32,6 +36,7 @@ export function handleGithubVersionRequest(req: IncomingMessage, res: ServerResp
         configured: false,
         currentVersion: readPackageVersion(),
         latestVersion: readPackageVersion(),
+        currentCommit: readBuildCommit(),
         isLatest: true,
         message: error instanceof Error ? error.message : "GitHub version check failed.",
       });
@@ -43,6 +48,7 @@ export function handleGithubVersionRequest(req: IncomingMessage, res: ServerResp
 async function fetchGithubVersion(): Promise<GithubVersionPayload> {
   const env = readEnv();
   const currentVersion = env.SUPERARB_VERSION?.trim() || "1.5.4";
+  const currentCommit = readBuildCommit();
   const directVersion = env.GITHUB_LATEST_VERSION?.trim();
   const latestUrl = env.GITHUB_LATEST_VERSION_URL?.trim();
   const repository = normalizeRepository(env.GITHUB_REPOSITORY?.trim() || env.GITHUB_REPO?.trim() || DEFAULT_GITHUB_REPOSITORY);
@@ -54,6 +60,7 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
       configured: true,
       currentVersion,
       latestVersion,
+      currentCommit,
       isLatest: compareVersions(currentVersion, latestVersion) >= 0,
       source: "GITHUB_LATEST_VERSION",
     };
@@ -66,6 +73,7 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
       configured: false,
       currentVersion,
       latestVersion: currentVersion,
+      currentCommit,
       isLatest: true,
       message: "未配置 GitHub 版本检测源",
     };
@@ -73,6 +81,7 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
 
   const text = await fetchVersionText(sourceUrl, repository);
   const latestVersion = normalizeVersion(readVersionFromPayload(text));
+  const latestCommit = repository ? await fetchReleaseCommit(repository, latestVersion) : "";
   if (!latestVersion) {
     throw new Error("GitHub version API did not return a version.");
   }
@@ -82,9 +91,39 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
     configured: true,
     currentVersion,
     latestVersion,
-    isLatest: compareVersions(currentVersion, latestVersion) >= 0,
+    currentCommit,
+    latestCommit,
+    isLatest: isLatestBuild(currentVersion, latestVersion, currentCommit, latestCommit),
     source: sourceUrl,
   };
+}
+
+async function fetchReleaseCommit(repository: string, latestVersion: string): Promise<string> {
+  const tags = [`v${latestVersion}`, latestVersion].filter(Boolean);
+  for (const tag of tags) {
+    const response = await fetch(`https://api.github.com/repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`, {
+      headers: {
+        accept: "application/vnd.github+json, application/json",
+        "user-agent": "SuperARB-dashboard",
+      },
+    });
+    if (!response.ok) continue;
+    const payload = (await response.json().catch(() => ({}))) as { object?: { sha?: unknown; type?: unknown; url?: unknown } };
+    const object = payload.object;
+    if (typeof object?.sha !== "string") continue;
+    if (object.type === "tag" && typeof object.url === "string") {
+      const tagResponse = await fetch(object.url, {
+        headers: {
+          accept: "application/vnd.github+json, application/json",
+          "user-agent": "SuperARB-dashboard",
+        },
+      });
+      const tagPayload = (await tagResponse.json().catch(() => ({}))) as { object?: { sha?: unknown } };
+      if (typeof tagPayload.object?.sha === "string") return tagPayload.object.sha.slice(0, 7);
+    }
+    return object.sha.slice(0, 7);
+  }
+  return "";
 }
 
 async function fetchVersionText(sourceUrl: string, repository: string): Promise<string> {
@@ -151,6 +190,13 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
+function isLatestBuild(currentVersion: string, latestVersion: string, currentCommit: string, latestCommit: string): boolean {
+  const versionCompare = compareVersions(currentVersion, latestVersion);
+  if (versionCompare !== 0) return versionCompare > 0;
+  if (currentCommit && latestCommit) return currentCommit === latestCommit;
+  return true;
+}
+
 function versionParts(source: string): number[] {
   return normalizeVersion(source)
     .split(/[.+-]/)
@@ -165,6 +211,16 @@ function readPackageVersion(): string {
     return payload.version ?? "1.5.4";
   } catch {
     return "1.5.4";
+  }
+}
+
+function readBuildCommit(): string {
+  const configured = process.env.SUPERARB_BUILD_COMMIT?.trim();
+  if (configured) return configured.slice(0, 7);
+  try {
+    return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return existsSync(BUILD_COMMIT_FILE) ? readFileSync(BUILD_COMMIT_FILE, "utf8").trim().slice(0, 7) : "";
   }
 }
 
