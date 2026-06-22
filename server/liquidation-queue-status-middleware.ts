@@ -638,7 +638,7 @@ async function syncStateQueueStatus(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[state-queue] sync failed: ${message}`);
-    if (required) throw new Error(`列队同步失败，${action === "start" ? "不能启动" : "不能暂停"}：${message}`);
+    if (required && action !== "start") throw new Error(`列队同步失败，不能暂停：${message}`);
     if (action === "heartbeat" && /列队已暂停/.test(message)) throw new Error(message);
   }
 }
@@ -1791,18 +1791,18 @@ async function parseWssMessage(data: unknown): Promise<Record<string, unknown> |
 
 function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
-  const authCode = requestAuthCode(req, env);
-  if (authCode) {
-    headers["x-supermtnode-auth-code"] = authCode;
-    headers["x-license-code"] = authCode;
-    headers["x-auth-code"] = authCode;
-  }
   const token = firstUsableToken(
     env.MANAGE_INGEST_TOKEN,
     env.LIQUIDATION_QUEUE_ADMIN_TOKEN,
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
   );
+  const authCode = token ? undefined : requestAuthCode(req, env);
+  if (authCode) {
+    headers["x-supermtnode-auth-code"] = authCode;
+    headers["x-license-code"] = authCode;
+    headers["x-auth-code"] = authCode;
+  }
   if (token) {
     headers["x-ingest-token"] = token;
     headers.authorization = `Bearer ${token}`;
@@ -1812,18 +1812,18 @@ function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): 
 
 function manageQueueEnvHeaders(env: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
-  const authCode = env.AUTH_CODE?.trim() || env.SUPERARB_AUTH_CODE?.trim() || env.LICENSE_CODE?.trim();
-  if (authCode) {
-    headers["x-supermtnode-auth-code"] = authCode.toUpperCase();
-    headers["x-license-code"] = authCode.toUpperCase();
-    headers["x-auth-code"] = authCode.toUpperCase();
-  }
   const token = firstUsableToken(
     env.MANAGE_INGEST_TOKEN,
     env.LIQUIDATION_QUEUE_ADMIN_TOKEN,
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
   );
+  const authCode = token ? "" : env.AUTH_CODE?.trim() || env.SUPERARB_AUTH_CODE?.trim() || env.LICENSE_CODE?.trim();
+  if (authCode) {
+    headers["x-supermtnode-auth-code"] = authCode.toUpperCase();
+    headers["x-license-code"] = authCode.toUpperCase();
+    headers["x-auth-code"] = authCode.toUpperCase();
+  }
   if (token) {
     headers["x-ingest-token"] = token;
     headers.authorization = `Bearer ${token}`;
@@ -1961,7 +1961,6 @@ function remoteQueueStatusUrl(env: Record<string, string>): string {
 }
 
 function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
-  const authCode = requestAuthCode(req, env);
   const queueToken = firstUsableToken(queueWssToken(env));
   const token = firstUsableToken(
     env.SUPERMTNODE_APP_TOKEN,
@@ -1970,6 +1969,7 @@ function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMess
     env.LIQUIDATION_SNAPSHOT_TOKEN,
     env.MANAGE_INGEST_TOKEN,
   );
+  const authCode = token ? undefined : requestAuthCode(req, env);
   return {
     accept: "application/json",
     ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),

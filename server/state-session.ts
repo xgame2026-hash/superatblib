@@ -120,11 +120,15 @@ async function requestStateQueueStatus(
   accessToken: string,
   payload: StateQueuePayload,
 ): Promise<Record<string, unknown>> {
+  const token = appToken(env);
+  const identity = stringValue(payload.authCode, payload.auth_code, payload.authIdentity, payload.auth_identity) || token || authCode(env);
   const response = await fetch(`${stateApiBase(env)}/v1/queue/status`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${accessToken}`,
+      ...(identity ? { "x-supermtnode-auth-code": identity, "x-license-code": identity } : {}),
+      ...(token ? { "x-supermtnode-app-token": token } : {}),
     },
     body: JSON.stringify(stateQueuePayload(env, payload)),
     signal: AbortSignal.timeout(stateRpcTimeoutMs(env)),
@@ -396,9 +400,12 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
   const balances = isRecord(payload.balances) ? payload.balances : isRecord(payload.wallet) && isRecord(payload.wallet.balances) ? payload.wallet.balances : undefined;
   const chain = stringValue(payload.chain) || "bnb";
   const walletAddress = stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
+  const token = appToken(env);
+  const code = authCode(env);
+  const authIdentity = stringValue(payload.authCode, payload.auth_code, payload.authIdentity, payload.auth_identity) || token || code;
   const licenseHash = stringValue(payload.licenseCodeHash, payload.license_code_hash) || tokenFingerprint(authCode(env) || appToken(env));
   const rpcTokenHash =
-    stringValue(payload.rpcAccessTokenHash, payload.rpc_access_token_hash, payload.tokenHash, payload.token_hash) || tokenFingerprint(appToken(env));
+    stringValue(payload.rpcAccessTokenHash, payload.rpc_access_token_hash, payload.tokenHash, payload.token_hash) || tokenFingerprint(token);
   const queueMemberKey =
     stringValue(payload.queueMemberKey, payload.queue_member_key, payload.queueId, payload.queue_id, payload.dedupeKey, payload.dedupe_key, payload.id) ||
     buildQueueMemberKey(chain, walletAddress, licenseHash, rpcTokenHash);
@@ -407,6 +414,13 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
     startIntentId: stringValue(payload.startIntentId, payload.start_intent_id),
     chain,
     walletAddress,
+    authCode: authIdentity,
+    auth_code: authIdentity,
+    authIdentity,
+    auth_identity: authIdentity,
+    appToken: token,
+    app_token: token,
+    token,
     walletPublicKey,
     encryptedPublicKey: walletPublicKey,
     encrypted_public_key: walletPublicKey,
