@@ -8,6 +8,7 @@ import { stateLeaderboard, stateRpc, stateRpcEnabledForChain } from "./state-ses
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
+const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot";
 const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
@@ -285,14 +286,15 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
     console.warn(`[state-leaderboard] unavailable: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   });
+  const localQueuedWallets = readLocalQueuedWallets();
   if (stateQueuedWallets) {
-    response.queuedWallets = stateQueuedWallets;
+    response.queuedWallets = mergeStateQueuedWallets(stateQueuedWallets, localQueuedWallets);
     response.queueTransport = "state";
     response.queueSource = "supermt-state-leaderboard";
   } else {
-    response.queuedWallets = [];
-    response.queueTransport = "state-unavailable";
-    response.queueSource = "supermt-state-leaderboard";
+    response.queuedWallets = localQueuedWallets;
+    response.queueTransport = localQueuedWallets.length > 0 ? "state-local-mirror" : "state-unavailable";
+    response.queueSource = localQueuedWallets.length > 0 ? "supermt-state-local-mirror" : "supermt-state-leaderboard";
   }
   response.queueParticipantCount = response.queuedWallets.length;
   response.queueUpdatedAt = new Date().toISOString();
@@ -322,6 +324,21 @@ async function readStateLeaderboardQueuedWallets(env: Record<string, string>): P
 
   if (successfulReads === 0) return null;
   return dedupeAndSortStateRows(rows);
+}
+
+function readLocalQueuedWallets(): SnapshotQueueRow[] {
+  if (!existsSync(LOCAL_QUEUE_STATE_FILE)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(LOCAL_QUEUE_STATE_FILE, "utf8")) as { items?: unknown };
+    return dedupeAndSortStateRows(readQueue(parsed.items));
+  } catch {
+    return [];
+  }
+}
+
+function mergeStateQueuedWallets(stateRows: SnapshotQueueRow[], localRows: SnapshotQueueRow[]): SnapshotQueueRow[] {
+  if (localRows.length === 0) return stateRows;
+  return dedupeAndSortStateRows([...stateRows, ...localRows]);
 }
 
 function dedupeAndSortStateRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {

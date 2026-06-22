@@ -104,8 +104,14 @@ export async function stateLogout(env: Record<string, string>): Promise<void> {
 }
 
 export async function stateLeaderboard(env: Record<string, string>, chain: ChainKey = "bnb", limit = 50): Promise<Record<string, unknown>> {
+  const token = appToken(env);
+  const identity = token || authCode(env);
   const response = await fetch(`${stateApiBase(env)}/v1/leaderboard?chain=${encodeURIComponent(chain)}&limit=${encodeURIComponent(String(limit))}`, {
-    headers: { accept: "application/json" },
+    headers: {
+      accept: "application/json",
+      ...(identity ? { "x-supermtnode-auth-code": identity, "x-license-code": identity } : {}),
+      ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-app-token": token } : {}),
+    },
     signal: AbortSignal.timeout(stateRpcTimeoutMs(env)),
   });
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
