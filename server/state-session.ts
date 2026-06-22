@@ -49,7 +49,7 @@ type StateQueuePayload = Record<string, unknown> & {
 let sessionPromise: Promise<StateSessionFile> | null = null;
 
 export function stateRpcEnabled(env: Record<string, string>): boolean {
-  return Boolean(stateApiBase(env) && authCode(env) && appToken(env) && env.PRIVATE_KEY?.trim());
+  return Boolean(stateApiBase(env) && (appToken(env) || authCode(env)) && env.PRIVATE_KEY?.trim());
 }
 
 export function stateRpcEnabledForChain(chain: ChainKey, env: Record<string, string>): boolean {
@@ -223,21 +223,22 @@ async function loginStateSession(env: Record<string, string>): Promise<StateSess
   const walletPublicKey = privateKeyToPublicKey(privateKey);
   const code = authCode(env);
   const token = appToken(env);
+  const submittedCode = token ? "" : code;
   const runtime = stateRuntimeSettings(env);
-  const authIdentity = code || token;
+  const authIdentity = token || submittedCode;
   const privateKeyCipher = encryptForTxWallet(privateKey, readTxPublicKeyPem(env));
   const response = await fetch(`${stateApiBase(env)}/v1/auth/login`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(code ? { "x-supermtnode-auth-code": code, "x-license-code": code } : {}),
+      ...(submittedCode ? { "x-supermtnode-auth-code": submittedCode, "x-license-code": submittedCode } : {}),
       ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-app-token": token } : {}),
     },
     body: JSON.stringify({
       source: "liq2-client",
       walletAddress,
       username: walletAddress.slice(2, 10).toLowerCase(),
-      authCode: code,
+      authCode: submittedCode,
       token,
       appToken: token,
       authIdentity,
