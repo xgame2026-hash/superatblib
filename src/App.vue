@@ -675,32 +675,12 @@ async function submitLogin() {
     sessionStorage.setItem(AUTH_CODE_SESSION_KEY, code);
     sessionStorage.setItem(AUTH_STORAGE_KEY, "authorized");
     isAuthenticated.value = true;
-    await applySuperMtNodeEndpoints(code);
     ElMessage.success("授权验证成功");
   } catch (error) {
     authMessage.value = error instanceof Error ? error.message : "授权服务暂时不可用";
     authMessageType.value = "error";
   } finally {
     loginLoading.value = false;
-  }
-}
-
-async function applySuperMtNodeEndpoints(code = authCode.value.trim().toUpperCase()) {
-  const token = settingsForm.superMtNodeAppToken.trim();
-  if (!token && !code) return;
-  const response = await fetchSettingsApi("/api/settings/apply-license-endpoints", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(code ? { "x-supermtnode-auth-code": code } : {}),
-      ...(token ? { "x-supermtnode-app-token": token, authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ code, token }),
-  });
-  const payload = (await response.json().catch(() => ({}))) as { applied?: Record<string, string>; error?: string };
-  if (!response.ok) throw new Error(payload.error ?? "授权 RPC 端点绑定失败");
-  if (payload.applied && Object.keys(payload.applied).length) {
-    await loadSettings({ syncRuntimePort: true });
   }
 }
 
