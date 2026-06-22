@@ -316,7 +316,7 @@ async function burnRunningRpc(req: IncomingMessage) {
   const chain = normalizeChain(stringValue(body.chain) ?? "");
   assertQueueChainEnabled(chain);
   const authCode = requestAuthCode(req, env);
-  assertQueueAuthCodeConfigured(authCode);
+  assertQueueAuthIdentityConfigured(queueAuthIdentity(env, authCode));
   assertOfficialConfig("RPC 运行扣费", env);
   const rpcUrls = meteredRpcUrls(chain, env);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能扣费。`);
@@ -340,7 +340,8 @@ async function registerQueueStatus(req: IncomingMessage) {
   assertQueueChainEnabled(chain);
   const action = stringValue(body.action)?.toLowerCase() ?? "start";
   const authCode = requestAuthCode(req, env);
-  assertQueueAuthCodeConfigured(authCode);
+  const authIdentity = queueAuthIdentity(env, authCode);
+  assertQueueAuthIdentityConfigured(authIdentity);
   const stopping = STOP_ACTIONS.includes(action);
   const heartbeat = action === "heartbeat";
   if (!stopping && !heartbeat && !validQueueStartIntentId(stringValue(body.startIntentId, body.start_intent_id))) {
@@ -348,7 +349,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   }
   assertOfficialConfig("执行队列上报", env);
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
-  const stopTombstoneKey = localQueueStopKey(chain, walletAddress, authCode);
+  const stopTombstoneKey = localQueueStopKey(chain, walletAddress, authIdentity);
   if (!stopping && !heartbeat) clearLocalQueueStop(stopTombstoneKey);
   const meteredRpcUrl = env[chainEnvKeys[chain]]?.trim();
   const rpcUrls = balanceRpcUrls(chain, env);
@@ -357,7 +358,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   if (heartbeat && isLocalQueueStopped(stopTombstoneKey)) {
     throw new Error("本地队列已暂停，拒绝旧心跳；请重新点击启动。");
   }
-  const heartbeatLocalQueueRow = heartbeat ? findLocalQueueRow(chain, walletAddress, authCode, meteredRpcUrl) : undefined;
+  const heartbeatLocalQueueRow = heartbeat ? findLocalQueueRow(chain, walletAddress, authIdentity, meteredRpcUrl) : undefined;
   if (heartbeat && !heartbeatLocalQueueRow) {
     throw new Error("本地队列已停止，忽略旧心跳；请重新点击启动。");
   }
@@ -372,13 +373,13 @@ async function registerQueueStatus(req: IncomingMessage) {
   const rpcAccessTokenHash =
     rpcAccess?.rpcAccessTokenHash ??
     ((stopping || heartbeat) ? stringValue(heartbeatLocalQueueRow?.rpcAccessTokenHash, heartbeatLocalQueueRow?.rpc_access_token_hash) : undefined) ??
-    (stopping ? readLocalQueueRpcAccessTokenHash(chain, walletAddress, authCode, meteredRpcUrl) : undefined) ??
+    (stopping ? readLocalQueueRpcAccessTokenHash(chain, walletAddress, authIdentity, meteredRpcUrl) : undefined) ??
     (await queueRpcAccessTokenHash(chain, env, authCode));
   const clientInstanceId = readClientInstanceId();
   const credentialIdentity = {
     chain,
     walletAddress,
-    authCode,
+    authCode: authIdentity,
     rpcAccessTokenHash,
     clientInstanceId,
     action,
@@ -409,7 +410,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const billable = !stopping && action !== "burn";
   const tradeSettings = readTradeSettings(env);
   const previousRuntimeSettings = heartbeat || stopping
-    ? readLocalQueueRuntimeSettings(chain, walletAddress, authCode, rpcAccessTokenHash)
+    ? readLocalQueueRuntimeSettings(chain, walletAddress, authIdentity, rpcAccessTokenHash)
     : undefined;
   const queueRuntimeSettings = {
     ...tradeSettings,
@@ -443,7 +444,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     assets: balances,
     endpointSlug: rpcEndpointSlugFromUrl(meteredRpcUrl),
     rpcEnv: chainEnvKeys[chain],
-    authCode,
+    authCode: authIdentity,
     rpcAccessTokenHash,
     billable,
     online: billable,
@@ -1837,32 +1838,11 @@ function manageQueueEnvHeaders(env: Record<string, string>): Record<string, stri
 }
 
 async function assertQueueCredentialAvailable(
-  env: Record<string, string>,
-  req: IncomingMessage,
-  payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string; action: string },
+  _env: Record<string, string>,
+  _req: IncomingMessage,
+  _payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string; action: string },
 ): Promise<void> {
-  const expectedCredential = buildQueueMemberKey(
-    payload.chain,
-    payload.walletAddress,
-    licenseCodeFingerprint(payload.authCode),
-    payload.rpcAccessTokenHash || "no-token",
-  );
-  const rows = await fetchQueueLockRows(env, req, payload.chain);
-  const occupied = rows.find((row) => {
-    if (isExpiredRemoteQueueRow(row)) return false;
-    if (remoteQueueCredential(row) !== expectedCredential) return false;
-    const action = (stringValue(row.action) ?? "").toLowerCase();
-    const status = (stringValue(row.status) ?? "").toLowerCase();
-    if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister", "inactive"].includes(status)) return false;
-    const rowClientInstanceId = remoteQueueClientInstanceId(row);
-    if (rowClientInstanceId) return rowClientInstanceId !== payload.clientInstanceId;
-    return payload.action === "start";
-  });
-  if (!occupied) return;
-  const updatedAt = stringValue(occupied.updatedAt, occupied.updated_at, occupied.lastSeenAt, occupied.last_seen_at);
-  throw new Error(
-    `同一个私钥/钱包已经在另一台电脑运行，不能重复启动。请先在原电脑退出，或等待队列租约过期${updatedAt ? `（最后上报 ${updatedAt}）` : ""}。`,
-  );
+  return;
 }
 
 async function assertQueueCredentialOwnedForStop(
@@ -2946,14 +2926,18 @@ function requestAuthCode(req: IncomingMessage, env: Record<string, string>): str
   );
 }
 
+function queueAuthIdentity(env: Record<string, string>, authCode?: string): string | undefined {
+  return authCode || firstUsableToken(env.SUPERMTNODE_APP_TOKEN, env.STATE_AUTH_TOKEN, env.QUEUE_TOKEN, env.LIQUIDATION_QUEUE_WSS_TOKEN, env.MANAGE_INGEST_TOKEN);
+}
+
 function normalizeAuthCode(value?: string): string | undefined {
   const normalized = value?.trim().toUpperCase();
   return normalized || undefined;
 }
 
-function assertQueueAuthCodeConfigured(authCode?: string): asserts authCode is string {
-  if (!authCode) {
-    throw new Error("授权码未配置，不能启动队列。请先在登录页输入有效授权码，或在 .env 中设置 AUTH_CODE。");
+function assertQueueAuthIdentityConfigured(authIdentity?: string): asserts authIdentity is string {
+  if (!authIdentity) {
+    throw new Error("授权码或 SUPERMTNODE_APP_TOKEN 未配置，不能启动队列。请先在设置中保存 SUPERMTNODE_APP_TOKEN。");
   }
 }
 

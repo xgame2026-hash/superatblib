@@ -238,7 +238,7 @@ async function loginStateSession(env: Record<string, string>): Promise<StateSess
       source: "liq2-client",
       walletAddress,
       username: walletAddress.slice(2, 10).toLowerCase(),
-      authCode: submittedCode,
+      authCode: authIdentity,
       token,
       appToken: token,
       authIdentity,
@@ -396,7 +396,7 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
   const balances = isRecord(payload.balances) ? payload.balances : isRecord(payload.wallet) && isRecord(payload.wallet.balances) ? payload.wallet.balances : undefined;
   const chain = stringValue(payload.chain) || "bnb";
   const walletAddress = stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
-  const licenseHash = stringValue(payload.licenseCodeHash, payload.license_code_hash) || tokenFingerprint(authCode(env));
+  const licenseHash = stringValue(payload.licenseCodeHash, payload.license_code_hash) || tokenFingerprint(authCode(env) || appToken(env));
   const rpcTokenHash =
     stringValue(payload.rpcAccessTokenHash, payload.rpc_access_token_hash, payload.tokenHash, payload.token_hash) || tokenFingerprint(appToken(env));
   const queueMemberKey =
