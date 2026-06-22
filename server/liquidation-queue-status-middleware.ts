@@ -24,7 +24,7 @@ const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.5.0";
+const CLIENT_VERSION = "1.5.2";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -473,7 +473,14 @@ async function registerQueueStatus(req: IncomingMessage) {
     payload: { ok: true, source: "supermt-state-stop" },
   };
   let transportWarning: string | undefined;
-  if (heartbeat && allowQueueHttpFallback(env)) {
+  if (heartbeat && stateRpcEnabled(env)) {
+    transportWarning = "heartbeat 使用 Rust state API 续租，避免旧队列令牌影响在线状态。";
+    transportResult = {
+      endpoint: "state",
+      transport: "http",
+      payload: { ok: true, source: "supermt-state-heartbeat" },
+    };
+  } else if (heartbeat && allowQueueHttpFallback(env)) {
     transportWarning = "heartbeat 使用 HTTP 续租，避免 WSS 抖动影响在线状态。";
     transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
   } else if (wssEndpoint) {
@@ -599,10 +606,12 @@ async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, str
   const now = new Date();
   const payload = backgroundHeartbeatPayload(session.payload, session.intervalMs, now);
   try {
-    await sendManageQueuePayloadHttp(endpoint, env, payload);
-    updateLocalQueueState(payload);
     const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
     await syncStateQueueStatus(env, payload, localQueueItem);
+    if (!stateRpcEnabled(env)) {
+      await sendManageQueuePayloadHttp(endpoint, env, payload);
+    }
+    updateLocalQueueState(payload);
     session.payload = payload;
     session.lastOkAt = now.toISOString();
     session.lastError = undefined;

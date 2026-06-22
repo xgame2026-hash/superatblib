@@ -1,6 +1,6 @@
 # SuperARB Client
 
-Version: 1.5.0
+Version: 1.5.2
 
 Local dashboard for monitoring supported market data and runtime status.
 

@@ -269,8 +269,8 @@ type MarketSnapshotStat = {
   value: string;
 };
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.5.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.5.2";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.2";
 const unconfiguredMarket: MarketOption = {
   value: "unconfigured",
   label: "未配置执行市场",
