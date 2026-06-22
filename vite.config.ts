@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import vue from "@vitejs/plugin-vue";
+import { execSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { handleGithubVersionRequest } from "./server/github-version-middleware";
@@ -15,8 +16,12 @@ import { bootstrapPrivateMemberWalletOnce } from "./server/private-member-wallet
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const dashboardPort = normalizePort(env.DASHBOARD_PORT, 4311);
+  const gitCommit = shortGitCommit();
 
   return {
+  define: {
+    __APP_GIT_COMMIT__: JSON.stringify(gitCommit),
+  },
   plugins: [
     vue(),
     {
@@ -84,6 +89,14 @@ export default defineConfig(({ mode }) => {
   },
   };
 });
+
+function shortGitCommit(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
 
 function normalizePort(value: string | undefined, fallback: number): number {
   const port = Number(value);
