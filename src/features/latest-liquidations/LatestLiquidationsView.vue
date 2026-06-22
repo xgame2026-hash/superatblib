@@ -159,8 +159,8 @@ const errorMessage = ref("");
 const walletSearchQuery = ref("");
 const currentPage = ref(1);
 const pageSize = 15;
-const AUTH_CODE_KEY = "liq2-auth-code";
-const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.5.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.0";
 let latestRefreshTimer = 0;
 let activeQueueTimer = 0;
 let latestLoadedAt = 0;
@@ -359,7 +359,7 @@ function markWssStaleIfNeeded(): void {
 }
 
 function latestHeaders(): Record<string, string> {
-  const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+  const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
   return {
     accept: "application/json",
     ...(authCode ? { "x-supermtnode-auth-code": authCode } : {}),

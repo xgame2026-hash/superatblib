@@ -357,9 +357,9 @@ type QueueKey =
   | "heartbeatIntervalMs"
   | "txEventsUrl";
 
-const AUTH_STORAGE_KEY = "liq2-auth-session";
-const AUTH_CODE_KEY = "liq2-auth-code";
-const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const AUTH_STORAGE_KEY = "superarb-auth-session-v1.5.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.5.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.0";
 const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
@@ -557,8 +557,9 @@ const metrics = ref([
 let notLaunchedReminderTimer = 0;
 
 onMounted(() => {
-  authCode.value = localStorage.getItem(AUTH_CODE_KEY) ?? sessionStorage.getItem(AUTH_CODE_SESSION_KEY) ?? "";
-  isAuthenticated.value = localStorage.getItem(AUTH_STORAGE_KEY) === "authorized";
+  clearLegacyAuthCache();
+  authCode.value = sessionStorage.getItem(AUTH_CODE_SESSION_KEY) ?? localStorage.getItem(AUTH_CODE_KEY) ?? "";
+  isAuthenticated.value = sessionStorage.getItem(AUTH_STORAGE_KEY) === "authorized";
   applyViewFromUrl();
   syncViewHash(activeView.value);
   loadSettings({ syncRuntimePort: true });
@@ -624,6 +625,11 @@ function syncViewHash(view: ViewKey): void {
   window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${targetHash}`);
 }
 
+function clearLegacyAuthCache(): void {
+  ["liq2-auth-session", "liq2-auth-code"].forEach((key) => localStorage.removeItem(key));
+  ["liq2-auth-session", "liq2-auth-code-session"].forEach((key) => sessionStorage.removeItem(key));
+}
+
 function applyViewFromUrl(): void {
   const view = readViewFromUrl();
   if (view) activeView.value = view;
@@ -667,7 +673,7 @@ async function submitLogin() {
       localStorage.removeItem(AUTH_CODE_KEY);
     }
     sessionStorage.setItem(AUTH_CODE_SESSION_KEY, code);
-    localStorage.setItem(AUTH_STORAGE_KEY, "authorized");
+    sessionStorage.setItem(AUTH_STORAGE_KEY, "authorized");
     isAuthenticated.value = true;
     await applySuperMtNodeEndpoints(code);
     ElMessage.success("授权验证成功");
@@ -700,6 +706,7 @@ async function applySuperMtNodeEndpoints(code = authCode.value.trim().toUpperCas
 
 function logout() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
+  sessionStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_CODE_SESSION_KEY);
   isAuthenticated.value = false;
   githubMenuOpen.value = false;

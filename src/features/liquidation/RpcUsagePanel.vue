@@ -32,8 +32,8 @@ type RpcUsageMetric = {
 const loading = ref(false);
 const error = ref("");
 const rpcUsage = ref<Record<ChainKey, RpcUsageMetric>>(createEmptyRpcUsage());
-const AUTH_CODE_KEY = "liq2-auth-code";
-const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.5.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.0";
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const RPC_USAGE_REFRESH_INTERVAL_MS = 60_000;
 const RPC_USAGE_TICK_INTERVAL_MS = 1_000;
@@ -80,7 +80,7 @@ async function refresh() {
   loading.value = true;
   error.value = "";
   try {
-    const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+    const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
     const response = await fetch("/api/rpc/usage", {
       headers: {
         accept: "application/json",

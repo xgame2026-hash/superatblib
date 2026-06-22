@@ -174,8 +174,8 @@ const sources = ref<SourceRow[]>([]);
 const queue = ref<QueueRow[]>([]);
 const strategies = ref<StrategyRow[]>([]);
 const updatedAt = ref("");
-const AUTH_CODE_KEY = "liq2-auth-code";
-const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.5.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.0";
 const TOPIC_SNAPSHOT_CACHE_KEY = "liq2-liquidation-topic-snapshot-cache";
 let snapshotRequested = false;
 
@@ -280,7 +280,7 @@ function saveSnapshotCache() {
 }
 
 function scopedStorageKey(baseKey: string): string {
-  const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+  const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
   return authCode ? `${baseKey}:${hashStorageScope(authCode)}` : baseKey;
 }
 
@@ -318,7 +318,7 @@ function normalizeStrategyStatus(status: string) {
 }
 
 function snapshotHeaders(): Record<string, string> {
-  const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+  const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
   return {
     accept: "application/json",
     ...(authCode ? { "x-supermtnode-auth-code": authCode } : {}),

@@ -182,8 +182,8 @@ const overviewMetrics = ref<OverviewMetric[]>(createOverviewMetrics());
 const animatedOverviewValues = ref<Record<string, number>>({});
 const overviewValueTargets = new Map<string, number>();
 const overviewValueAnimationTimers = new Map<string, number>();
-const AUTH_CODE_KEY = "liq2-auth-code";
-const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.5.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.0";
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const OVERVIEW_METRICS_CACHE_KEY = "liq2-overview-metrics-cache";
 const MARKET_STATUS_CACHE_KEY = "liq2-market-status-cache";
@@ -326,7 +326,7 @@ function saveOverviewMetricsCache() {
 }
 
 function scopedStorageKey(baseKey: string): string {
-  const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+  const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
   return authCode ? `${baseKey}:${hashStorageScope(authCode)}` : baseKey;
 }
 
@@ -454,7 +454,7 @@ async function loadMarketStatus() {
 }
 
 function latestHeaders(): Record<string, string> {
-  const authCode = localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim();
+  const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
   return {
     accept: "application/json",
     ...(authCode ? { "x-supermtnode-auth-code": authCode } : {}),

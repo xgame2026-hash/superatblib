@@ -269,8 +269,8 @@ type MarketSnapshotStat = {
   value: string;
 };
 
-const AUTH_CODE_KEY = "liq2-auth-code";
-const AUTH_CODE_SESSION_KEY = "liq2-auth-code-session";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.5.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.0";
 const unconfiguredMarket: MarketOption = {
   value: "unconfigured",
   label: "未配置执行市场",
@@ -798,7 +798,7 @@ async function loadQueueMonitorStatus(): Promise<void> {
 }
 
 function readAuthCode(): string {
-  return localStorage.getItem(AUTH_CODE_KEY)?.trim() || sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || "";
+  return sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim() || "";
 }
 
 function authHeaders(authCode = readAuthCode()): Record<string, string> {
