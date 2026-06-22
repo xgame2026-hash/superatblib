@@ -107,7 +107,7 @@
                 <img :src="arrowIconUrl" alt="" />
               </span>
             </button>
-            <div v-if="githubMenuOpen" class="github-version-menu" :class="{ 'has-update': githubVersionState === 'update' }">
+            <div v-if="githubMenuOpen" class="github-version-menu" :class="`is-${githubVersionState}`">
               <strong class="github-version-title">
                 <img :src="infoNewIconUrl" alt="" aria-hidden="true" />
                 {{ githubVersionTitle }}

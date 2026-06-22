@@ -584,7 +584,7 @@ input {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #ffffff;
+  color: #f4efff;
   font-size: 14px;
   line-height: 1.35;
 }
@@ -622,8 +622,16 @@ input {
   font-size: 12px;
 }
 
-.github-version-menu.has-update .github-version-title {
-  color: #ffffff;
+.github-version-menu.is-update .github-version-title {
+  color: #ff6b7a;
+}
+
+.github-version-menu.is-latest .github-version-title {
+  color: #54f0a2;
+}
+
+.github-version-menu.is-error .github-version-title {
+  color: #ffb86b;
 }
 
 .ghost-action.el-button {
