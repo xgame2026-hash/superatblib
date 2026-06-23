@@ -728,6 +728,7 @@ async function enrichQueuedWalletBalances(rows: SnapshotQueueRow[], env: Record<
   rows.forEach((row, index) => {
     const wallet = normalizeWallet(row.wallet);
     if (!wallet) return;
+    if (hasQueueUsdtBalance(row)) return;
     const group = rowsByChain.get(row.chain) ?? [];
     group.push({ index, row, wallet });
     rowsByChain.set(row.chain, group);

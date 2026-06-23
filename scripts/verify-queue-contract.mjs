@@ -32,7 +32,7 @@ async function checkStateService() {
     return;
   }
   const health = await healthResponse.json();
-  if (health.ok !== true || health.version !== "1.5.0") fail("state health is not version 1.5.0");
+  if (health.ok !== true || health.version !== "1.5.6") fail("state health is not version 1.5.6");
 
   const leaderboardResponse = await fetch(`${stateUrl}/v1/leaderboard?chain=bnb&limit=5`, { signal: AbortSignal.timeout(8_000) });
   if (!leaderboardResponse.ok) {
@@ -64,11 +64,17 @@ function checkClientContract() {
   if (!queueMiddleware.includes("列队已暂停")) {
     fail("old heartbeats must be rejected after pause");
   }
-  const localStopIndex = queueMiddleware.indexOf("isLocalQueueStopped(stopTombstoneKey)");
-  const localMissingIndex = queueMiddleware.indexOf("!heartbeatLocalQueueRow");
-  const sessionIndex = queueMiddleware.indexOf("await ensureStateSession(env)");
+  const registerStart = queueMiddleware.indexOf("async function registerQueueStatus");
+  const registerEnd = queueMiddleware.indexOf("async function fetchQueueStatus", registerStart);
+  const registerQueueStatus =
+    registerStart >= 0 && registerEnd > registerStart
+      ? queueMiddleware.slice(registerStart, registerEnd)
+      : "";
+  const localStopIndex = registerQueueStatus.indexOf("isLocalQueueStopped(stopTombstoneKey)");
+  const localMissingIndex = registerQueueStatus.indexOf("!heartbeatLocalQueueRow");
+  const sessionIndex = registerQueueStatus.indexOf("await syncStateQueueStatus(env");
   if (localStopIndex < 0 || localMissingIndex < 0 || sessionIndex < 0 || sessionIndex < localStopIndex || sessionIndex < localMissingIndex) {
-    fail("old heartbeat guards must run before state session refresh");
+    fail("old heartbeat guards must run before state queue sync");
   }
   if (!latestMiddleware.includes("supermt-state-leaderboard")) {
     fail("leaderboard must read from the state queue source");

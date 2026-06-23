@@ -382,15 +382,15 @@ async function checkBnbRpc(
 ): Promise<SecurityCheckItem> {
   const rpcUrl = env.BNB_RPC_URL?.trim() ?? "";
   if (!rpcUrl) return { scope, key: "BNB_RPC_URL", label: "BNB RPC", value: "", ok: false, message: "本地未配置" };
+  const bindingSource = bindingSources.find((source) => source.endpoints.some((item) => matchSuperMtNodeEndpoint(item, "bnb", rpcUrl)));
+  const requiresBinding = bindingSources.length > 0;
+  const isBound = !requiresBinding || Boolean(bindingSource);
+  const usage = bindingSource ? readEndpointUsage(bindingSource.endpoints, rpcUrl) : "";
+  const bindingMessage = bindingSource ? `；绑定到${bindingSource.label}` : requiresBinding ? `；未绑定到${bindingSources.map((source) => source.label).join("或")}` : "";
 
   try {
     const chainId = await rpc<string>(rpcUrl, "eth_chainId", [], env);
     const isBnb = chainId.toLowerCase() === "0x38";
-    const bindingSource = bindingSources.find((source) => source.endpoints.some((item) => matchSuperMtNodeEndpoint(item, "bnb", rpcUrl)));
-    const requiresBinding = bindingSources.length > 0;
-    const isBound = !requiresBinding || Boolean(bindingSource);
-    const usage = bindingSource ? readEndpointUsage(bindingSource.endpoints, rpcUrl) : "";
-    const bindingMessage = bindingSource ? `；绑定到${bindingSource.label}` : requiresBinding ? `；未绑定到${bindingSources.map((source) => source.label).join("或")}` : "";
     return {
       scope,
       key: "BNB_RPC_URL",
@@ -400,15 +400,30 @@ async function checkBnbRpc(
       message: `${isBnb ? "RPC 连接正常" : `链 ID 异常：${chainId}`}${bindingMessage}${usage ? `；${usage}` : ""}`,
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isRateLimitError(message)) {
+      return {
+        scope,
+        key: "BNB_RPC_URL",
+        label: "BNB RPC",
+        value: maskUrl(rpcUrl),
+        ok: true,
+        message: `RPC 已配置；当前直连限流，允许继续排队${bindingSource ? `；绑定到${bindingSource.label}` : ""}${usage ? `；${usage}` : ""}`,
+      };
+    }
     return {
       scope,
       key: "BNB_RPC_URL",
       label: "BNB RPC",
       value: maskUrl(rpcUrl),
       ok: false,
-      message: `RPC 检测失败：${error instanceof Error ? error.message : String(error)}`,
+      message: `RPC 检测失败：${message}${bindingMessage}`,
     };
   }
+}
+
+function isRateLimitError(message: string): boolean {
+  return /rate limit|too many requests|429|request limit|quota/i.test(message);
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: Record<string, string>): Promise<T> {

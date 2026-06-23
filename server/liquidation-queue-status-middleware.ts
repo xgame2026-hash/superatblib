@@ -24,7 +24,7 @@ const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.5.5";
+const CLIENT_VERSION = "1.5.6";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -2719,7 +2719,6 @@ async function readQueueBalances(
   try {
     return await readWalletBalancesWithFallback(chain, walletAddress, rpcUrls, env);
   } catch (error) {
-    if (action === "start") throw error;
     const message = error instanceof Error ? error.message : String(error);
     return { rpcUrl: rpcUrls[0], reason: `${chainLabel(chain)} balance check skipped during ${action}: ${message}` };
   }
