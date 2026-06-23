@@ -346,7 +346,12 @@ async function registerQueueStatus(req: IncomingMessage) {
   if (!stopping && !heartbeat && !validQueueStartIntentId(stringValue(body.startIntentId, body.start_intent_id))) {
     throw new Error("启动请求已过期，请刷新页面后重新点击启动。");
   }
-  assertOfficialConfig("执行队列上报", env);
+  let preflightWarning: string | undefined;
+  try {
+    assertOfficialConfig("执行队列上报", env);
+  } catch (error) {
+    preflightWarning = `官方配置检测暂未通过，已按本地 RPC/token 继续启动：${error instanceof Error ? error.message : String(error)}`;
+  }
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
   const stopTombstoneKey = localQueueStopKey(chain, walletAddress, authIdentity);
   if (!stopping && !heartbeat) clearLocalQueueStop(stopTombstoneKey);
@@ -462,7 +467,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     transport: "http",
     payload: { ok: true, source: "supermt-state-stop" },
   };
-  let transportWarning: string | undefined;
+  let transportWarning: string | undefined = preflightWarning;
   if (heartbeat && stateRpcEnabled(env)) {
     transportWarning = "heartbeat 使用 Rust state API 续租，避免旧队列令牌影响在线状态。";
     transportResult = {
@@ -1156,40 +1161,22 @@ function queueWssUrl(env: Record<string, string>): string {
   return env.LIQUIDATION_QUEUE_WSS_URL?.trim() || env.MANAGE_LIQUIDATION_QUEUE_WSS_URL?.trim() || DEFAULT_QUEUE_WSS_URL;
 }
 
-async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<RpcAccessInfo> {
+async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, _authCode?: string): Promise<RpcAccessInfo> {
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
-  if (token) {
-    const tokenExpiry = jwtExpiry(token);
-    if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
-      throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请在 supermtnode.io 更换 token 后再启动。`);
-    }
-    try {
-      const endpoints = await fetchSuperMtNodeEndpoints(env, token);
-      const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-      if (!endpoint) throw new Error(`${chainLabel(chain)} RPC 未绑定到当前 SUPERMTNODE_APP_TOKEN`);
-      return rpcAccessFromEndpoint(chain, endpoint, "SUPERMTNODE_APP_TOKEN", endpointAccessTokenHash(endpoint, token));
-    } catch (error) {
-      throw new Error(`SUPERMTNODE_APP_TOKEN 校验失败：${error instanceof Error ? error.message : String(error)}`);
-    }
+  if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
+  const tokenExpiry = jwtExpiry(token);
+  if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
+    throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请更换 token 后再启动。`);
   }
-
-  let licenseError = "";
-  if (authCode) {
-    try {
-      const endpoints = await fetchSuperMtNodeEndpointsByLicense(env, authCode);
-      const endpoint = endpoints.find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-      if (endpoint) {
-        return rpcAccessFromEndpoint(chain, endpoint, "授权码", endpointAccessTokenHash(endpoint, env.SUPERMTNODE_APP_TOKEN?.trim()));
-      }
-      licenseError = `${chainLabel(chain)} RPC 未绑定到当前授权码`;
-    } catch (error) {
-      licenseError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  throw new Error(licenseError || "SUPERMTNODE_APP_TOKEN 未配置，且授权码未返回可用 RPC，不能启动。");
+  const rpcPlanType = env.RPC_PLAN_TYPE?.trim() || "local-token";
+  return {
+    rpcPlanType,
+    rpcPlanName: env.RPC_PLAN_NAME?.trim() || rpcPlanLabel(rpcPlanType),
+    creditBurnPerSecond: numberValue(env.CREDIT_BURN_PER_SECOND) ?? 1,
+    rpcAccessTokenHash: localRpcTokenFingerprint(rpcUrl, token),
+  };
 }
 
 function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, authLabel: string, rpcAccessTokenHash: string): RpcAccessInfo {
@@ -1307,6 +1294,7 @@ function endpointAccessTokenHash(endpoint: SuperMtNodeEndpoint, fallbackToken?: 
 async function queueRpcAccessTokenHash(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<string> {
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
+  if (rpcUrl && token) return localRpcTokenFingerprint(rpcUrl, token);
   if (!rpcUrl) return tokenFingerprint(token);
 
   if (token) {
@@ -1328,6 +1316,14 @@ async function queueRpcAccessTokenHash(chain: ChainKey, env: Record<string, stri
   }
 
   return tokenFingerprint(token);
+}
+
+function localRpcTokenFingerprint(rpcUrl: string, token: string): string {
+  return tokenFingerprint(`${normalizeComparableUrl(rpcUrl)}\n${token.trim()}`);
+}
+
+function normalizeComparableUrl(value: string | undefined): string {
+  return (value ?? "").trim().replace(/\/+$/, "").toLowerCase();
 }
 
 function normalizeSuperMtNodeEndpointChain(value: unknown): string {
