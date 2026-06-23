@@ -10,7 +10,7 @@ const DEVICE_ID_FILE = resolve(process.cwd(), ".superarb/state-device-id");
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_STATE_API_BASE = "https://state.supermtaccess.com";
 const DEFAULT_LEASE_SAFETY_MS = 15_000;
-const STATE_SESSION_CREDENTIAL_VERSION = "auth-code-license-v2";
+const STATE_SESSION_CREDENTIAL_VERSION = "token-wallet-v3";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 

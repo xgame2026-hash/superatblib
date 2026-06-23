@@ -323,13 +323,8 @@ async fn login(
           COALESCE((c.total_units - c.used_units - c.reserved_units)::text, '0') AS remaining_units
         FROM licenses l
         LEFT JOIN rpc_credits c ON c.license_id = l.id
-        WHERE ($2::text IS NOT NULL AND l.auth_code_hash = $2)
-           OR ($2::text IS NULL AND l.token_hash = $1)
-        ORDER BY CASE
-          WHEN $2::text IS NOT NULL AND l.auth_code_hash = $2 THEN 0
-          WHEN l.token_hash = $1 THEN 1
-          ELSE 2
-        END
+        WHERE l.token_hash = $1 OR ($2::text IS NOT NULL AND l.auth_code_hash = $2)
+        ORDER BY CASE WHEN l.token_hash = $1 THEN 0 ELSE 1 END
         LIMIT 1
         "#,
             &[&token_hash, &auth_code_hash],
@@ -366,10 +361,6 @@ async fn login(
     if parse_time(&license_expires_at)? <= Utc::now() {
         return Err(ApiError::payment_required("TOKEN_EXPIRED", "Token expired"));
     }
-    if remaining_units.parse::<i128>().unwrap_or(0) <= 0 {
-        return Err(ApiError::payment_required("NO_CREDIT", "No RPC credit"));
-    }
-
     let user_row = tx.query_one(
         r#"
         INSERT INTO users (wallet_address, encrypted_public_key)
@@ -829,7 +820,6 @@ async fn require_session(state: &AppState, headers: &HeaderMap) -> ApiResult<Ses
     let lease_expires_at: String = row.get(5);
     let license_status: String = row.get(6);
     let expires_at: String = row.get(7);
-    let remaining_units: String = row.get(8);
     if !matches!(session_status.as_str(), "online" | "recovering")
         || parse_time(&lease_expires_at)? < Utc::now()
     {
@@ -843,9 +833,6 @@ async fn require_session(state: &AppState, headers: &HeaderMap) -> ApiResult<Ses
     }
     if parse_time(&expires_at)? <= Utc::now() {
         return Err(ApiError::payment_required("TOKEN_EXPIRED", "Token expired"));
-    }
-    if remaining_units.parse::<i128>().unwrap_or(0) <= 0 {
-        return Err(ApiError::payment_required("NO_CREDIT", "No RPC credit"));
     }
     Ok(SessionInfo {
         session_id: row.get(0),
