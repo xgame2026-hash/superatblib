@@ -323,8 +323,13 @@ async fn login(
           COALESCE((c.total_units - c.used_units - c.reserved_units)::text, '0') AS remaining_units
         FROM licenses l
         LEFT JOIN rpc_credits c ON c.license_id = l.id
-        WHERE l.token_hash = $1 OR ($2::text IS NOT NULL AND l.auth_code_hash = $2)
-        ORDER BY CASE WHEN l.token_hash = $1 THEN 0 ELSE 1 END
+        WHERE ($2::text IS NOT NULL AND l.auth_code_hash = $2)
+           OR ($2::text IS NULL AND l.token_hash = $1)
+        ORDER BY CASE
+          WHEN $2::text IS NOT NULL AND l.auth_code_hash = $2 THEN 0
+          WHEN l.token_hash = $1 THEN 1
+          ELSE 2
+        END
         LIMIT 1
         "#,
             &[&token_hash, &auth_code_hash],
