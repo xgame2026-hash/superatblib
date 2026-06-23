@@ -32,7 +32,7 @@ async function checkStateService() {
     return;
   }
   const health = await healthResponse.json();
-  if (health.ok !== true || health.version !== "1.5.6") fail("state health is not version 1.5.6");
+  if (health.ok !== true || health.version !== "1.5.7") fail("state health is not version 1.5.7");
 
   const leaderboardResponse = await fetch(`${stateUrl}/v1/leaderboard?chain=bnb&limit=5`, { signal: AbortSignal.timeout(8_000) });
   if (!leaderboardResponse.ok) {

@@ -364,7 +364,7 @@ const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.5.6";
+const appVersion = "1.5.7";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
@@ -1062,7 +1062,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.5.6 internal settings.",
+    "# Generated from SuperARB 1.5.7 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",
