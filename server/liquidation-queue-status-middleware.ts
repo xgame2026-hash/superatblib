@@ -24,7 +24,7 @@ const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.5.4";
+const CLIENT_VERSION = "1.5.5";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -120,8 +120,6 @@ type RpcAccessInfo = {
 
 type WalletBalances = {
   gas: { symbol: string; formatted: string };
-  usdt: { symbol: "USDT"; formatted: string };
-  usdc: { symbol: "USDC"; formatted: string };
   updatedAt: string;
 };
 
@@ -392,7 +390,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   }
 
   const market = queueMarket(chain, body);
-  const balanceResult = heartbeat ? { balances: undefined, reason: "heartbeat balance refresh skipped" } : await readQueueBalances(chain, walletAddress, rpcUrls, env, action);
+  const balanceResult = heartbeat ? { balances: undefined, reason: "heartbeat gas refresh skipped" } : await readQueueBalances(chain, walletAddress, rpcUrls, env, action);
   const balances = balanceResult.balances;
   const gasBalance = balances ? Number(balances.gas.formatted) : null;
   const wssEndpoint = queueWssUrl(env);
@@ -433,9 +431,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     clientInstanceId,
     clientVersion: CLIENT_VERSION,
     walletAddress,
-    wallet: { address: walletAddress, balances },
-    balances,
-    assets: balances,
+    wallet: { address: walletAddress },
     endpointSlug: rpcEndpointSlugFromUrl(meteredRpcUrl),
     rpcEnv: chainEnvKeys[chain],
     authCode: authIdentity,
@@ -542,8 +538,8 @@ async function registerQueueStatus(req: IncomingMessage) {
     queueId: localQueueItem.queueId ?? localQueueItem.queue_id ?? localQueueItem.participantId ?? localQueueItem.id,
     participantId: localQueueItem.participantId ?? localQueueItem.participant_id ?? localQueueItem.queueMemberKey,
     queueMemberKey: localQueueItem.queueMemberKey ?? localQueueItem.queue_member_key,
-    balances,
-    balanceStatus: balances ? "ok" : "skipped",
+    gasBalance: balances?.gas,
+    gasBalanceStatus: balances ? "ok" : "skipped",
     endpoint: transportResult.endpoint,
     transport: transportResult.transport,
     transportWarning,
@@ -705,7 +701,7 @@ async function sendManageQueuePayloadHttp(
   env: Record<string, string>,
   payload: Parameters<typeof manageQueuePayload>[0],
 ): Promise<Record<string, unknown>> {
-  const queuePayload = sanitizeQueueBusinessPayload(manageQueuePayload(payload));
+  const queuePayload = sanitizePrivateQueuePayload(sanitizeQueueBusinessPayload(manageQueuePayload(payload)));
   const response = await fetch(endpoint, {
     method: "POST",
     headers: manageQueueEnvHeaders(env),
@@ -1395,7 +1391,7 @@ async function sendManageQueuePayload(
   req: IncomingMessage,
   payload: Parameters<typeof manageQueuePayload>[0],
 ): Promise<QueueTransportResult> {
-  const queuePayload = sanitizeQueueBusinessPayload(manageQueuePayload(payload));
+  const queuePayload = sanitizePrivateQueuePayload(sanitizeQueueBusinessPayload(manageQueuePayload(payload)));
   if (isWssEndpoint(endpoint)) {
     const responsePayload = await sendQueuePayloadOverWss(endpoint, env, req, queuePayload);
     return { endpoint, transport: "wss", payload: responsePayload };
@@ -1423,6 +1419,48 @@ function sanitizeQueueBusinessPayload<T>(value: T): T {
     sanitized[key] = sanitizeQueueBusinessPayload(child);
   }
   return sanitized as T;
+}
+
+function sanitizePrivateQueuePayload<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => sanitizePrivateQueuePayload(item)) as T;
+  if (!isRecord(value)) return value;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (isStateRuntimeConfigKey(key)) continue;
+    sanitized[key] = sanitizePrivateQueuePayload(child);
+  }
+  return sanitized as T;
+}
+
+function isStateRuntimeConfigKey(key: string): boolean {
+  return [
+    "arbitrageIntensity",
+    "arbitrage_intensity",
+    "credentialAuthMode",
+    "credential_auth_mode",
+    "credentialMode",
+    "credential_mode",
+    "credentialType",
+    "credential_type",
+    "tx2CredentialMode",
+    "tx2_credential_mode",
+    "singleTradeAuthAmountUsdt",
+    "single_trade_auth_amount_usdt",
+    "authorizedAmountUsdt",
+    "authorized_amount_usdt",
+    "tx2SingleTradeAuthAmountUsdt",
+    "tx2_single_trade_auth_amount_usdt",
+    "rpcPlanType",
+    "rpc_plan_type",
+    "rpcPlanName",
+    "rpc_plan_name",
+    "purchasedPlan",
+    "purchased_plan",
+    "packageName",
+    "package_name",
+    "plan",
+    "executionSettings",
+  ].includes(key);
 }
 
 function isPlainAuthCodeKey(key: string): boolean {
@@ -2331,7 +2369,6 @@ function manageQueuePayload(payload: {
         executionSettings: executionSettings(payload),
         tx2: tx2Settings(payload, queueMemberKey),
         asset: `${tokenContracts[payload.chain].gasSymbol} / USDT / USDC`,
-        balances: payload.balances,
         protocol: protocolLabelFromMarket(payload.market),
         market: payload.market,
         rpc: payload.rpcEnv,
@@ -2666,14 +2703,8 @@ function normalizePrivateKey(privateKey: string): string {
 async function readWalletBalances(chain: ChainKey, walletAddress: string, rpcUrl: string, env: Record<string, string>): Promise<WalletBalances> {
   const config = tokenContracts[chain];
   const gas = await rpc<string>(rpcUrl, "eth_getBalance", [walletAddress, "latest"], env).then((value) => formatUnits(hexToBigInt(value), 18, 5));
-  const [usdt, usdc] = await Promise.all([
-    readOptionalTokenBalance(rpcUrl, config.usdt, walletAddress, env),
-    readOptionalTokenBalance(rpcUrl, config.usdc, walletAddress, env),
-  ]);
   return {
     gas: { symbol: config.gasSymbol, formatted: gas },
-    usdt: { symbol: "USDT", formatted: usdt },
-    usdc: { symbol: "USDC", formatted: usdc },
     updatedAt: new Date().toISOString(),
   };
 }

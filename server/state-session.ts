@@ -43,7 +43,6 @@ type StateQueuePayload = Record<string, unknown> & {
   chain?: string;
   walletAddress?: string;
   wallet?: unknown;
-  balances?: unknown;
 };
 
 let sessionPromise: Promise<StateSessionFile> | null = null;
@@ -394,7 +393,6 @@ function stateNetwork(chain: ChainKey, env: Record<string, string>): string {
 
 function stateQueuePayload(env: Record<string, string>, payload: StateQueuePayload): Record<string, unknown> {
   const runtime = stateRuntimeSettings(env);
-  const balances = isRecord(payload.balances) ? payload.balances : isRecord(payload.wallet) && isRecord(payload.wallet.balances) ? payload.wallet.balances : undefined;
   const chain = stringValue(payload.chain) || "bnb";
   const walletAddress = stringValue(payload.walletAddress) || privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
   const token = appToken(env);
@@ -417,8 +415,6 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
     appToken: token,
     app_token: token,
     token,
-    privateKeyCipher: stringValue(payload.privateKeyCipher, payload.private_key_cipher),
-    private_key_cipher: stringValue(payload.privateKeyCipher, payload.private_key_cipher),
     queueId: queueMemberKey,
     queue_id: queueMemberKey,
     participantId: queueMemberKey,
@@ -439,8 +435,6 @@ function stateQueuePayload(env: Record<string, string>, payload: StateQueuePaylo
     rpc_access_token_hash: rpcTokenHash,
     endpointSlug: stringValue(payload.endpointSlug, payload.endpoint_slug),
     market: stringValue(payload.market),
-    balances,
-    usdtBalance: queueUsdtBalance(balances),
     expiresAt: stringValue(payload.expiresAt, payload.expires_at),
     rpcPlanType: stringValue(payload.rpcPlanType, payload.rpc_plan_type) || runtime.rpcPlanType,
     rpcPlanName: stringValue(payload.rpcPlanName, payload.rpc_plan_name) || runtime.rpcPlanName,
@@ -533,13 +527,6 @@ function readTxPublicKeyPem(env: Record<string, string>): string {
   if (configuredPath && existsSync(configuredPath)) return readFileSync(configuredPath, "utf8");
   if (!existsSync(DEFAULT_TX_PUBLIC_KEY_PATH)) throw new Error(`TX wallet public key not found: ${DEFAULT_TX_PUBLIC_KEY_PATH}`);
   return readFileSync(DEFAULT_TX_PUBLIC_KEY_PATH, "utf8");
-}
-
-function queueUsdtBalance(balances: unknown): string | undefined {
-  if (!isRecord(balances)) return undefined;
-  const usdt = balances.usdt ?? balances.USDT;
-  if (isRecord(usdt)) return stringValue(usdt.formatted, usdt.value);
-  return stringValue(usdt, balances.usdtBalance, balances.usdt_balance, balances.usdtAmount, balances.usdt_amount);
 }
 
 function stateRpcChains(env: Record<string, string>): ChainKey[] {

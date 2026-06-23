@@ -73,9 +73,8 @@ export function privateMemberWalletBootstrapStatus(env: Record<string, string>):
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
     const endpoint = privateMemberBootstrapEndpoint(env);
     const txPublicKeyPem = readTxPublicKeyPem(env);
-    const tradeSettings = readTradeSettings(env);
     const state = readState();
-    return hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, tradeSettings, {
+    return hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
       txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
       authIdentityHash: tokenFingerprint(appToken),
     })
@@ -90,8 +89,6 @@ function bootstrapInFlightKey(reason: string, options: BootstrapOptions): string
   return [
     reason,
     options.authCode?.trim() || "",
-    options.rpcPlanType?.trim() || "",
-    options.rpcPlanName?.trim() || "",
   ].join("\n");
 }
 
@@ -115,17 +112,15 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     const username = walletAddress.slice(2, 10).toLowerCase();
     const endpoint = privateMemberBootstrapEndpoint(env);
     const txPublicKeyPem = readTxPublicKeyPem(env);
-    const tradeSettings = readTradeSettings(env);
     const rpcPlan =
       options.rpcPlanType && options.rpcPlanName
         ? { rpcPlanType: options.rpcPlanType, rpcPlanName: options.rpcPlanName }
         : await readRpcPlanInfo(env, appToken);
-    const executionSettings = { ...tradeSettings, ...rpcPlan };
-    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, executionSettings, authIdentity);
+    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, authIdentity);
     const state = readState();
     if (
       state.submitted[stateKey] &&
-      hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, executionSettings, {
+      hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
         txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
         authIdentityHash: tokenFingerprint(authIdentity),
       })
@@ -153,13 +148,6 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
         authIdentity,
         walletAddress,
         privateKeyCipher,
-        arbitrageIntensity: tradeSettings.arbitrageIntensity,
-        arbitrage_intensity: tradeSettings.arbitrageIntensity,
-        credentialAuthMode: tradeSettings.credentialAuthMode,
-        credential_auth_mode: tradeSettings.credentialAuthMode,
-        singleTradeAuthAmountUsdt: tradeSettings.singleTradeAuthAmountUsdt,
-        single_trade_auth_amount_usdt: tradeSettings.singleTradeAuthAmountUsdt,
-        executionSettings,
         encryption: {
           v: 1,
           alg: "RSA-OAEP-256+AES-256-GCM",
@@ -174,21 +162,21 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       return { ok: false, skipped: true, username, walletAddress, endpoint, reason: "remote_bootstrap_endpoint_not_found" };
     }
     if (response.status === 409 || isAlreadySubmittedPayload(payload)) {
-      markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
+      markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...rpcPlan });
       writeState(state);
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
     }
     if (!response.ok || payload.ok === false) {
       const message = stringValue(payload.error, payload.message) || `private.superarb.ai returned HTTP ${response.status}`;
       if (isAlreadySubmittedMessage(message)) {
-        markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
+        markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...rpcPlan });
         writeState(state);
         return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
       }
       throw new Error(message);
     }
 
-    markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...executionSettings });
+    markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...rpcPlan });
     writeState(state);
     return { ok: true, skipped: Boolean(payload.skipped), username, walletAddress, endpoint };
   } catch (error) {
@@ -207,11 +195,8 @@ function markSubmitted(
     txPublicKeyPem: string;
     authIdentity: string;
     endpoint: string;
-    arbitrageIntensity: string;
-    singleTradeAuthAmountUsdt: string;
-    credentialAuthMode: string;
-    rpcPlanType: string;
-    rpcPlanName: string;
+    rpcPlanType?: string;
+    rpcPlanName?: string;
   },
 ): void {
   const { txPublicKeyPem, authIdentity, ...publicPayload } = payload;
@@ -231,7 +216,6 @@ function hasLatestSubmittedWalletSettings(
   state: BootstrapState,
   endpoint: string,
   walletAddress: string,
-  executionSettings: { arbitrageIntensity: string; credentialAuthMode: string; singleTradeAuthAmountUsdt: string; rpcPlanType?: string; rpcPlanName?: string },
   identity?: { txPublicKeyFingerprint?: string; authIdentityHash?: string },
 ): boolean {
   const normalizedEndpoint = endpoint.replace(/\/+$/, "");
@@ -240,13 +224,8 @@ function hasLatestSubmittedWalletSettings(
     .filter((submitted) => submitted.endpoint.replace(/\/+$/, "") === normalizedEndpoint && submitted.walletAddress.toLowerCase() === normalizedWallet)
     .sort((left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime())[0];
   return (
-    latestSubmitted?.arbitrageIntensity === executionSettings.arbitrageIntensity &&
-    latestSubmitted?.credentialAuthMode === executionSettings.credentialAuthMode &&
-    latestSubmitted?.singleTradeAuthAmountUsdt === executionSettings.singleTradeAuthAmountUsdt &&
     (!identity?.txPublicKeyFingerprint || latestSubmitted?.txPublicKeyFingerprint === identity.txPublicKeyFingerprint) &&
-    (!identity?.authIdentityHash || latestSubmitted?.authIdentityHash === identity.authIdentityHash) &&
-    (executionSettings.rpcPlanType === undefined || latestSubmitted?.rpcPlanType === executionSettings.rpcPlanType) &&
-    (executionSettings.rpcPlanName === undefined || latestSubmitted?.rpcPlanName === executionSettings.rpcPlanName)
+    (!identity?.authIdentityHash || latestSubmitted?.authIdentityHash === identity.authIdentityHash)
   );
 }
 
@@ -322,7 +301,6 @@ function submittedStateKey(
   endpoint: string,
   walletAddress: string,
   publicKeyPem: string,
-  executionSettings: { arbitrageIntensity: string; credentialAuthMode: string; singleTradeAuthAmountUsdt: string; rpcPlanType: string; rpcPlanName: string },
   authIdentity: string,
 ): string {
   return crypto
@@ -333,11 +311,6 @@ function submittedStateKey(
       walletAddress.toLowerCase(),
       publicKeyPem,
       authIdentity,
-      executionSettings.arbitrageIntensity,
-      executionSettings.credentialAuthMode,
-      executionSettings.singleTradeAuthAmountUsdt,
-      executionSettings.rpcPlanType,
-      executionSettings.rpcPlanName,
     ].join("\n"))
     .digest("hex");
 }

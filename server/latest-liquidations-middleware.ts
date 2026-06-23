@@ -19,7 +19,7 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const ASSET_CHANGE_CACHE_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_REFRESH_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_ERROR_RETRY_MS = 2 * 60 * 1000;
-const QUEUE_BALANCE_CACHE_MS = 30 * 1000;
+const QUEUE_BALANCE_CACHE_MS = 10 * 1000;
 const DEFAULT_TX2_CONTRACT_EVENTS_API_PATH = "/api/liquidation-queue/contract-events/today";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
@@ -72,6 +72,11 @@ type SnapshotQueueRow = {
   assetChange7d?: string;
   assetChange7Days?: string;
   change7d?: string;
+  usdt?: string;
+  usdtBalance?: string;
+  usdt_balance?: string;
+  usdtAmount?: string;
+  usdt_amount?: string;
   todayAssetChange?: string;
   todayContractChange?: string;
   balances?: unknown;
@@ -304,13 +309,14 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   response.queue = response.queue.filter(isLicensedQueueRow);
   response.queuedWallets = response.queuedWallets.filter(isLicensedQueueRow);
   const queuedWallets = await enrichQueuedWalletBalances(dedupeEndpointQueueRows(response.queuedWallets), env);
-  response.queuedWallets = options.queueOnly ? queuedWallets : await enrichExactTodayContractChanges(queuedWallets, env, authCode);
+  const queuedWalletsWithChanges = options.queueOnly ? queuedWallets : await enrichExactTodayContractChanges(queuedWallets, env, authCode);
+  response.queuedWallets = sortQueueRowsByRealtimeUsdtDesc(queuedWalletsWithChanges);
   return response;
 }
 
 async function readStateLeaderboardQueuedWallets(env: Record<string, string>): Promise<SnapshotQueueRow[] | null> {
   const chains: ChainKey[] = ["bnb", "ethereum", "arbitrum"];
-  const results = await Promise.allSettled(chains.map((chain) => stateLeaderboard(env, chain, 100)));
+  const results = await Promise.allSettled(chains.map((chain) => stateLeaderboard(env, chain, 200)));
   const rows: SnapshotQueueRow[] = [];
   let successfulReads = 0;
 
@@ -347,10 +353,14 @@ function dedupeAndSortStateRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
     if (isExpiredQueueRow(row)) continue;
     merged.set(queueMergeKey(row), row);
   }
-  return [...merged.values()].sort((left, right) => {
-    const rightUsdt = Number((right.balances as { usdt?: { formatted?: string } } | undefined)?.usdt?.formatted ?? "0");
-    const leftUsdt = Number((left.balances as { usdt?: { formatted?: string } } | undefined)?.usdt?.formatted ?? "0");
-    return (Number.isFinite(rightUsdt) ? rightUsdt : 0) - (Number.isFinite(leftUsdt) ? leftUsdt : 0);
+  return sortQueueRowsByRealtimeUsdtDesc([...merged.values()]);
+}
+
+function sortQueueRowsByRealtimeUsdtDesc(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
+  return [...rows].sort((left, right) => {
+    const usdtDelta = queueUsdtNumber(right) - queueUsdtNumber(left);
+    if (usdtDelta !== 0) return usdtDelta;
+    return toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt);
   });
 }
 
@@ -717,7 +727,7 @@ async function enrichQueuedWalletBalances(rows: SnapshotQueueRow[], env: Record<
 
   rows.forEach((row, index) => {
     const wallet = normalizeWallet(row.wallet);
-    if (!wallet || hasQueueUsdtBalance(row)) return;
+    if (!wallet) return;
     const group = rowsByChain.get(row.chain) ?? [];
     group.push({ index, row, wallet });
     rowsByChain.set(row.chain, group);
@@ -763,7 +773,11 @@ function balanceValue(value: unknown): unknown {
 function applyQueueUsdtBalance(row: SnapshotQueueRow, value: string): SnapshotQueueRow {
   const balances = isRecord(row.balances) ? { ...row.balances } : {};
   balances.usdt = { symbol: "USDT", formatted: value };
-  return { ...row, balances };
+  return { ...row, usdt: value, usdtBalance: value, usdt_balance: value, usdtAmount: value, usdt_amount: value, balances };
+}
+
+function queueUsdtNumber(row: SnapshotQueueRow): number {
+  return numberValue(queueUsdtBalanceValue(row), row.usdtBalance, row.usdt_balance, row.usdtAmount, row.usdt_amount, row.usdt) ?? 0;
 }
 
 function queueBalanceRpcUrls(chain: ChainKey, env: Record<string, string>): string[] {

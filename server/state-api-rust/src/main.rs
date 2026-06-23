@@ -15,7 +15,7 @@ use std::{env, net::SocketAddr, sync::Arc};
 use tokio_postgres::{Client, NoTls, Row};
 use tower_http::cors::CorsLayer;
 
-const VERSION: &str = "1.5.4";
+const VERSION: &str = "1.5.5";
 
 #[derive(Clone)]
 struct AppState {
@@ -126,8 +126,6 @@ struct QueueRequest {
     encrypted_public_key: Option<String>,
     #[serde(default)]
     wallet_public_key: Option<String>,
-    #[serde(default)]
-    balances: Option<Value>,
     #[serde(flatten)]
     extra: Value,
 }
@@ -436,7 +434,7 @@ async fn queue_status(State(state): State<Arc<AppState>>, headers: HeaderMap, Js
     upsert_user_wallet(&tx, session.user_id.as_deref(), &session.license_id, &wallet, encrypted_public_key.as_deref(), "online", &metadata, action == "start").await?;
     upsert_runtime_settings(&tx, &session.license_id, &wallet, &runtime, &metadata).await?;
 
-    let usdt_balance = usdt_balance(&body.extra, body.balances.as_ref());
+    let usdt_balance = "0".to_string();
     let today_delta = "0";
     let queue_id = normalize_queue_id(first_string(&[
         body.queue_id.as_deref(),
@@ -815,25 +813,6 @@ fn string_value(value: &Value, keys: &[&str]) -> Option<String> {
 
 fn numeric_string(value: Option<&str>, fallback: &str) -> String {
     value.and_then(|v| v.replace(',', "").parse::<f64>().ok()).map(|v| v.to_string()).unwrap_or_else(|| fallback.to_string())
-}
-
-fn usdt_balance(value: &Value, balances: Option<&Value>) -> String {
-    string_value(value, &["usdtBalance", "usdt_balance", "usdt", "usdtAmount", "usdt_amount"])
-        .or_else(|| balances.and_then(|data| {
-            if let Some(usdt) = data.get("usdt").or_else(|| data.get("USDT")) {
-                if let Some(formatted) = string_field(usdt, "formatted") {
-                    return Some(formatted);
-                }
-                if let Some(value) = usdt.as_str() {
-                    return Some(value.to_string());
-                }
-                if usdt.is_number() {
-                    return Some(usdt.to_string());
-                }
-            }
-            None
-        }))
-        .unwrap_or_else(|| "0".to_string())
 }
 
 fn queue_metadata(value: &Value) -> Value {
