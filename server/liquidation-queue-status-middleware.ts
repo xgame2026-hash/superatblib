@@ -497,9 +497,15 @@ async function registerQueueStatus(req: IncomingMessage) {
   }
 
   if (!stopping) {
-    const stateQueue = await syncStateQueueStatus(env, payload, localQueueItem);
-    if (heartbeat && isStateQueueStopped(stateQueue)) {
-      throw new Error("列队已暂停，请重新点击启动。");
+    try {
+      const stateQueue = await syncStateQueueStatus(env, payload, localQueueItem);
+      if (heartbeat && isStateQueueStopped(stateQueue)) {
+        throw new Error("列队已暂停，请重新点击启动。");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (heartbeat || isFatalStateQueueSyncError(message)) throw error;
+      transportWarning = appendQueueWarning(transportWarning, `state 暂时同步失败，已先进入队列，后台继续同步：${message}`);
     }
   }
   if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
@@ -560,6 +566,14 @@ async function registerQueueStatus(req: IncomingMessage) {
     remoteAvailable: true,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function appendQueueWarning(current: string | undefined, next: string): string {
+  return current ? `${current}；${next}` : next;
+}
+
+function isFatalStateQueueSyncError(message: string): boolean {
+  return /NO_CREDIT|No RPC credit|TOKEN_NOT_ACTIVE|TOKEN_NOT_STARTED|TOKEN_EXPIRED/i.test(message);
 }
 
 function startBackgroundQueueHeartbeat(
