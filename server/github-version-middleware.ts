@@ -47,7 +47,7 @@ export function handleGithubVersionRequest(req: IncomingMessage, res: ServerResp
 
 async function fetchGithubVersion(): Promise<GithubVersionPayload> {
   const env = readEnv();
-  const currentVersion = env.SUPERARB_VERSION?.trim() || "1.5.5";
+  const currentVersion = env.SUPERARB_VERSION?.trim() || readPackageVersion();
   const currentCommit = readBuildCommit();
   const directVersion = env.GITHUB_LATEST_VERSION?.trim();
   const latestUrl = env.GITHUB_LATEST_VERSION_URL?.trim();
@@ -66,7 +66,7 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
     };
   }
 
-  const sourceUrl = latestUrl || (repository ? `https://api.github.com/repos/${repository}/releases/latest` : "");
+  const sourceUrl = latestUrl || (repository ? `https://raw.githubusercontent.com/${repository}/main/package.json` : "");
   if (!sourceUrl) {
     return {
       ok: true,
@@ -81,7 +81,7 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
 
   const text = await fetchVersionText(sourceUrl, repository);
   const latestVersion = normalizeVersion(readVersionFromPayload(text));
-  const latestCommit = repository ? await fetchReleaseCommit(repository, latestVersion) : "";
+  const latestCommit = repository ? await fetchMainCommit(repository) : "";
   if (!latestVersion) {
     throw new Error("GitHub version API did not return a version.");
   }
@@ -98,31 +98,16 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
   };
 }
 
-async function fetchReleaseCommit(repository: string, latestVersion: string): Promise<string> {
-  const tags = [`v${latestVersion}`, latestVersion].filter(Boolean);
-  for (const tag of tags) {
-    const response = await fetch(`https://api.github.com/repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`, {
-      headers: {
-        accept: "application/vnd.github+json, application/json",
-        "user-agent": "SuperARB-dashboard",
-      },
-    });
-    if (!response.ok) continue;
-    const payload = (await response.json().catch(() => ({}))) as { object?: { sha?: unknown; type?: unknown; url?: unknown } };
-    const object = payload.object;
-    if (typeof object?.sha !== "string") continue;
-    if (object.type === "tag" && typeof object.url === "string") {
-      const tagResponse = await fetch(object.url, {
-        headers: {
-          accept: "application/vnd.github+json, application/json",
-          "user-agent": "SuperARB-dashboard",
-        },
-      });
-      const tagPayload = (await tagResponse.json().catch(() => ({}))) as { object?: { sha?: unknown } };
-      if (typeof tagPayload.object?.sha === "string") return tagPayload.object.sha.slice(0, 7);
-    }
-    return object.sha.slice(0, 7);
-  }
+async function fetchMainCommit(repository: string): Promise<string> {
+  const response = await fetch(`https://api.github.com/repos/${repository}/commits/main`, {
+    headers: {
+      accept: "application/vnd.github+json, application/json",
+      "user-agent": "SuperARB-dashboard",
+    },
+  });
+  if (!response.ok) return "";
+  const payload = (await response.json().catch(() => ({}))) as { sha?: unknown };
+  if (typeof payload.sha === "string") return payload.sha.slice(0, 7);
   return "";
 }
 
@@ -135,7 +120,7 @@ async function fetchVersionText(sourceUrl: string, repository: string): Promise<
   });
   if (response.ok) return response.text();
 
-  if (!response.ok && repository && sourceUrl.includes("/releases/latest")) {
+  if (!response.ok && repository) {
     const packageResponse = await fetch(`https://raw.githubusercontent.com/${repository}/main/package.json`, {
       headers: { accept: "application/json, text/plain", "user-agent": "SuperARB-dashboard" },
     });
