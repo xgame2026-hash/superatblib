@@ -401,14 +401,14 @@ async function checkBnbRpc(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (isRateLimitError(message)) {
+    if (isPermissiveRpcCheckError(message)) {
       return {
         scope,
         key: "BNB_RPC_URL",
         label: "BNB RPC",
         value: maskUrl(rpcUrl),
         ok: true,
-        message: `RPC 已配置；当前直连限流，允许继续排队${bindingSource ? `；绑定到${bindingSource.label}` : ""}${usage ? `；${usage}` : ""}`,
+        message: `RPC 已配置；当前直连检测不稳定，允许继续排队${bindingSource ? `；绑定到${bindingSource.label}` : ""}${usage ? `；${usage}` : ""}`,
       };
     }
     return {
@@ -422,8 +422,8 @@ async function checkBnbRpc(
   }
 }
 
-function isRateLimitError(message: string): boolean {
-  return /rate limit|too many requests|429|request limit|quota/i.test(message);
+function isPermissiveRpcCheckError(message: string): boolean {
+  return /rate limit|too many requests|429|request limit|quota|unexpected end of json|invalid json|empty response|timeout|aborted|fetch failed|network|econn|enotfound|eai_again/i.test(message);
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: Record<string, string>): Promise<T> {
@@ -440,7 +440,14 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: R
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     signal: AbortSignal.timeout(4_000),
   });
-  const payload = (await response.json()) as { result?: T; error?: { message?: string } };
+  const text = await response.text();
+  if (!text.trim()) throw new Error("empty response");
+  let payload: { result?: T; error?: { message?: string } };
+  try {
+    payload = JSON.parse(text) as { result?: T; error?: { message?: string } };
+  } catch {
+    throw new Error(`invalid JSON response: ${text.slice(0, 80)}`);
+  }
   if (!response.ok || payload.error || payload.result === undefined) {
     throw new Error(payload.error?.message || `HTTP ${response.status}`);
   }
