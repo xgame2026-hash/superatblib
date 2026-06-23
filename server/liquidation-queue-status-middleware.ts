@@ -509,8 +509,8 @@ async function registerQueueStatus(req: IncomingMessage) {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (heartbeat || isFatalStateQueueSyncError(message)) throw error;
-      transportWarning = appendQueueWarning(transportWarning, `state 暂时同步失败，已先进入队列，后台继续同步：${message}`);
+      if (heartbeat) throw error;
+      throw new Error(`state 提交失败，不能进入排行榜：${message}`);
     }
   }
   if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
@@ -571,14 +571,6 @@ async function registerQueueStatus(req: IncomingMessage) {
     remoteAvailable: true,
     updatedAt: new Date().toISOString(),
   };
-}
-
-function appendQueueWarning(current: string | undefined, next: string): string {
-  return current ? `${current}；${next}` : next;
-}
-
-function isFatalStateQueueSyncError(message: string): boolean {
-  return /NO_CREDIT|No RPC credit|TOKEN_NOT_ACTIVE|TOKEN_NOT_STARTED|TOKEN_EXPIRED/i.test(message);
 }
 
 function startBackgroundQueueHeartbeat(
@@ -649,8 +641,11 @@ async function syncStateQueueStatus(
   localQueueItem?: Record<string, unknown>,
 ): Promise<Record<string, unknown> | undefined> {
   const stateEnv = stateEnvWithQueueIdentity(env, payload);
-  if (!stateRpcEnabled(stateEnv)) return;
   const action = stringValue(payload.action)?.toLowerCase() ?? "start";
+  if (!stateRpcEnabled(stateEnv)) {
+    if (action === "start") throw new Error("state 登录信息不完整：需要 token 和私钥。");
+    return;
+  }
   const required = action === "start" || STOP_ACTIONS.includes(action);
   const attempts = required ? 3 : 1;
   try {
