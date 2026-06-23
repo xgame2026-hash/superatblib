@@ -643,12 +643,13 @@ async function syncStateQueueStatus(
   payload: Parameters<typeof manageQueuePayload>[0],
   localQueueItem?: Record<string, unknown>,
 ): Promise<Record<string, unknown> | undefined> {
-  if (!stateRpcEnabled(env)) return;
+  const stateEnv = stateEnvWithQueueIdentity(env, payload);
+  if (!stateRpcEnabled(stateEnv)) return;
   const action = stringValue(payload.action)?.toLowerCase() ?? "start";
   const required = action === "start" || STOP_ACTIONS.includes(action);
   const attempts = required ? 3 : 1;
   try {
-    const stateQueue = await retryStateQueueStatus(env, { ...(localQueueItem ?? {}), ...payload }, attempts);
+    const stateQueue = await retryStateQueueStatus(stateEnv, { ...(localQueueItem ?? {}), ...payload }, attempts);
     if (action === "heartbeat" && isStateQueueStopped(stateQueue)) {
       throw new Error("列队已暂停，请重新点击启动。");
     }
@@ -662,6 +663,20 @@ async function syncStateQueueStatus(
     }
     if (action === "heartbeat" && /列队已暂停/.test(message)) throw new Error(message);
   }
+}
+
+function stateEnvWithQueueIdentity(
+  env: Record<string, string>,
+  payload: Parameters<typeof manageQueuePayload>[0],
+): Record<string, string> {
+  if (stateRpcEnabled(env)) return env;
+  const payloadRecord = payload as Record<string, unknown>;
+  const authIdentity = stringValue(payloadRecord.authCode, payloadRecord.auth_code, payloadRecord.authIdentity, payloadRecord.auth_identity);
+  if (!authIdentity) return env;
+  return {
+    ...env,
+    AUTH_CODE: env.AUTH_CODE?.trim() || env.SUPERARB_AUTH_CODE?.trim() || env.LICENSE_CODE?.trim() || authIdentity,
+  };
 }
 
 async function retryStateQueueStatus(env: Record<string, string>, payload: Record<string, unknown>, attempts: number): Promise<Record<string, unknown>> {
