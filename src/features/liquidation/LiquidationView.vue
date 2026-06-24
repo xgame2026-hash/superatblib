@@ -432,21 +432,23 @@ function runtimeCreditBurn(runtime?: Record<string, any>): number | null {
 
 function displayQueueId(payload: Record<string, any>) {
   const queueId = String(payload.queueId || payload.participantId || payload.remoteQueueParticipantId || payload.queue?.queueId || payload.queue?.participantId || "");
+  const walletAddress = String(payload.walletAddress || payload.wallet_address || payload.queue?.walletAddress || payload.queue?.wallet_address || "");
+  if (walletAddress) return `${String(payload.chain || payload.queue?.chain || "bnb").toLowerCase()}:${queueWalletTail8(walletAddress)}`;
   if (!queueId) return "--";
   const parts = queueId.split(":");
   if (parts[0] === "license-token-wallet" && parts.length >= 5) {
-    const [, chain, , tokenHash, wallet] = parts;
-    return [chain, tokenHash.slice(0, 6), queueWalletTail(wallet)].filter(Boolean).join("_");
+    const [, chain, , , wallet] = parts;
+    return `${chain}:${queueWalletTail8(wallet)}`;
   }
   if (parts[0] === "license-token-wallet" && parts.length >= 4) {
-    const [, chain, tokenHash, wallet] = parts;
-    return [chain, tokenHash.slice(0, 6), queueWalletTail(wallet)].filter(Boolean).join("_");
+    const [, chain, , wallet] = parts;
+    return `${chain}:${queueWalletTail8(wallet)}`;
   }
   return queueId.length > 36 ? `${queueId.slice(0, 16)}...${queueId.slice(-10)}` : queueId;
 }
 
-function queueWalletTail(value: string): string {
-  return value.replace(/^0x/i, "").slice(-4);
+function queueWalletTail8(value: string): string {
+  return value.replace(/^0x/i, "").slice(-8);
 }
 
 function restoreRunningMarketState() {

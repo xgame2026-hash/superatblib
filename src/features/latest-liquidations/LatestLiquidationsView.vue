@@ -459,26 +459,28 @@ function formatChainLabel(row: QueueRow) {
 }
 
 function formatQueueId(row: QueueRow) {
+  const wallet = rowWallet(row);
+  if (wallet) return `${(row.chain || row.chainLabel || "BNB").toLowerCase()}:${walletTail8(wallet)}`;
   const queueId = row.participantId || row.queueMemberKey || row.endpointId || row.id || row.endpointSlug;
   if (!queueId) return "--";
-  const normalized = formatStateQueueId(queueId);
+  const normalized = formatLegacyQueueId(queueId);
   if (normalized) return normalized;
   return queueId.length > 28 ? `${queueId.slice(0, 12)}...${queueId.slice(-8)}` : queueId;
 }
 
-function formatStateQueueId(queueId: string): string {
+function formatLegacyQueueId(queueId: string): string {
   const parts = queueId.split(":");
   if (parts[0] === "license-token-wallet" && parts.length >= 5) {
-    const [, chain, , tokenHash, wallet] = parts;
-    return [chain, tokenHash.slice(0, 6), walletTail(wallet)].filter(Boolean).join("_");
+    const [, chain, , , wallet] = parts;
+    return `${chain}:${walletTail8(wallet)}`;
   }
   if (parts[0] !== "license-token-wallet" || parts.length < 4) return "";
-  const [, chain, tokenHash, wallet] = parts;
-  return [chain, tokenHash.slice(0, 6), walletTail(wallet)].filter(Boolean).join("_");
+  const [, chain, , wallet] = parts;
+  return `${chain}:${walletTail8(wallet)}`;
 }
 
-function walletTail(value: string): string {
-  return value.replace(/^0x/i, "").slice(-4);
+function walletTail8(value: string): string {
+  return value.replace(/^0x/i, "").slice(-8);
 }
 
 function formatFullWallet(row: QueueRow) {
