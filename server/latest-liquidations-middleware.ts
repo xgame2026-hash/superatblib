@@ -768,6 +768,7 @@ async function enrichQueuedWalletBalances(rows: SnapshotQueueRow[], env: Record<
 function hasQueueUsdtBalance(row: SnapshotQueueRow): boolean {
   const value = queueUsdtBalanceValue(row);
   if (value === undefined) return false;
+  if (row.source === "private-liq2-user-profiles" && numberValue(value) === 0) return false;
   if (typeof value === "number") return Number.isFinite(value);
   return numberValue(value) !== null;
 }
