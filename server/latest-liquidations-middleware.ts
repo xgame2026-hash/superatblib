@@ -11,6 +11,7 @@ const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-que
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot";
 const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
+const DEFAULT_PRIVATE_MEMBER_API_URL = "https://private.superarb.ai";
 const DEFAULT_WSS_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liquidation-queue/status";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const BALANCE_OF_SELECTOR = "0x70a08231";
@@ -315,12 +316,14 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const snapshotUrl = normalizeSnapshotUrl(env.LIQUIDATION_SNAPSHOT_API_URL?.trim() || DEFAULT_SNAPSHOT_API_URL);
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const wssQueue = options.fast ? emptyWssQueueSnapshot() : await fetchWssQueuedWallets(env, req).catch(() => emptyWssQueueSnapshot());
+  const privateProfileRows = await fetchPrivateProfileQueuedWallets(env).catch(() => []);
   const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
   const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
   const localQueuedWallets = readLocalQueuedWallets();
-  response.queuedWallets = dedupeAndSortStateRows([...wssQueue.rows, ...localQueuedWallets]);
-  response.queueTransport = wssQueue.ok ? "private" : localQueuedWallets.length > 0 ? "private-local-mirror" : "private-local-empty";
-  response.queueSource = wssQueue.ok ? "private.superarb.ai" : "private.superarb.ai/local-liq2";
+  response.queuedWallets = dedupeAndSortStateRows([...privateProfileRows, ...wssQueue.rows, ...localQueuedWallets]);
+  response.queueTransport =
+    privateProfileRows.length > 0 ? "private-global" : wssQueue.ok ? "private" : localQueuedWallets.length > 0 ? "private-local-mirror" : "private-local-empty";
+  response.queueSource = privateProfileRows.length > 0 ? "private.superarb.ai/liq2_user_profiles" : wssQueue.ok ? "private.superarb.ai" : "private.superarb.ai/local-liq2";
   response.queueParticipantCount = response.queuedWallets.length;
   response.queueUpdatedAt = new Date().toISOString();
   if (options.queueOnly) {
@@ -412,6 +415,18 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
     rows: readQueue(sourcePayload.items ?? sourcePayload.queue ?? sourcePayload.queues ?? sourcePayload.rows),
     status: sourcePayload,
   };
+}
+
+async function fetchPrivateProfileQueuedWallets(env: Record<string, string>): Promise<SnapshotQueueRow[]> {
+  const privateMemberBase = (env.LIQ2_PRIVATE_MEMBER_API_URL?.trim() || DEFAULT_PRIVATE_MEMBER_API_URL).replace(/\/+$/, "");
+  const response = await fetch(`${privateMemberBase}/api/liq2/leaderboard`, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMs(env)),
+  });
+  if (!response.ok) throw new Error(`private liq2 leaderboard request failed (${response.status})`);
+  const payload = (await response.json()) as SnapshotPayload;
+  const sourcePayload = unwrapPayload(payload);
+  return readQueue((sourcePayload as Record<string, unknown>).queuedWallets ?? sourcePayload.queue ?? sourcePayload.rows ?? []);
 }
 
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
