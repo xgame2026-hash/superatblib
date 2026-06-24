@@ -483,7 +483,7 @@ async function registerQueueStatus(req: IncomingMessage) {
     payload: { ok: true, source: "liq2-local-queue" },
   };
   let transportWarning: string | undefined = preflightWarning;
-  transportWarning = appendWarning(transportWarning, "队列已切到本地+private 模式。");
+  transportWarning = appendWarning(transportWarning, "已使用 private 全局队列同步。");
   if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
 
   let remoteQueue: { verified: true; participantId?: string } | undefined;

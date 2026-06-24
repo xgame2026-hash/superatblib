@@ -290,7 +290,7 @@ async function startMarketExecution() {
     appendTerminal(`排队成功: ${displayQueueId(payload)}`);
     appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
     if (payload.transport === "http" && typeof payload.transportWarning === "string") {
-      appendTerminal(`wss fallback: ${payload.transportWarning}`);
+      appendTerminal(`private sync: ${payload.transportWarning}`);
     }
     if (typeof payload.remoteQueueWarning === "string") appendTerminal(payload.remoteQueueWarning);
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
