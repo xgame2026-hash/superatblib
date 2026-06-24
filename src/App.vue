@@ -473,7 +473,7 @@ const settingsForm = reactive({
   queue: {
     wssUrl: "wss://private.superarb.ai/ws/liquidation-queue-v2",
     wssToken: "",
-    statusUrl: "https://private.superarb.ai/api/liquidation-queue/status",
+    statusUrl: "https://private.superarb.ai/api/liq2/leaderboard",
     heartbeatIntervalMs: "1000",
     txEventsUrl: "",
   } as Record<QueueKey, string>,

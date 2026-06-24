@@ -17,7 +17,7 @@ const CLIENT_INSTANCE_FILE = resolve(process.cwd(), ".superarb/client-instance-i
 const TX_CREDENTIAL_SYNC_STATE_FILE = resolve(process.cwd(), ".superarb/tx-credential-sync.json");
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
-const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
+const DEFAULT_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liq2/leaderboard";
 const DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL = "https://private.superarb.ai/api/internal/liq2-wallet/bootstrap";
 const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2";
 const BALANCE_OF_SELECTOR = "0x70a08231";
@@ -49,9 +49,16 @@ type QueueStatusPayload = {
   chains?: unknown;
   queue?: unknown;
   queues?: unknown;
+  queuedWallets?: unknown;
+  queued_wallets?: unknown;
   rotation?: unknown;
   rotationPolicy?: unknown;
   rotation_policy?: unknown;
+  source?: unknown;
+  queueTransport?: unknown;
+  queue_transport?: unknown;
+  queueParticipantCount?: unknown;
+  queue_participant_count?: unknown;
   participantCount?: unknown;
   participant_count?: unknown;
   members?: unknown;
@@ -840,13 +847,13 @@ async function parseJsonResponse(response: Response): Promise<QueueStatusPayload
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
   if (!contentType.toLowerCase().includes("application/json")) {
-    throw new Error("api.supermtnode.io 队列状态接口尚未返回 JSON，请确认 /api/public/liquidations/queue-status 已部署。");
+    throw new Error("队列状态接口尚未返回 JSON，请确认 private 排行榜接口已部署。");
   }
 
   try {
     return JSON.parse(body) as QueueStatusPayload;
   } catch {
-    throw new Error("api.supermtnode.io 队列状态接口返回了无效 JSON。");
+    throw new Error("队列状态接口返回了无效 JSON。");
   }
 }
 
@@ -854,11 +861,14 @@ function buildQueueStatusResponse(payload: QueueStatusPayload) {
   const sourcePayload = unwrapPayload(payload);
   const updatedAt = stringValue(sourcePayload.updatedAt, sourcePayload.updated_at) ?? new Date().toISOString();
   const rows = readQueueStatusRows(sourcePayload, updatedAt);
-  const participantCount = numberValue(sourcePayload.participantCount, sourcePayload.participant_count, sourcePayload.members) ?? maxParticipantCount(rows);
+  const participantCount =
+    numberValue(sourcePayload.queueParticipantCount, sourcePayload.queue_participant_count, sourcePayload.participantCount, sourcePayload.participant_count, sourcePayload.members) ??
+    maxParticipantCount(rows);
 
   return {
     ok: true,
-    source: "api.supermtnode.io",
+    source: stringValue(sourcePayload.source) ?? "private.superarb.ai/liq2_user_profiles",
+    queueTransport: stringValue(sourcePayload.queueTransport, sourcePayload.queue_transport) ?? "private-global",
     queueEnabled: rows.some((row) => row.inQueue || row.participantCount > 0),
     rotationPolicy: stringValue(sourcePayload.rotationPolicy, sourcePayload.rotation_policy, sourcePayload.rotation) ?? "round_robin",
     participantCount,
@@ -878,6 +888,9 @@ function unwrapPayload(payload: QueueStatusPayload): QueueStatusPayload {
 }
 
 function readQueueStatusRows(payload: QueueStatusPayload, updatedAt: string): QueueStatusRow[] {
+  const privateRows = readPrivateLeaderboardQueueStatusRows(payload, updatedAt);
+  if (privateRows.length > 0) return privateRows;
+
   const source = payload.rows ?? payload.chains ?? payload.queue ?? payload.queues;
   const rows = Array.isArray(source) ? source : isRecord(source) ? Object.entries(source).map(([chain, row]) => ({ chain, ...(isRecord(row) ? row : {}) })) : [];
   const normalized = rows
@@ -898,6 +911,35 @@ function readQueueStatusRows(payload: QueueStatusPayload, updatedAt: string): Qu
     status: "等待队列状态",
     updatedAt,
   }));
+}
+
+function readPrivateLeaderboardQueueStatusRows(payload: QueueStatusPayload, updatedAt: string): QueueStatusRow[] {
+  const queuedWallets = payload.queuedWallets ?? payload.queued_wallets;
+  if (!Array.isArray(queuedWallets)) return [];
+
+  const counts = new Map<ChainKey, number>();
+  for (const row of queuedWallets) {
+    if (!isRecord(row)) continue;
+    const chain = normalizeChain(stringValue(row.chain, row.chainLabel, row.chain_label, row.network));
+    counts.set(chain, (counts.get(chain) ?? 0) + 1);
+  }
+
+  return chainKeys().map((chain) => {
+    const participantCount = counts.get(chain) ?? 0;
+    return {
+      chain,
+      chainLabel: chainLabel(chain),
+      inQueue: participantCount > 0,
+      eligible: participantCount > 0,
+      position: null,
+      participantCount,
+      active: participantCount > 0,
+      cursorIndex: null,
+      nextEligibleAt: "",
+      status: participantCount > 0 ? `${participantCount} 个钱包在线` : "暂无在线钱包",
+      updatedAt,
+    };
+  });
 }
 
 function normalizeQueueStatusRow(row: Record<string, unknown>, fallbackUpdatedAt: string): QueueStatusRow {
@@ -1726,7 +1768,7 @@ function remoteQueueStatusUrl(env: Record<string, string>): string {
   return (
     env.LIQUIDATION_QUEUE_WSS_STATUS_URL?.trim() ||
     env.PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL?.trim() ||
-    (privateMemberBase ? `${privateMemberBase}/api/liquidation-queue/status` : "https://private.superarb.ai/api/liquidation-queue/status")
+    (privateMemberBase ? `${privateMemberBase}/api/liq2/leaderboard` : "https://private.superarb.ai/api/liq2/leaderboard")
   );
 }
 
@@ -1755,7 +1797,7 @@ function unwrapRemoteQueuePayload(payload: unknown): Record<string, unknown> {
 }
 
 function readRemoteQueueRows(payload: Record<string, unknown>): Record<string, unknown>[] {
-  const source = payload.items ?? payload.queue ?? payload.queues ?? payload.rows;
+  const source = payload.queuedWallets ?? payload.queued_wallets ?? payload.items ?? payload.queue ?? payload.queues ?? payload.rows;
   if (Array.isArray(source)) return source.filter(isRecord);
   if (isRecord(source)) return Object.values(source).flatMap((value) => (Array.isArray(value) ? value.filter(isRecord) : isRecord(value) ? [value] : []));
   const nested = [payload.chainQueues, payload.chain_queues, payload.markets, payload.data].filter(isRecord);
@@ -1765,7 +1807,7 @@ function readRemoteQueueRows(payload: Record<string, unknown>): Record<string, u
 function readRemoteQueueRowsFromUnknown(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) return value.flatMap(readRemoteQueueRowsFromUnknown);
   if (!isRecord(value)) return [];
-  const direct = value.items ?? value.queue ?? value.queues ?? value.rows ?? value.members;
+  const direct = value.queuedWallets ?? value.queued_wallets ?? value.items ?? value.queue ?? value.queues ?? value.rows ?? value.members;
   if (Array.isArray(direct)) return direct.filter(isRecord);
   if (isRecord(direct)) return Object.values(direct).flatMap(readRemoteQueueRowsFromUnknown);
   if (remoteQueueWallet(value) || stringValue(value.participantId, value.participant_id, value.queueMemberKey, value.queue_member_key, value.dedupeKey, value.dedupe_key, value.id)) return [value];

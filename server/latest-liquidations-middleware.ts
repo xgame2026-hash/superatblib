@@ -12,7 +12,7 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot";
 const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
 const DEFAULT_PRIVATE_MEMBER_API_URL = "https://private.superarb.ai";
-const DEFAULT_WSS_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liquidation-queue/status";
+const DEFAULT_WSS_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liq2/leaderboard";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -166,6 +166,8 @@ type SnapshotPayload = {
   sources?: unknown;
   queue?: unknown;
   queues?: unknown;
+  queuedWallets?: unknown;
+  queued_wallets?: unknown;
   candidateQueue?: unknown;
   candidate_queue?: unknown;
   strategyCandidates?: unknown;
@@ -401,7 +403,7 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
   const queueUrl =
     env.LIQUIDATION_QUEUE_WSS_STATUS_URL?.trim() ||
     env.PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL?.trim() ||
-    (privateMemberBase ? `${privateMemberBase}/api/liquidation-queue/status` : DEFAULT_WSS_QUEUE_STATUS_API_URL);
+    (privateMemberBase ? `${privateMemberBase}/api/liq2/leaderboard` : DEFAULT_WSS_QUEUE_STATUS_API_URL);
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const response = await fetch(queueUrl, {
     headers: privateMemberQueueStatusHeaders(env, authCode),
@@ -412,7 +414,7 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
   const sourcePayload = unwrapPayload(payload);
   return {
     ok: true,
-    rows: readQueue(sourcePayload.items ?? sourcePayload.queue ?? sourcePayload.queues ?? sourcePayload.rows),
+    rows: readQueue(sourcePayload.queuedWallets ?? sourcePayload.queued_wallets ?? sourcePayload.items ?? sourcePayload.queue ?? sourcePayload.queues ?? sourcePayload.rows),
     status: sourcePayload,
   };
 }
