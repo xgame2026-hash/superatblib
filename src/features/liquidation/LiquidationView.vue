@@ -289,9 +289,6 @@ async function startMarketExecution() {
     queueState.value = payload.eligible === false ? "waiting" : "queued";
     appendTerminal(`排队成功: ${displayQueueId(payload)}`);
     appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
-    if (payload.transport === "http" && typeof payload.transportWarning === "string") {
-      appendTerminal(`private sync: ${payload.transportWarning}`);
-    }
     if (typeof payload.remoteQueueWarning === "string") appendTerminal(payload.remoteQueueWarning);
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
     persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
