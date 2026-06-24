@@ -147,8 +147,8 @@ const emit = defineEmits<{
   "strategies-updated": [rows: SnapshotStrategyRow[]];
 }>();
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.5.3";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.3";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 
 const source = ref("策略扫描器");

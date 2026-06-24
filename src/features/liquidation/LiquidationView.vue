@@ -151,8 +151,8 @@ type SnapshotStrategyRow = {
   updatedAt?: string;
 };
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.5.3";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.3";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
 const unconfiguredMarket: MarketOption = {
   value: "unconfigured",
   label: "未配置执行市场",

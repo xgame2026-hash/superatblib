@@ -355,9 +355,9 @@ type QueueKey =
   | "heartbeatIntervalMs"
   | "txEventsUrl";
 
-const AUTH_STORAGE_KEY = "superarb-auth-session-v1.5.3";
-const AUTH_CODE_KEY = "superarb-auth-code-v1.5.3";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.3";
+const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
 const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
