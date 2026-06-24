@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { stateRpc, stateRpcEnabledForChain } from "./state-session";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const BALANCE_OF_SELECTOR = "0x70a08231";
@@ -153,13 +152,6 @@ async function readOptionalTokenBalance(chain: ChainKey, rpcUrl: string, token: 
 }
 
 async function rpc<T>(chain: ChainKey, rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
-  if (stateRpcEnabledForChain(chain, env)) {
-    try {
-      return await stateRpc<T>(chain, env, method, params);
-    } catch (error) {
-      console.warn(`[state-rpc] ${chain} ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   const response = await fetch(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },

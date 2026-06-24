@@ -259,8 +259,8 @@ async function fetchSuperMtNodeEndpointsByLicenseFrom(apiBaseUrl: string, authCo
     : [];
 }
 
-function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
-  return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), "https://supermtnode.io", "https://api.supermtnode.io"]).map((value) => value.replace(/\/+$/, ""));
+function superMtNodeApiBaseUrls(_env: Record<string, string>): string[] {
+  return ["https://supermtnode.io", "https://api.supermtnode.io"].map((value) => value.replace(/\/+$/, ""));
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

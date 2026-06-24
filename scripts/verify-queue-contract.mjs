@@ -2,9 +2,12 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
-const stateUrl = process.env.VERIFY_STATE_URL || "https://state.supermtaccess.com";
+const privateUrl = process.env.VERIFY_STATE_URL || "https://private.superarb.ai";
+const shouldCheckRemote = process.env.VERIFY_PRIVATE_REMOTE === "1" || Boolean(process.env.VERIFY_STATE_URL);
 const forbiddenUiTerms = ["数据库"];
 const sourceDirs = ["src", "server"];
+const requiredVersion = "1.6.0";
+const requiredProtocol = "liq2-cutover-20260624-v160";
 
 function fail(message) {
   console.error(`queue contract check failed: ${message}`);
@@ -25,30 +28,39 @@ function walk(dir) {
   });
 }
 
-async function checkStateService() {
-  const healthResponse = await fetch(`${stateUrl}/health`, { signal: AbortSignal.timeout(8_000) });
+async function checkPrivateService() {
+  if (!shouldCheckRemote) return;
+  const healthResponse = await fetch(`${privateUrl}/health`, { signal: AbortSignal.timeout(8_000) });
   if (!healthResponse.ok) {
-    fail(`state health HTTP ${healthResponse.status}`);
+    fail(`private health HTTP ${healthResponse.status}`);
+    return;
+  }
+  const contentType = healthResponse.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    fail("private health did not return JSON");
     return;
   }
   const health = await healthResponse.json();
-  if (health.ok !== true || health.version !== "1.5.7") fail("state health is not version 1.5.7");
-
-  const leaderboardResponse = await fetch(`${stateUrl}/v1/leaderboard?chain=bnb&limit=5`, { signal: AbortSignal.timeout(8_000) });
-  if (!leaderboardResponse.ok) {
-    fail(`leaderboard HTTP ${leaderboardResponse.status}`);
-    return;
-  }
-  const leaderboard = await leaderboardResponse.json();
-  if (leaderboard.ok !== true) fail("leaderboard response is not ok");
-  if (!Array.isArray(leaderboard.queuedWallets)) fail("leaderboard queuedWallets is not an array");
+  if (health.ok !== true || health.version !== requiredVersion) fail(`private health is not version ${requiredVersion}`);
 }
 
 function checkClientContract() {
   const liquidationView = read("src/features/liquidation/LiquidationView.vue");
+  const allMarketSnapshot = read("src/features/liquidation/AllMarketSnapshot.vue");
   const queueMiddleware = read("server/liquidation-queue-status-middleware.ts");
   const latestMiddleware = read("server/latest-liquidations-middleware.ts");
+  const privateBootstrap = read("server/private-member-wallet-bootstrap.ts");
+  const stateApi = read("server/state-api-rust/src/main.rs");
+  const profileMigration = read("server/state-api-rust/migrations/20260624_rebuild_liq2_user_profiles.sql");
+  const packageJson = JSON.parse(read("package.json"));
+  const cargoToml = read("server/state-api-rust/Cargo.toml");
 
+  if (packageJson.version !== requiredVersion) fail(`package.json version must be ${requiredVersion}`);
+  if (!cargoToml.includes(`version = "${requiredVersion}"`)) fail(`Cargo.toml version must be ${requiredVersion}`);
+  if (!stateApi.includes(`const VERSION: &str = "${requiredVersion}"`)) fail(`private state API version must be ${requiredVersion}`);
+  if (!stateApi.includes(requiredProtocol) || !queueMiddleware.includes(requiredProtocol) || !privateBootstrap.includes(requiredProtocol)) {
+    fail("liq2 protocol version must be shared by client middleware and private API");
+  }
   if (!liquidationView.includes('registerMarketQueueStart(saved.option, "start")')) {
     fail("refresh restore must perform a full start sync");
   }
@@ -61,7 +73,7 @@ function checkClientContract() {
   if (!queueMiddleware.includes("validQueueStartIntentId")) {
     fail("queue start must require a fresh start intent");
   }
-  if (!queueMiddleware.includes("列队已暂停")) {
+  if (!queueMiddleware.includes("本地队列已暂停")) {
     fail("old heartbeats must be rejected after pause");
   }
   const registerStart = queueMiddleware.indexOf("async function registerQueueStatus");
@@ -72,12 +84,79 @@ function checkClientContract() {
       : "";
   const localStopIndex = registerQueueStatus.indexOf("isLocalQueueStopped(stopTombstoneKey)");
   const localMissingIndex = registerQueueStatus.indexOf("!heartbeatLocalQueueRow");
-  const sessionIndex = registerQueueStatus.indexOf("await syncStateQueueStatus(env");
-  if (localStopIndex < 0 || localMissingIndex < 0 || sessionIndex < 0 || sessionIndex < localStopIndex || sessionIndex < localMissingIndex) {
-    fail("old heartbeat guards must run before state queue sync");
+  if (localStopIndex < 0 || localMissingIndex < 0) {
+    fail("old heartbeat guards must run before any remote private write");
   }
-  if (!latestMiddleware.includes("supermt-state-leaderboard")) {
-    fail("leaderboard must read from the state queue source");
+  if (!privateBootstrap.includes('"/api/internal/liq2-wallet/bootstrap"')) {
+    fail("private bootstrap must write through private.superarb.ai bootstrap endpoint");
+  }
+  for (const term of [
+    "buildProfilePayload",
+    "profilePayloadFingerprint",
+    "privateKeyCipher",
+    "encryptedPrivateKey",
+    "rpcUrl",
+    "rpcToken",
+    "password",
+    "nickname",
+    "walletUsdt",
+  ]) {
+    if (!privateBootstrap.includes(term)) fail(`private bootstrap payload is missing ${term}`);
+  }
+  if (!stateApi.includes('"/api/internal/liq2-wallet/bootstrap"') || !stateApi.includes("async fn liq2_wallet_bootstrap")) {
+    fail("private API must expose liq2 wallet bootstrap");
+  }
+  for (const field of [
+    "system_id",
+    "chain",
+    "wallet_address",
+    "rpc_url",
+    "rpc_token",
+    "password",
+    "encrypted_private_key",
+    "credential_auth_mode",
+    "single_trade_auth_amount_usdt",
+    "arbitrage_intensity",
+    "rpc_plan_type",
+    "rpc_plan_name",
+    "wallet_usdt",
+    "nickname",
+    "status",
+    "heartbeat_at",
+  ]) {
+    if (!profileMigration.includes(field)) fail(`liq2_user_profiles migration is missing ${field}`);
+  }
+  if (!profileMigration.includes("DROP TABLE IF EXISTS liq2_user_profiles") || !profileMigration.includes("TRUNCATE TABLE")) {
+    fail("liq2_user_profiles migration must be a hard cutover");
+  }
+  if (!allMarketSnapshot.includes("/api/market-snapshot")) {
+    fail("all market snapshot must use the independent market snapshot endpoint");
+  }
+  if (liquidationView.includes("/api/latest-liquidations")) {
+    fail("LiquidationView must not fetch the old combined latest-liquidations endpoint for the market snapshot");
+  }
+  if (!latestMiddleware.includes('req.url?.startsWith("/api/market-snapshot")')) {
+    fail("server must expose /api/market-snapshot");
+  }
+  if (!latestMiddleware.includes('queueSource = "liquidation-snapshot-service"') || !latestMiddleware.includes("queuedWallets = []")) {
+    fail("market snapshot endpoint must not merge private queue or local queue data");
+  }
+}
+
+function checkForbiddenHosts() {
+  const forbiddenHosts = [
+    ["manage", "supermtnode", "io"].join("."),
+    ["state", "supermtaccess", "com"].join("."),
+  ];
+  for (const path of [...sourceDirs, ".env.example"]) {
+    const files = statSync(join(root, path)).isDirectory() ? walk(path) : [join(root, path)];
+    for (const file of files) {
+      if (!/\.(vue|ts|js|mjs|json|sql|toml|example)$/.test(file) && !file.endsWith(".env.example")) continue;
+      const text = readFileSync(file, "utf8");
+      for (const host of forbiddenHosts) {
+        if (text.includes(host)) fail(`${relative(root, file)} contains forbidden host: ${host}`);
+      }
+    }
   }
 }
 
@@ -93,10 +172,11 @@ function checkUserFacingText() {
   }
 }
 
-await checkStateService().catch((error) => {
+await checkPrivateService().catch((error) => {
   fail(error instanceof Error ? error.message : String(error));
 });
 checkClientContract();
+checkForbiddenHosts();
 checkUserFacingText();
 
 if (process.exitCode) process.exit(process.exitCode);

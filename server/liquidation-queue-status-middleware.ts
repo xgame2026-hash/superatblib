@@ -9,7 +9,6 @@ import WebSocket from "ws";
 import { assertOfficialConfig } from "./official-config";
 import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootstrap";
 import { queueWssToken } from "./queue-token";
-import { stateLogout, stateQueueStatus, stateRpc, stateRpcEnabled, stateRpcEnabledForChain } from "./state-session";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
@@ -19,12 +18,13 @@ const TX_CREDENTIAL_SYNC_STATE_FILE = resolve(process.cwd(), ".superarb/tx-crede
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://api.supermtnode.io/api/public/liquidations/queue-status";
-const DEFAULT_MANAGE_QUEUE_INGEST_URL = "https://manage.supermtnode.io/api/ingest/liquidation-queue";
+const DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL = "https://private.superarb.ai/api/internal/liq2-wallet/bootstrap";
 const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.5.7";
+const CLIENT_VERSION = "1.6.0";
+const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -168,7 +168,7 @@ type BackgroundQueueSession = {
   timer: ReturnType<typeof setInterval>;
   endpoint: string;
   intervalMs: number;
-  payload: Parameters<typeof manageQueuePayload>[0];
+  payload: Parameters<typeof privateQueuePayload>[0];
   lastOkAt?: string;
   lastError?: string;
   failureCount: number;
@@ -299,8 +299,8 @@ export function restoreLocalQueueHeartbeats(): void {
         online: true,
         billingStatus: "online",
         ...runtime,
-      } as Parameters<typeof manageQueuePayload>[0];
-      const endpoint = manageQueueIngestUrl(env);
+      } as Parameters<typeof privateQueuePayload>[0];
+      const endpoint = privateMemberBootstrapUrl(env);
       startBackgroundQueueHeartbeat(env, endpoint, payload);
       void sendBackgroundQueueHeartbeat(backgroundQueueKey(payload), env, endpoint);
     }
@@ -390,7 +390,10 @@ async function registerQueueStatus(req: IncomingMessage) {
       rpcPlanName: rpcAccess?.rpcPlanName,
     });
     if (!bootstrapResult.ok) {
-      throw new Error(`安全同步失败，不能启动队列：${bootstrapResult.error || bootstrapResult.reason || "private member upload failed"}`);
+      preflightWarning = appendWarning(
+        preflightWarning,
+        `安全同步暂未完成，已继续进队：${bootstrapResult.error || bootstrapResult.reason || "private member upload failed"}`,
+      );
     }
   }
 
@@ -399,7 +402,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   const balances = balanceResult.balances;
   const gasBalance = balances ? Number(balances.gas.formatted) : null;
   const wssEndpoint = queueWssUrl(env);
-  const httpFallbackEndpoint = manageQueueIngestUrl(env);
+  const httpFallbackEndpoint = privateMemberBootstrapUrl(env);
   const generatedAt = new Date();
   const generatedAtIso = generatedAt.toISOString();
   const heartbeatMs = heartbeatIntervalMs(env);
@@ -425,6 +428,10 @@ async function registerQueueStatus(req: IncomingMessage) {
     source: "liq2-client-start",
     queueType: "endpoint-start",
     version: CLIENT_VERSION,
+    protocolVersion: LIQ2_PROTOCOL_VERSION,
+    protocol_version: LIQ2_PROTOCOL_VERSION,
+    liq2ProtocolVersion: LIQ2_PROTOCOL_VERSION,
+    liq2_protocol_version: LIQ2_PROTOCOL_VERSION,
     action,
     startIntentId: stringValue(body.startIntentId, body.start_intent_id),
     generatedAt: generatedAtIso,
@@ -435,8 +442,17 @@ async function registerQueueStatus(req: IncomingMessage) {
     market,
     clientInstanceId,
     clientVersion: CLIENT_VERSION,
+    client_version: CLIENT_VERSION,
     walletAddress,
     wallet: { address: walletAddress },
+    rpcUrl: meteredRpcUrl,
+    rpc_url: meteredRpcUrl,
+    rpcToken: env.SUPERMTNODE_APP_TOKEN?.trim() || undefined,
+    rpc_token: env.SUPERMTNODE_APP_TOKEN?.trim() || undefined,
+    password: env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PASSWORD?.trim() || undefined,
+    walletUsdt: env.WALLET_USDT_BALANCE?.trim() || undefined,
+    wallet_usdt: env.WALLET_USDT_BALANCE?.trim() || undefined,
+    nickname: env.LIQ2_NICKNAME?.trim() || env.NICKNAME?.trim() || undefined,
     endpointSlug: rpcEndpointSlugFromUrl(meteredRpcUrl),
     rpcEnv: chainEnvKeys[chain],
     authCode: authIdentity,
@@ -454,76 +470,24 @@ async function registerQueueStatus(req: IncomingMessage) {
     ...rpcAccess,
     ...txCredentialFields,
   };
-  const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
+  const localQueueItem = publicLocalQueueItem(privateQueuePayload(payload).items[0] as Record<string, unknown>);
   if (stopping) {
     stopBackgroundQueueHeartbeat(backgroundQueueKey(payload), "stopped");
     rememberLocalQueueStop(stopTombstoneKey);
     updateLocalQueueState(payload);
-    await syncStateQueueStatus(env, payload, localQueueItem);
   }
 
   let transportResult: QueueTransportResult = {
-    endpoint: "state",
+    endpoint: "local",
     transport: "http",
-    payload: { ok: true, source: "supermt-state-stop" },
+    payload: { ok: true, source: "liq2-local-queue" },
   };
   let transportWarning: string | undefined = preflightWarning;
-  if (heartbeat && stateRpcEnabled(env)) {
-    transportWarning = "heartbeat 使用 Rust state API 续租，避免旧队列令牌影响在线状态。";
-    transportResult = {
-      endpoint: "state",
-      transport: "http",
-      payload: { ok: true, source: "supermt-state-heartbeat" },
-    };
-  } else if (heartbeat && allowQueueHttpFallback(env)) {
-    transportWarning = "heartbeat 使用 HTTP 续租，避免 WSS 抖动影响在线状态。";
-    transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
-  } else if (wssEndpoint) {
-    try {
-      transportResult = await sendManageQueuePayloadWithRetry(wssEndpoint, env, req, payload, wssQueueRetryCount(env, action));
-    } catch (error) {
-      transportWarning = error instanceof Error ? error.message : String(error);
-      if (stopping) {
-        transportWarning = `旧队列清理失败，state 已暂停：${transportWarning}`;
-      } else if (!allowQueueHttpFallback(env)) {
-        throw new Error(`WSS 队列上报失败：${transportWarning}`);
-      } else {
-        transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
-      }
-    }
-  } else if (!stopping) {
-    if (!allowQueueHttpFallback(env)) {
-      throw new Error("LIQUIDATION_QUEUE_WSS_URL 未配置，不能启动 WSS 队列。");
-    }
-    transportWarning = "LIQUIDATION_QUEUE_WSS_URL 未配置，已使用 HTTP fallback。";
-    transportResult = await sendManageQueuePayload(httpFallbackEndpoint, env, req, payload);
-  } else {
-    transportWarning = "LIQUIDATION_QUEUE_WSS_URL 未配置，state 已暂停。";
-  }
-
-  if (!stopping) {
-    try {
-      const stateQueue = await syncStateQueueStatus(env, payload, localQueueItem);
-      if (heartbeat && isStateQueueStopped(stateQueue)) {
-        throw new Error("列队已暂停，请重新点击启动。");
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (heartbeat) throw error;
-      throw new Error(`state 提交失败，不能进入排行榜：${message}`);
-    }
-  }
+  transportWarning = appendWarning(transportWarning, "队列已切到本地+private 模式。");
   if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
 
   let remoteQueue: { verified: true; participantId?: string } | undefined;
   let remoteQueueWarning: string | undefined;
-  if (!stopping && !heartbeat && remoteQueueVerifyEnabled(env)) {
-    try {
-      remoteQueue = await verifyRemoteQueueRegistration(env, req, payload);
-    } catch (error) {
-      remoteQueueWarning = error instanceof Error ? error.message : String(error);
-    }
-  }
   try {
     if (!stopping) updateLocalQueueState(payload);
   } catch (error) {
@@ -532,11 +496,6 @@ async function registerQueueStatus(req: IncomingMessage) {
 
   if (!stopping && !heartbeat) {
     startBackgroundQueueHeartbeat(env, httpFallbackEndpoint, payload);
-  }
-  if (stopping) {
-    void stateLogout(env).catch((error) => {
-      console.warn(`[state-session] logout failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
   }
 
   return {
@@ -576,7 +535,7 @@ async function registerQueueStatus(req: IncomingMessage) {
 function startBackgroundQueueHeartbeat(
   env: Record<string, string>,
   endpoint: string,
-  payload: Parameters<typeof manageQueuePayload>[0],
+  payload: Parameters<typeof privateQueuePayload>[0],
 ): void {
   const key = backgroundQueueKey(payload);
   stopBackgroundQueueHeartbeat(key, "replace");
@@ -610,11 +569,6 @@ async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, str
   const now = new Date();
   const payload = backgroundHeartbeatPayload(session.payload, session.intervalMs, now);
   try {
-    const localQueueItem = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
-    await syncStateQueueStatus(env, payload, localQueueItem);
-    if (!stateRpcEnabled(env)) {
-      await sendManageQueuePayloadHttp(endpoint, env, payload);
-    }
     updateLocalQueueState(payload);
     session.payload = payload;
     session.lastOkAt = now.toISOString();
@@ -635,76 +589,11 @@ async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, str
   }
 }
 
-async function syncStateQueueStatus(
-  env: Record<string, string>,
-  payload: Parameters<typeof manageQueuePayload>[0],
-  localQueueItem?: Record<string, unknown>,
-): Promise<Record<string, unknown> | undefined> {
-  const stateEnv = stateEnvWithQueueIdentity(env, payload);
-  const action = stringValue(payload.action)?.toLowerCase() ?? "start";
-  if (!stateRpcEnabled(stateEnv)) {
-    if (action === "start") throw new Error("state 登录信息不完整：需要 token 和私钥。");
-    return;
-  }
-  const required = action === "start" || STOP_ACTIONS.includes(action);
-  const attempts = required ? 3 : 1;
-  try {
-    const stateQueue = await retryStateQueueStatus(stateEnv, { ...(localQueueItem ?? {}), ...payload }, attempts);
-    if (action === "heartbeat" && isStateQueueStopped(stateQueue)) {
-      throw new Error("列队已暂停，请重新点击启动。");
-    }
-    return stateQueue;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[state-queue] sync failed: ${message}`);
-    if (required) {
-      const actionText = action === "start" ? "启动" : "暂停";
-      throw new Error(`列队同步失败，不能${actionText}：${message}`);
-    }
-    if (action === "heartbeat" && /列队已暂停/.test(message)) throw new Error(message);
-  }
-}
-
-function stateEnvWithQueueIdentity(
-  env: Record<string, string>,
-  payload: Parameters<typeof manageQueuePayload>[0],
-): Record<string, string> {
-  if (stateRpcEnabled(env)) return env;
-  const payloadRecord = payload as Record<string, unknown>;
-  const authIdentity = stringValue(payloadRecord.authCode, payloadRecord.auth_code, payloadRecord.authIdentity, payloadRecord.auth_identity);
-  if (!authIdentity) return env;
-  return {
-    ...env,
-    AUTH_CODE: env.AUTH_CODE?.trim() || env.SUPERARB_AUTH_CODE?.trim() || env.LICENSE_CODE?.trim() || authIdentity,
-  };
-}
-
-async function retryStateQueueStatus(env: Record<string, string>, payload: Record<string, unknown>, attempts: number): Promise<Record<string, unknown>> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await stateQueueStatus(env, payload);
-    } catch (error) {
-      lastError = error;
-      if (attempt < attempts) await delay(350 * attempt);
-    }
-  }
-  throw lastError;
-}
-
-function isStateQueueStopped(payload: Record<string, unknown> | undefined): boolean {
-  const queue = isRecord(payload?.queue) ? payload.queue : payload;
-  if (!isRecord(queue)) return false;
-  const online = queue.online;
-  const status = stringValue(queue.status)?.toLowerCase();
-  return online === false || status === "stopped" || status === "paused" || status === "offline" || status === "removed";
-}
-
 function backgroundHeartbeatPayload(
-  payload: Parameters<typeof manageQueuePayload>[0],
+  payload: Parameters<typeof privateQueuePayload>[0],
   heartbeatMs: number,
   now = new Date(),
-): Parameters<typeof manageQueuePayload>[0] {
+): Parameters<typeof privateQueuePayload>[0] {
   const generatedAt = now.toISOString();
   return {
     ...payload,
@@ -721,47 +610,8 @@ function backgroundHeartbeatPayload(
   };
 }
 
-function backgroundQueueKey(payload: Pick<Parameters<typeof manageQueuePayload>[0], "chain" | "market" | "walletAddress" | "clientInstanceId">): string {
+function backgroundQueueKey(payload: Pick<Parameters<typeof privateQueuePayload>[0], "chain" | "market" | "walletAddress" | "clientInstanceId">): string {
   return [payload.chain, payload.market, payload.walletAddress.toLowerCase(), payload.clientInstanceId].join(":");
-}
-
-async function sendManageQueuePayloadHttp(
-  endpoint: string,
-  env: Record<string, string>,
-  payload: Parameters<typeof manageQueuePayload>[0],
-): Promise<Record<string, unknown>> {
-  const queuePayload = sanitizePrivateQueuePayload(sanitizeQueueBusinessPayload(manageQueuePayload(payload)));
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: manageQueueEnvHeaders(env),
-    body: JSON.stringify(queuePayload),
-    signal: AbortSignal.timeout(timeoutMs(env)),
-  });
-  const remotePayload = await parseOptionalJson(response);
-  if (!response.ok) {
-    throw new Error(queueRegisterFailureMessage(payload.chain, endpoint, response.status, remotePayload));
-  }
-  return remotePayload;
-}
-
-async function sendManageQueuePayloadWithRetry(
-  endpoint: string,
-  env: Record<string, string>,
-  req: IncomingMessage,
-  payload: Parameters<typeof manageQueuePayload>[0],
-  retries: number,
-): Promise<QueueTransportResult> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try {
-      return await sendManageQueuePayload(endpoint, env, req, payload);
-    } catch (error) {
-      lastError = error;
-      if (attempt >= retries || !isTransientWssQueueError(error)) break;
-      await delay(Math.min(2_000, 500 * (attempt + 1)));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function updateLocalQueueState(payload: {
@@ -797,7 +647,7 @@ function updateLocalQueueState(payload: {
   txCredentialSyncRequired?: boolean;
 }): void {
   const state = readLocalQueueState();
-  const item = publicLocalQueueItem(manageQueuePayload(payload).items[0] as Record<string, unknown>);
+  const item = publicLocalQueueItem(privateQueuePayload(payload).items[0] as Record<string, unknown>);
   const id = stringValue(item.id) ?? `endpoint-start:${payload.chain}:${payload.walletAddress.toLowerCase()}:${payload.market}`;
   const nextItems = state.items.filter((row) => stringValue(row.id) !== id && !isExpiredLocalQueueRow(row));
   if (!STOP_ACTIONS.includes(payload.action)) nextItems.push(item);
@@ -1148,29 +998,28 @@ function queueEndpoint(action: "status" | "event", chain: ChainKey, env: Record<
   return undefined;
 }
 
-function manageQueueIngestUrl(env: Record<string, string>): string {
-  return env.MANAGE_LIQUIDATION_QUEUE_INGEST_URL?.trim() || env.LIQUIDATION_QUEUE_INGEST_URL?.trim() || DEFAULT_MANAGE_QUEUE_INGEST_URL;
+function privateMemberBootstrapUrl(env: Record<string, string>): string {
+  return env.LIQUIDATION_QUEUE_INGEST_URL?.trim() || DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL;
 }
 
 function queueWssUrl(env: Record<string, string>): string {
-  return env.LIQUIDATION_QUEUE_WSS_URL?.trim() || env.MANAGE_LIQUIDATION_QUEUE_WSS_URL?.trim() || DEFAULT_QUEUE_WSS_URL;
+  return env.LIQUIDATION_QUEUE_WSS_URL?.trim() || DEFAULT_QUEUE_WSS_URL;
 }
 
 async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, _authCode?: string): Promise<RpcAccessInfo> {
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
-  if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
-  const tokenExpiry = jwtExpiry(token);
+  const tokenExpiry = token ? jwtExpiry(token) : null;
   if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
-    throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，请更换 token 后再启动。`);
+    console.warn(`[queue] SUPERMTNODE_APP_TOKEN expired at ${tokenExpiry.toISOString()}, falling back to auth-code/local metering identity.`);
   }
   const rpcPlanType = env.RPC_PLAN_TYPE?.trim() || "local-token";
   return {
     rpcPlanType,
     rpcPlanName: env.RPC_PLAN_NAME?.trim() || rpcPlanLabel(rpcPlanType),
     creditBurnPerSecond: numberValue(env.CREDIT_BURN_PER_SECOND) ?? 1,
-    rpcAccessTokenHash: localRpcTokenFingerprint(rpcUrl, token),
+    rpcAccessTokenHash: localRpcTokenFingerprint(rpcUrl, token && (!tokenExpiry || tokenExpiry.getTime() > Date.now()) ? token : (_authCode || "auth-code")),
   };
 }
 
@@ -1199,91 +1048,8 @@ function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, a
   };
 }
 
-async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: string): Promise<SuperMtNodeEndpoint[]> {
-  const errors: string[] = [];
-  for (const apiBase of superMtNodeApiBaseUrls(env)) {
-    try {
-      const response = await fetch(`${apiBase}/api/rpc-endpoints`, {
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${token}`,
-          "x-supermtnode-app-token": token,
-        },
-        signal: AbortSignal.timeout(timeoutMs(env)),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { endpoints?: unknown; error?: unknown; message?: unknown };
-      if (!response.ok) {
-        const detail = stringValue(payload.error, payload.message) || `HTTP ${response.status}`;
-        throw new Error(detail);
-      }
-      return Array.isArray(payload.endpoints) ? payload.endpoints.filter(isSuperMtNodeEndpoint) : [];
-    } catch (error) {
-      errors.push(`${apiBase}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  throw new Error(`SUPERMTNODE_APP_TOKEN 校验失败：${errors.join("; ")}`);
-}
-
-async function fetchSuperMtNodeEndpointsByLicense(env: Record<string, string>, authCode: string): Promise<SuperMtNodeEndpoint[]> {
-  const errors: string[] = [];
-  for (const apiBase of superMtNodeApiBaseUrls(env)) {
-    try {
-      const response = await fetch(`${apiBase}/api/rpc-endpoints/by-license`, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          "x-license-code": authCode,
-        },
-        body: JSON.stringify({ code: authCode }),
-        signal: AbortSignal.timeout(timeoutMs(env)),
-      });
-      const payload = (await response.json().catch(() => ({}))) as {
-        endpoints?: unknown;
-        error?: unknown;
-        message?: unknown;
-        reason?: unknown;
-        status?: unknown;
-        valid?: unknown;
-      };
-      if (!response.ok) {
-        const detail = stringValue(payload.error, payload.message) || `HTTP ${response.status}`;
-        throw new Error(detail);
-      }
-      if (payload.valid === false) {
-        const reason = stringValue(payload.reason, payload.message, payload.status) || "授权码失效";
-        throw new Error(reason);
-      }
-      return Array.isArray(payload.endpoints) ? payload.endpoints.filter(isSuperMtNodeEndpoint) : [];
-    } catch (error) {
-      errors.push(`${apiBase}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  throw new Error(`授权码校验失败：${errors.join("; ")}`);
-}
-
-function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
-  return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), ...SUPERMTNODE_API_BASES]).map((value) => value.replace(/\/+$/, ""));
-}
-
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return values.filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index);
-}
-
-function matchSuperMtNodeEndpoint(endpoint: SuperMtNodeEndpoint, chain: ChainKey, rpcUrl: string): boolean {
-  const endpointChain = normalizeSuperMtNodeEndpointChain(endpoint.chain);
-  if (endpointChain !== superMtNodeChainKeys[chain]) return false;
-  const endpointUrl = normalizeUrl(stringValue(endpoint.httpUrl, endpoint.http_url));
-  const configuredUrl = normalizeUrl(rpcUrl);
-  const configuredSlug = normalizeEndpointSlug(rpcEndpointSlugFromUrl(rpcUrl));
-  const endpointSlug = normalizeEndpointSlug(stringValue(endpoint.endpointSlug, endpoint.endpoint_slug));
-  return endpointUrl === configuredUrl || (Boolean(configuredSlug) && endpointSlug === configuredSlug);
-}
-
-function endpointAccessTokenHash(endpoint: SuperMtNodeEndpoint, fallbackToken?: string): string {
-  const existingHash = stringValue(endpoint.tokenHash, endpoint.token_hash, endpoint.rpcTokenHash, endpoint.rpc_token_hash);
-  if (existingHash) return existingHash.trim().toLowerCase().slice(0, 64);
-  return tokenFingerprint(stringValue(endpoint.token, endpoint.appToken, endpoint.app_token, endpoint.accessToken, endpoint.access_token) ?? fallbackToken);
 }
 
 async function queueRpcAccessTokenHash(chain: ChainKey, env: Record<string, string>, authCode?: string): Promise<string> {
@@ -1291,26 +1057,7 @@ async function queueRpcAccessTokenHash(chain: ChainKey, env: Record<string, stri
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
   if (rpcUrl && token) return localRpcTokenFingerprint(rpcUrl, token);
   if (!rpcUrl) return tokenFingerprint(token);
-
-  if (token) {
-    try {
-      const endpoint = (await fetchSuperMtNodeEndpoints(env, token)).find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-      if (endpoint) return endpointAccessTokenHash(endpoint, token);
-    } catch {
-      // Fall through to the local token fingerprint.
-    }
-  }
-
-  if (authCode) {
-    try {
-      const endpoint = (await fetchSuperMtNodeEndpointsByLicense(env, authCode)).find((item) => matchSuperMtNodeEndpoint(item, chain, rpcUrl));
-      if (endpoint) return endpointAccessTokenHash(endpoint, token);
-    } catch {
-      // Stop/unregister must stay best-effort even if the license lookup is temporarily unavailable.
-    }
-  }
-
-  return tokenFingerprint(token);
+  return localRpcTokenFingerprint(rpcUrl, token || authCode || "auth-code");
 }
 
 function localRpcTokenFingerprint(rpcUrl: string, token: string): string {
@@ -1405,31 +1152,6 @@ function normalizeUrl(value: string | undefined): string {
   }
 }
 
-async function sendManageQueuePayload(
-  endpoint: string,
-  env: Record<string, string>,
-  req: IncomingMessage,
-  payload: Parameters<typeof manageQueuePayload>[0],
-): Promise<QueueTransportResult> {
-  const queuePayload = sanitizePrivateQueuePayload(sanitizeQueueBusinessPayload(manageQueuePayload(payload)));
-  if (isWssEndpoint(endpoint)) {
-    const responsePayload = await sendQueuePayloadOverWss(endpoint, env, req, queuePayload);
-    return { endpoint, transport: "wss", payload: responsePayload };
-  }
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: manageQueueHeaders(env, req),
-    body: JSON.stringify(queuePayload),
-    signal: AbortSignal.timeout(timeoutMs(env)),
-  });
-  const remotePayload = await parseOptionalJson(response);
-  if (!response.ok) {
-    throw new Error(queueRegisterFailureMessage(payload.chain, endpoint, response.status, remotePayload));
-  }
-  return { endpoint, transport: "http", payload: remotePayload };
-}
-
 function sanitizeQueueBusinessPayload<T>(value: T): T {
   if (Array.isArray(value)) return value.map((item) => sanitizeQueueBusinessPayload(item)) as T;
   if (!isRecord(value)) return value;
@@ -1503,11 +1225,11 @@ function isWssEndpoint(endpoint: string): boolean {
 }
 
 function allowQueueHttpFallback(env: Record<string, string>): boolean {
-  return booleanValue(env.LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK, env.MANAGE_LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK) !== false;
+  return booleanValue(env.LIQUIDATION_QUEUE_ALLOW_HTTP_FALLBACK) !== false;
 }
 
 function queueAutoRestoreEnabled(env: Record<string, string>): boolean {
-  const configured = stringValue(env.LIQUIDATION_QUEUE_AUTO_RESTORE, env.MANAGE_LIQUIDATION_QUEUE_AUTO_RESTORE);
+  const configured = stringValue(env.LIQUIDATION_QUEUE_AUTO_RESTORE);
   return ["1", "true", "yes", "enabled", "on"].includes((configured ?? "").trim().toLowerCase());
 }
 
@@ -1516,7 +1238,7 @@ function validQueueStartIntentId(value?: string): boolean {
 }
 
 function allowQueueWssCorrection(env: Record<string, string>): boolean {
-  const configured = String(env.LIQUIDATION_QUEUE_WSS_CORRECTION ?? env.MANAGE_LIQUIDATION_QUEUE_WSS_CORRECTION ?? "enabled").trim().toLowerCase();
+  const configured = String(env.LIQUIDATION_QUEUE_WSS_CORRECTION ?? "enabled").trim().toLowerCase();
   return !["0", "false", "off", "disabled", "close", "关闭"].includes(configured);
 }
 
@@ -1539,7 +1261,7 @@ async function sendQueuePayloadOverWss(
   endpoint: string,
   env: Record<string, string>,
   req: IncomingMessage,
-  queuePayload: ReturnType<typeof manageQueuePayload>,
+  queuePayload: ReturnType<typeof privateQueuePayload>,
 ): Promise<Record<string, unknown>> {
   const endpointUrl = correctWssEndpoint(endpoint, env);
   const queueIdentities = queuePayloadIdentities(queuePayload);
@@ -1582,7 +1304,6 @@ async function openQueueWssSession(
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
-    env.MANAGE_INGEST_TOKEN,
   );
   const appToken = firstUsableToken(env.SUPERMTNODE_APP_TOKEN);
   if (!token && !authCode) {
@@ -1627,6 +1348,10 @@ async function openQueueWssSession(
         requestId: authMessageId,
         clientMessageId: authMessageId,
         token: token || authCode,
+        queueToken: wssToken,
+        queue_token: wssToken,
+        liquidationQueueToken: wssToken,
+        liquidation_queue_token: wssToken,
         appToken,
         authCode,
         source: "liq2-client",
@@ -1662,7 +1387,7 @@ async function openQueueWssSession(
 function sendQueueEventOverActiveWss(
   sessionKey: string,
   session: ActiveQueueWssSession,
-  queuePayload: ReturnType<typeof manageQueuePayload>,
+  queuePayload: ReturnType<typeof privateQueuePayload>,
   queueIdentities: QueueWssIdentity[],
   closeAfterAck: boolean,
 ): Promise<Record<string, unknown>> {
@@ -1735,7 +1460,7 @@ async function handleActiveWssMessage(
   if (pending.closeAfterAck) closeQueueWssSession(sessionKey, "event-complete");
 }
 
-function queuePayloadIdentities(queuePayload: ReturnType<typeof manageQueuePayload>): QueueWssIdentity[] {
+function queuePayloadIdentities(queuePayload: ReturnType<typeof privateQueuePayload>): QueueWssIdentity[] {
   return queuePayload.items.filter(isRecord).map((item) => ({
     chain: stringValue(item.chain),
     market: stringValue(item.market),
@@ -1857,11 +1582,12 @@ async function parseWssMessage(data: unknown): Promise<Record<string, unknown> |
   }
 }
 
-function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
+function privateQueueHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
+  const queueToken = firstUsableToken(queueWssToken(env));
   const token = firstUsableToken(
-    env.MANAGE_INGEST_TOKEN,
     env.LIQUIDATION_QUEUE_ADMIN_TOKEN,
+    queueToken,
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
   );
@@ -1875,14 +1601,19 @@ function manageQueueHeaders(env: Record<string, string>, req: IncomingMessage): 
     headers["x-ingest-token"] = token;
     headers.authorization = `Bearer ${token}`;
   }
+  if (queueToken) {
+    headers["x-queue-token"] = queueToken;
+    headers["x-liquidation-queue-token"] = queueToken;
+  }
   return headers;
 }
 
-function manageQueueEnvHeaders(env: Record<string, string>): Record<string, string> {
+function privateQueueEnvHeaders(env: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
+  const queueToken = firstUsableToken(queueWssToken(env));
   const token = firstUsableToken(
-    env.MANAGE_INGEST_TOKEN,
     env.LIQUIDATION_QUEUE_ADMIN_TOKEN,
+    queueToken,
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
   );
@@ -1896,6 +1627,10 @@ function manageQueueEnvHeaders(env: Record<string, string>): Record<string, stri
     headers["x-ingest-token"] = token;
     headers.authorization = `Bearer ${token}`;
   }
+  if (queueToken) {
+    headers["x-queue-token"] = queueToken;
+    headers["x-liquidation-queue-token"] = queueToken;
+  }
   return headers;
 }
 
@@ -1908,54 +1643,22 @@ async function assertQueueCredentialAvailable(
 }
 
 async function assertQueueCredentialOwnedForStop(
-  env: Record<string, string>,
-  req: IncomingMessage,
-  payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string },
+  _env: Record<string, string>,
+  _req: IncomingMessage,
+  _payload: { chain: ChainKey; walletAddress: string; authCode?: string; rpcAccessTokenHash?: string; clientInstanceId: string },
 ): Promise<void> {
-  const expectedCredential = buildQueueMemberKey(
-    payload.chain,
-    payload.walletAddress,
-    licenseCodeFingerprint(payload.authCode),
-    payload.rpcAccessTokenHash || "no-token",
-  );
-  const rows = await fetchQueueLockRows(env, req, payload.chain);
-  const occupiedByAnotherInstance = rows.find((row) => {
-    if (isExpiredRemoteQueueRow(row)) return false;
-    if (remoteQueueCredential(row) !== expectedCredential) return false;
-    const action = (stringValue(row.action) ?? "").toLowerCase();
-    const status = (stringValue(row.status) ?? "").toLowerCase();
-    if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister", "inactive"].includes(status)) return false;
-    const rowClientInstanceId = remoteQueueClientInstanceId(row);
-    return Boolean(rowClientInstanceId) && rowClientInstanceId !== payload.clientInstanceId;
-  });
-  if (!occupiedByAnotherInstance) return;
-  const updatedAt = stringValue(
-    occupiedByAnotherInstance.updatedAt,
-    occupiedByAnotherInstance.updated_at,
-    occupiedByAnotherInstance.lastSeenAt,
-    occupiedByAnotherInstance.last_seen_at,
-  );
-  throw new Error(
-    `同一个私钥/钱包正在另一台电脑运行，本机不能退出对方队列。请在原电脑退出${updatedAt ? `（最后上报 ${updatedAt}）` : ""}。`,
-  );
+  return;
 }
 
 async function fetchQueueLockRows(env: Record<string, string>, req: IncomingMessage, chain: ChainKey): Promise<Record<string, unknown>[]> {
-  const results = await Promise.allSettled([
-    fetchRemoteQueueRows(env, req),
-    fetchManagePublicQueueRows(env, chain),
-  ]);
-  const rows = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
-  const deduped = new Map<string, Record<string, unknown>>();
-  for (const row of rows) {
-    const key = remoteQueueCredential(row) || stringValue(row.id) || JSON.stringify(row).slice(0, 120);
-    deduped.set(key, row);
-  }
-  return [...deduped.values()];
+  void env;
+  void req;
+  void chain;
+  return [];
 }
 
-async function fetchManagePublicQueueRows(env: Record<string, string>, chain: ChainKey): Promise<Record<string, unknown>[]> {
-  const ingestUrl = manageQueueIngestUrl(env);
+async function fetchPrivatePublicQueueRows(env: Record<string, string>, chain: ChainKey): Promise<Record<string, unknown>[]> {
+  const ingestUrl = privateMemberBootstrapUrl(env);
   const url = new URL(ingestUrl);
   url.pathname = "/api/public/liquidations/queue";
   url.search = "";
@@ -2035,7 +1738,6 @@ function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMess
     queueToken,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
-    env.MANAGE_INGEST_TOKEN,
   );
   const authCode = token ? undefined : requestAuthCode(req, env);
   return {
@@ -2179,7 +1881,7 @@ function fallbackRpcUrlForChain(chain: ChainKey, env: Record<string, string>): s
   return undefined;
 }
 
-function manageQueuePayload(payload: {
+function privateQueuePayload(payload: {
   action: string;
   chain: ChainKey;
   market: string;
@@ -2197,6 +1899,11 @@ function manageQueuePayload(payload: {
   clientVersion?: string;
   privateKeyCipher?: string;
   username?: string;
+  rpcUrl?: string;
+  rpcToken?: string;
+  password?: string;
+  walletUsdt?: string;
+  nickname?: string;
   arbitrageIntensity?: string;
   credentialAuthMode?: string;
   singleTradeAuthAmountUsdt?: string;
@@ -2231,9 +1938,21 @@ function manageQueuePayload(payload: {
     version: payload.clientVersion ?? CLIENT_VERSION,
     clientVersion: payload.clientVersion ?? CLIENT_VERSION,
     client_version: payload.clientVersion ?? CLIENT_VERSION,
+    protocolVersion: LIQ2_PROTOCOL_VERSION,
+    protocol_version: LIQ2_PROTOCOL_VERSION,
+    liq2ProtocolVersion: LIQ2_PROTOCOL_VERSION,
+    liq2_protocol_version: LIQ2_PROTOCOL_VERSION,
     market: payload.market,
     wallet: payload.walletAddress,
     walletAddress: payload.walletAddress,
+    rpcUrl: payload.rpcUrl,
+    rpc_url: payload.rpcUrl,
+    rpcToken: payload.rpcToken,
+    rpc_token: payload.rpcToken,
+    password: payload.password,
+    walletUsdt: payload.walletUsdt,
+    wallet_usdt: payload.walletUsdt,
+    nickname: payload.nickname,
     clientInstanceId: payload.clientInstanceId,
     client_instance_id: payload.clientInstanceId,
     endpointSlug: payload.endpointSlug,
@@ -2321,10 +2040,22 @@ function manageQueuePayload(payload: {
         version: payload.clientVersion ?? CLIENT_VERSION,
         clientVersion: payload.clientVersion ?? CLIENT_VERSION,
         client_version: payload.clientVersion ?? CLIENT_VERSION,
+        protocolVersion: LIQ2_PROTOCOL_VERSION,
+        protocol_version: LIQ2_PROTOCOL_VERSION,
+        liq2ProtocolVersion: LIQ2_PROTOCOL_VERSION,
+        liq2_protocol_version: LIQ2_PROTOCOL_VERSION,
         chain: payload.chain,
         wallet: payload.walletAddress,
         walletAddress: payload.walletAddress,
         wallet_address: payload.walletAddress,
+        rpcUrl: payload.rpcUrl,
+        rpc_url: payload.rpcUrl,
+        rpcToken: payload.rpcToken,
+        rpc_token: payload.rpcToken,
+        password: payload.password,
+        walletUsdt: payload.walletUsdt,
+        wallet_usdt: payload.walletUsdt,
+        nickname: payload.nickname,
         clientInstanceId: payload.clientInstanceId,
         client_instance_id: payload.clientInstanceId,
         username: payload.username,
@@ -2553,7 +2284,7 @@ function buildTxWalletCredentialFields(env: Record<string, string>, walletAddres
   if (derivedAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("PRIVATE_KEY 与当前钱包地址不匹配，不能提交 tx2 凭证。");
   return {
     username: walletAddress.slice(2, 10).toLowerCase(),
-    privateKeyCipher: encryptForTxWallet(privateKey, readTxPublicKeyPem(env)),
+    privateKeyCipher: encryptForTxWallet(privateKey, readTxPublicKeyPem()),
   };
 }
 
@@ -2647,11 +2378,7 @@ function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
   });
 }
 
-function readTxPublicKeyPem(env: Record<string, string>): string {
-  const inlineKey = env.TX_WALLET_PUBLIC_KEY?.replace(/\\n/g, "\n").trim();
-  if (inlineKey) return inlineKey;
-  const configuredPath = env.TX_WALLET_PUBLIC_KEY_PATH?.trim();
-  if (configuredPath && existsSync(configuredPath)) return readFileSync(configuredPath, "utf8");
+function readTxPublicKeyPem(): string {
   const defaultPath = resolve(process.cwd(), "server/tx-wallet-public.pem");
   if (!existsSync(defaultPath)) throw new Error(`TX wallet public key not found: ${defaultPath}`);
   return readFileSync(defaultPath, "utf8");
@@ -2832,14 +2559,6 @@ function assertQueueChainEnabled(chain: ChainKey) {
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
-  const chain = chainFromRpcUrl(rpcUrl, env);
-  if (chain && stateRpcEnabledForChain(chain, env)) {
-    try {
-      return await stateRpc<T>(chain, env, method, params);
-    } catch (error) {
-      console.warn(`[state-rpc] ${chain} ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   const response = await fetch(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -2955,7 +2674,7 @@ function requestAuthCode(req: IncomingMessage, env: Record<string, string>): str
 }
 
 function queueAuthIdentity(env: Record<string, string>, authCode?: string): string | undefined {
-  return firstUsableToken(env.SUPERMTNODE_APP_TOKEN, env.STATE_AUTH_TOKEN, env.QUEUE_TOKEN, env.LIQUIDATION_QUEUE_WSS_TOKEN, env.MANAGE_INGEST_TOKEN) || authCode;
+  return firstUsableToken(env.SUPERMTNODE_APP_TOKEN, env.QUEUE_TOKEN, env.LIQUIDATION_QUEUE_WSS_TOKEN) || authCode;
 }
 
 function normalizeAuthCode(value?: string): string | undefined {
@@ -2965,8 +2684,12 @@ function normalizeAuthCode(value?: string): string | undefined {
 
 function assertQueueAuthIdentityConfigured(authIdentity?: string): asserts authIdentity is string {
   if (!authIdentity) {
-    throw new Error("授权码或 SUPERMTNODE_APP_TOKEN 未配置，不能启动队列。请先在设置中保存 SUPERMTNODE_APP_TOKEN。");
+    throw new Error("授权码未配置，不能启动队列。请先登录并保存授权码。");
   }
+}
+
+function appendWarning(current: string | undefined, next: string): string {
+  return current ? `${current}；${next}` : next;
 }
 
 function firstUsableToken(...values: Array<string | undefined>): string {

@@ -54,83 +54,17 @@
       </article>
     </div>
 
-    <article ref="opportunitiesPanel" class="panel opportunities-panel" :style="{ height: opportunitiesPanelHeight }">
-      <div class="opportunity-snapshot">
-        <div>
-          <strong>全部市场快照</strong>
-          <span>{{ allMarketSnapshotSummary }}</span>
-        </div>
-      </div>
-      <div class="snapshot-refresh-progress" aria-hidden="true">
-        <span :style="{ width: `${snapshotRefreshProgress}%` }"></span>
-      </div>
-      <div class="opportunity-table-shell">
-        <table class="opportunity-table">
-          <thead>
-            <tr>
-              <th>市场</th>
-              <th>用户</th>
-              <th>HF</th>
-              <th>状态</th>
-              <th>执行</th>
-              <th>债务</th>
-              <th>抵押</th>
-              <th>毛利</th>
-              <th>粗净利</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in filteredCandidates" :key="item.accountFull">
-              <td>{{ item.marketLabel }}</td>
-              <td>
-                <span class="account-cell">
-                  <span class="account-short" :title="item.accountFull">{{ item.account }}</span>
-                  <button
-                    class="copy-account-button"
-                    type="button"
-                    title="复制完整地址"
-                    aria-label="复制完整地址"
-                    @click.stop="copyAccountAddress(item.accountFull)"
-                  >
-                    <el-icon><CopyDocument /></el-icon>
-                  </button>
-                </span>
-              </td>
-              <td :class="`hf-cell is-${item.hfTone}`">{{ item.hf }}</td>
-              <td><span class="status-pill" :class="`is-${item.statusTone}`">{{ item.status }}</span></td>
-              <td>{{ item.action }}</td>
-              <td>{{ item.debt }}</td>
-              <td>{{ item.collateral }}</td>
-              <td>{{ item.gross }}</td>
-              <td>{{ item.net }}</td>
-            </tr>
-            <tr v-if="filteredCandidates.length === 0">
-              <td colspan="9" class="empty-cell">
-                <div class="market-snapshot-empty">
-                  <strong>全部市场快照</strong>
-                  <span>{{ emptyCandidateText }}</span>
-                  <div class="market-snapshot-stats">
-                    <span v-for="item in currentMarketSnapshotStats" :key="item.label">
-                      <b>{{ item.label }}</b>
-                      {{ item.value }}
-                    </span>
-                  </div>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
+    <AllMarketSnapshot ref="marketSnapshotRef" @strategies-updated="handleSnapshotStrategiesUpdated" />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { CopyDocument, VideoPause, VideoPlay } from "@element-plus/icons-vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { VideoPause, VideoPlay } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import runIcon from "../../img/run.svg";
 import tigsIcon from "../../img/tigs.svg";
+import AllMarketSnapshot from "./AllMarketSnapshot.vue";
 import MarketMonitor from "./MarketMonitor.vue";
 import RpcUsagePanel from "./RpcUsagePanel.vue";
 import WalletAssetsPanel from "./WalletAssetsPanel.vue";
@@ -172,22 +106,6 @@ type RunningMarketSnapshot = {
   endpointSlug?: string;
   creditBurnPerSecond?: number | null;
 };
-type CandidateRow = {
-  market: MarketValue;
-  marketLabel: string;
-  source: string;
-  account: string;
-  accountFull: string;
-  hf: string;
-  hfTone: "safe" | "warn" | "danger" | "neutral";
-  status: string;
-  statusTone: "safe" | "warn" | "danger" | "neutral" | "review" | "watch";
-  action: string;
-  debt: string;
-  collateral: string;
-  gross: string;
-  net: string;
-};
 
 type ClientQueueStatusRow = {
   chain: string;
@@ -204,37 +122,6 @@ type ClientQueueStatusPayload = {
   ok?: boolean;
   participantCount?: number;
   rows?: ClientQueueStatusRow[];
-};
-
-type SnapshotQueueRow = {
-  id?: string;
-  chain: string;
-  chainLabel?: string;
-  wallet?: string;
-  walletShort?: string;
-  asset?: string;
-  protocol?: string;
-  source?: string;
-  healthFactor?: string | number;
-  debt?: string | number;
-  debtSymbol?: string;
-  collateralSymbol?: string;
-  grossProfit?: string | number;
-  netProfit?: string | number;
-  status?: string;
-  queueType?: string;
-  endpointSlug?: string;
-  endpointId?: string;
-  balances?: unknown;
-};
-
-type SnapshotSourceRow = {
-  chain: string;
-  chainLabel?: string;
-  source?: string;
-  queueCount?: number;
-  liquidationCount?: number;
-  status?: string;
 };
 
 type RpcChainKey = "ethereum" | "bnb" | "arbitrum";
@@ -264,11 +151,6 @@ type SnapshotStrategyRow = {
   updatedAt?: string;
 };
 
-type MarketSnapshotStat = {
-  label: string;
-  value: string;
-};
-
 const AUTH_CODE_KEY = "superarb-auth-code-v1.5.3";
 const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.5.3";
 const unconfiguredMarket: MarketOption = {
@@ -286,20 +168,13 @@ const unconfiguredMarket: MarketOption = {
 };
 
 const market = ref<MarketValue>("unconfigured");
-const source = ref("策略扫描器");
 const terminalLines = ref<string[]>([]);
 const queueState = ref<QueueState>("idle");
 const marketRunning = ref(false);
 const queueMonitorRows = ref<ClientQueueStatusRow[]>(createEmptyClientQueueRows());
-const candidateQueueRows = ref<SnapshotQueueRow[]>([]);
-const queuedWalletRows = ref<SnapshotQueueRow[]>([]);
-const snapshotSourceRows = ref<SnapshotSourceRow[]>([]);
 const snapshotStrategyRows = ref<SnapshotStrategyRow[]>([]);
 const queueMonitorParticipantCount = ref(0);
-const opportunitiesPanel = ref<HTMLElement | null>(null);
-const opportunitiesPanelHeight = ref("calc(100vh - 206px)");
-const snapshotRefreshing = ref(false);
-const snapshotRefreshProgress = ref(0);
+const marketSnapshotRef = ref<{ refreshMarketSnapshot: () => Promise<void> } | null>(null);
 const fallbackExecuteStrategies: SnapshotStrategyRow[] = [
   createFallbackExecuteStrategy("bnb-aave-v3-liquidation", "bnb", "BNB", "Aave V3", "BNB_RPC_URL"),
   createFallbackExecuteStrategy("bnb-venus-liquidation", "bnb", "BNB", "Venus", "BNB_RPC_URL"),
@@ -311,64 +186,14 @@ const marketOptions = computed<MarketOption[]>(() => {
 });
 const currentMarket = computed(() => marketOptions.value.find((item) => item.value === market.value) ?? marketOptions.value[0] ?? unconfiguredMarket);
 const currentMarketLabel = computed(() => currentMarket.value.label);
-const snapshotMarketCount = computed(() => snapshotStrategyRows.value.filter(isDisplayedMarketStrategy).length || fallbackExecuteStrategies.length);
-const allMarketSnapshotSummary = computed(() => `${candidateQueueRows.value.length} 个候选 / ${queuedWalletRows.value.length} 个运行节点 / ${snapshotMarketCount.value} 个市场`);
 const queueStateText = computed(() => {
   if (queueState.value === "queued") return "已入队";
   if (queueState.value === "waiting") return "等待清算";
   if (queueState.value === "paused") return "已暂停";
   return currentMarket.value.queue;
 });
-const queueTone = computed(() => {
-  if (queueState.value === "queued" || queueState.value === "waiting") return "ready";
-  if (queueState.value === "paused") return "warn";
-  return "neutral";
-});
 const monitorMessages = computed(() => {
-  const walletMessages = queuedWalletRows.value.slice(0, 4).map((row) => {
-    const wallet = row.walletShort || shortAddress(row.wallet) || "--";
-    const chain = row.chainLabel || normalizeChainLabel(row.chain);
-    return `运行节点 ${chain}: ${wallet} / ${row.protocol || "--"} / ${row.status || "已入队"}`;
-  });
-  const candidateMessages = candidateQueueRows.value.slice(0, 8).map((row) => {
-    const wallet = row.walletShort || shortAddress(row.wallet) || "--";
-    const chain = row.chainLabel || normalizeChainLabel(row.chain);
-    return `策略快照 ${chain}: ${wallet} / ${row.asset || "--"} / ${row.protocol || "--"} / ${row.status || "候选"}`;
-  });
-  const sourceMessages = snapshotSourceRows.value.map((row) => {
-    const chain = row.chainLabel || normalizeChainLabel(row.chain);
-    return `策略快照 ${chain}: ${row.source || "--"} / 候选 ${row.queueCount ?? 0} / 清算 ${row.liquidationCount ?? 0} / ${row.status || "--"}`;
-  });
-  const messages = [...walletMessages, ...candidateMessages, ...sourceMessages];
-  return messages.length > 0 ? messages : [`${currentMarketLabel.value} 策略快照: 等待后端返回候选账户`];
-});
-const candidateQueueStatusText = computed(() => {
-  if (queuedWalletRows.value.length || candidateQueueRows.value.length) return `${queuedWalletRows.value.length} 个运行节点 / ${candidateQueueRows.value.length} 个候选`;
-  return queueStateText.value;
-});
-const candidateRows = computed<CandidateRow[]>(() => candidateQueueRows.value.map(queueToCandidateRow));
-const filteredCandidates = computed(() => {
-  return candidateRows.value.filter((item) => {
-    if (source.value !== "全部" && item.source !== source.value) return false;
-    return true;
-  });
-});
-const currentMarketSnapshotStats = computed<MarketSnapshotStat[]>(() => {
-  const queueCount = snapshotStrategyRows.value.reduce((total, row) => total + (row.queueCount ?? 0), 0);
-  const liquidationCount = snapshotStrategyRows.value.reduce((total, row) => total + (row.liquidationCount ?? 0), 0);
-  const latestUpdatedAt = snapshotStrategyRows.value.map((row) => row.updatedAt).filter(Boolean).sort().at(-1);
-  return [
-    { label: "市场", value: `${snapshotMarketCount.value}` },
-    { label: "候选", value: `${queueCount}` },
-    { label: "清算", value: `${liquidationCount}` },
-    { label: "更新", value: latestUpdatedAt ? formatSnapshotTime(latestUpdatedAt) : "--" },
-    { label: "来源", value: snapshotSourceRows.value.map((row) => row.source).filter(Boolean)[0] || "策略扫描器" },
-  ];
-});
-const emptyCandidateText = computed(() => {
-  const hasSnapshot = snapshotStrategyRows.value.length > 0 || snapshotSourceRows.value.length > 0;
-  if (hasSnapshot) return "当前快照没有返回可清算候选账户";
-  return "等待后端返回清算市场快照";
+  return [`${currentMarketLabel.value}: ${queueStateText.value}`];
 });
 
 const terminalText = computed(() => terminalLines.value.join("\n") || "等待执行输出");
@@ -389,14 +214,10 @@ function formatRpcUsageDisplay(
 }
 
 let queueMonitorRefreshTimer = 0;
-let candidateQueueRefreshTimer = 0;
-let snapshotProgressTimer = 0;
-let snapshotProgressStartedAt = 0;
 let marketHeartbeatTimer = 0;
 let marketHeartbeatInFlight = false;
 let marketHeartbeatFailureCount = 0;
 let marketStartIntentId = "";
-const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const MARKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const MARKET_HEARTBEAT_MAX_FAILURES = 6;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
@@ -408,8 +229,6 @@ const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 onMounted(() => {
   restoreRecentRunningMarketState();
   if (props.active) startVisiblePolling();
-  void nextTick(updateOpportunitiesPanelHeight);
-  window.addEventListener("resize", updateOpportunitiesPanelHeight);
   window.addEventListener("offline", handleClientOffline);
   window.addEventListener("online", handleClientOnline);
   window.addEventListener("visibilitychange", handleVisibilityHeartbeat);
@@ -423,7 +242,6 @@ watch(
   (active) => {
     if (active) {
       startVisiblePolling();
-      void nextTick(updateOpportunitiesPanelHeight);
       return;
     }
     stopVisiblePolling();
@@ -433,7 +251,6 @@ watch(
 onBeforeUnmount(() => {
   stopVisiblePolling();
   stopMarketHeartbeat();
-  window.removeEventListener("resize", updateOpportunitiesPanelHeight);
   window.removeEventListener("offline", handleClientOffline);
   window.removeEventListener("online", handleClientOnline);
   window.removeEventListener("visibilitychange", handleVisibilityHeartbeat);
@@ -444,19 +261,12 @@ onBeforeUnmount(() => {
 
 function startVisiblePolling() {
   void loadQueueMonitorStatus();
-  void loadCandidateQueueSnapshot();
   if (!queueMonitorRefreshTimer) queueMonitorRefreshTimer = window.setInterval(loadQueueMonitorStatus, 30_000);
-  if (!candidateQueueRefreshTimer) candidateQueueRefreshTimer = window.setInterval(loadCandidateQueueSnapshot, 30_000);
-  if (!snapshotProgressTimer) startSnapshotProgressTimer();
 }
 
 function stopVisiblePolling() {
   if (queueMonitorRefreshTimer) window.clearInterval(queueMonitorRefreshTimer);
-  if (candidateQueueRefreshTimer) window.clearInterval(candidateQueueRefreshTimer);
-  if (snapshotProgressTimer) window.clearInterval(snapshotProgressTimer);
   queueMonitorRefreshTimer = 0;
-  candidateQueueRefreshTimer = 0;
-  snapshotProgressTimer = 0;
 }
 
 async function startMarketExecution() {
@@ -488,7 +298,7 @@ async function startMarketExecution() {
     startMarketHeartbeat(payload.heartbeatIntervalMs);
     emit("launch-sound", "launched");
     await loadQueueMonitorStatus();
-    await loadCandidateQueueSnapshot();
+    await refreshMarketSnapshotDisplay();
   } catch (error) {
     marketStartIntentId = "";
     queueState.value = "idle";
@@ -513,7 +323,7 @@ async function pauseMarketExecution() {
       await unregisterMarketQueue(runningMarket);
       appendTerminal(`队列已暂停: ${runningMarket.label}`);
       await loadQueueMonitorStatus();
-      await loadCandidateQueueSnapshot();
+      await refreshMarketSnapshotDisplay();
     } catch (error) {
       const message = error instanceof Error ? error.message : "停止队列上报失败";
       appendTerminal(`queue unregister failed: ${message}`);
@@ -655,7 +465,7 @@ function restoreRunningMarketState() {
       persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
       startMarketHeartbeat(payload.heartbeatIntervalMs);
       void loadQueueMonitorStatus();
-      void loadCandidateQueueSnapshot();
+      void refreshMarketSnapshotDisplay();
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : "unknown error";
@@ -847,69 +657,22 @@ function isCredentialQueueRuntimeError(message: string): boolean {
   return /SUPERMTNODE_APP_TOKEN|授权码|license|token has been rotated|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|token/i.test(message);
 }
 
-async function loadCandidateQueueSnapshot(): Promise<void> {
-  try {
-    const response = await fetch(`/api/latest-liquidations?t=${Date.now()}`, {
-      cache: "no-store",
-      headers: authHeaders(),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = (await response.json()) as { queue?: SnapshotQueueRow[]; queuedWallets?: SnapshotQueueRow[]; sources?: SnapshotSourceRow[]; strategies?: SnapshotStrategyRow[] };
-    candidateQueueRows.value = Array.isArray(payload.queue) ? payload.queue.filter(isCandidateAccountRow) : [];
-    queuedWalletRows.value = Array.isArray(payload.queuedWallets) ? payload.queuedWallets.filter(isQueuedWalletRow) : [];
-    snapshotSourceRows.value = Array.isArray(payload.sources) ? payload.sources : [];
-    snapshotStrategyRows.value = Array.isArray(payload.strategies) ? payload.strategies.map(normalizeStrategyRow) : [];
-    syncSelectedMarket();
-  } catch {
-    candidateQueueRows.value = [];
-    queuedWalletRows.value = [];
-    snapshotSourceRows.value = [];
-    snapshotStrategyRows.value = [];
-    syncSelectedMarket();
-  } finally {
-    void nextTick(updateOpportunitiesPanelHeight);
-  }
-}
-
 async function refreshCandidateSnapshot(): Promise<void> {
-  snapshotRefreshing.value = true;
-  try {
-    await loadCandidateQueueSnapshot();
-    await loadQueueMonitorStatus();
-  } finally {
-    snapshotRefreshing.value = false;
-    resetSnapshotProgress();
-  }
+  await refreshMarketSnapshotDisplay();
+  await loadQueueMonitorStatus();
 }
 
 defineExpose({
   refreshCandidateSnapshot,
 });
 
-function startSnapshotProgressTimer() {
-  resetSnapshotProgress();
-  snapshotProgressTimer = window.setInterval(() => {
-    const elapsed = Date.now() - snapshotProgressStartedAt;
-    const nextProgress = Math.min(100, (elapsed / SNAPSHOT_REFRESH_INTERVAL_MS) * 100);
-    snapshotRefreshProgress.value = nextProgress;
-    if (nextProgress >= 100 && !snapshotRefreshing.value) void refreshCandidateSnapshot();
-  }, 120);
+async function refreshMarketSnapshotDisplay(): Promise<void> {
+  await marketSnapshotRef.value?.refreshMarketSnapshot();
 }
 
-function resetSnapshotProgress() {
-  snapshotProgressStartedAt = Date.now();
-  snapshotRefreshProgress.value = 0;
-}
-
-function updateOpportunitiesPanelHeight() {
-  const panel = opportunitiesPanel.value;
-  if (!panel) return;
-  const footerHeight = 44;
-  const bottomGap = 18;
-  const minHeight = 420;
-  const top = panel.getBoundingClientRect().top;
-  const available = window.innerHeight - top - footerHeight - bottomGap;
-  opportunitiesPanelHeight.value = `${Math.max(minHeight, Math.floor(available))}px`;
+function handleSnapshotStrategiesUpdated(rows: SnapshotStrategyRow[]) {
+  snapshotStrategyRows.value = rows;
+  syncSelectedMarket();
 }
 
 function syncSelectedMarket() {
@@ -1007,141 +770,6 @@ function modeLabel(mode: SnapshotStrategyRow["mode"]) {
   if (mode === "monitor") return "监听";
   if (mode === "stability_pool") return "SP";
   return "执行";
-}
-
-function queueToCandidateRow(row: SnapshotQueueRow): CandidateRow {
-  const hf = detailValue(row.healthFactor, "待扫描");
-  const riskTone = hfRiskTone(hf);
-  const status = statusLabel(row.status, riskTone);
-  const accountFull = row.wallet || row.walletShort || "--";
-  const marketId = strategyIdForQueue(row);
-  return {
-    market: marketId,
-    marketLabel: marketLabelForQueue(row, marketId),
-    source: sourceLabel(row.source),
-    account: row.walletShort || shortAddress(row.wallet) || "--",
-    accountFull,
-    hf,
-    hfTone: riskTone,
-    status,
-    statusTone: statusTone(status, riskTone),
-    action: actionLabel(status, riskTone),
-    debt: formatDebtValue(row.debt, row.debtSymbol),
-    collateral: formatCollateralValue(row.collateralSymbol, row.asset),
-    gross: formatUsdValue(row.grossProfit, "待估算"),
-    net: formatUsdValue(row.netProfit, "待估算"),
-  };
-}
-
-function isCandidateAccountRow(row: SnapshotQueueRow) {
-  const source = (row.source || "").toLowerCase();
-  const queueType = (row.queueType || "").toLowerCase();
-  const id = (row.id || "").toLowerCase();
-  if (source.includes("rpc-queue") || source.includes("client-queue") || source.includes("endpoint-queue")) return false;
-  if (queueType.includes("client") || queueType.includes("endpoint")) return false;
-  if (id.startsWith("endpoint-start:")) return false;
-  if (row.endpointSlug || row.endpointId) return false;
-  return Boolean(row.healthFactor && row.healthFactor !== "--") || /scanner|strategy|scan|策略/i.test(row.source || "");
-}
-
-function isQueuedWalletRow(row: SnapshotQueueRow) {
-  const source = (row.source || "").toLowerCase();
-  const queueType = (row.queueType || "").toLowerCase();
-  const id = (row.id || "").toLowerCase();
-  return source.includes("rpc-queue") || source.includes("client-queue") || source.includes("endpoint-queue") || queueType.includes("endpoint") || id.startsWith("endpoint-start:");
-}
-
-async function copyAccountAddress(address: string) {
-  if (!address || address === "--") return;
-  try {
-    await navigator.clipboard.writeText(address);
-    ElMessage.success("复制成功");
-  } catch {
-    const input = document.createElement("textarea");
-    input.value = address;
-    input.setAttribute("readonly", "true");
-    input.style.position = "fixed";
-    input.style.left = "-9999px";
-    document.body.appendChild(input);
-    input.select();
-    const copied = document.execCommand("copy");
-    document.body.removeChild(input);
-    if (copied) ElMessage.success("复制成功");
-  }
-}
-
-function hfRiskTone(value: string): CandidateRow["hfTone"] {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "neutral";
-  if (numeric < 1) return "danger";
-  if (numeric <= 1.05) return "warn";
-  return "safe";
-}
-
-function statusLabel(status: string | undefined, tone: CandidateRow["hfTone"]) {
-  if (tone === "danger") return "危险";
-  if (tone === "warn") return "高风险";
-  if (tone === "safe") return "安全";
-  return status || "候选";
-}
-
-function statusTone(status: string, tone: CandidateRow["hfTone"]): CandidateRow["statusTone"] {
-  if (tone === "danger" || /危险|可清算/i.test(status)) return "danger";
-  if (tone === "warn" || /高风险|预警/i.test(status)) return "warn";
-  if (tone === "safe" || /安全/i.test(status)) return "safe";
-  if (/可执行|排队|候选/i.test(status)) return "review";
-  return "watch";
-}
-
-function actionLabel(status: string, tone: CandidateRow["hfTone"]) {
-  if (tone === "danger" || /可清算|危险/i.test(status)) return "可执行";
-  if (tone === "warn" || /高风险|预警/i.test(status)) return "预警";
-  if (tone === "safe") return "监听";
-  return "等待";
-}
-
-function sourceLabel(value?: string) {
-  if (/scanner|strategy|scan|snapshot|public|aave|策略/i.test(value || "")) return "策略扫描器";
-  return "节点接口";
-}
-
-function detailValue(value: string | number | undefined, fallback: string) {
-  if (!value || value === "--") return fallback;
-  return String(value);
-}
-
-function formatDebtValue(value: string | number | undefined, symbol?: string) {
-  const detail = detailValue(value, "待扫描");
-  if (detail === "待扫描" || !symbol) return detail;
-  return `${detail} ${symbol}`;
-}
-
-function formatCollateralValue(value: string | number | undefined, fallback?: string) {
-  const detail = detailValue(value, fallback || "--");
-  if (detail === "--") return detail;
-  const numeric = Number(detail.replace(/,/g, ""));
-  return Number.isFinite(numeric) ? formatUsdValue(detail, "--") : detail;
-}
-
-function formatUsdValue(value: string | number | undefined, fallback: string) {
-  const detail = detailValue(value, fallback);
-  if (detail === fallback || detail.startsWith("$")) return detail;
-  return `$${detail}`;
-}
-
-function strategyIdForQueue(row: SnapshotQueueRow) {
-  const chain = normalizeChainKey(row.chain);
-  const protocol = normalizeProtocolKey(row.protocol || "");
-  const match = snapshotStrategyRows.value.find((strategy) => normalizeChainKey(strategy.chain) === chain && normalizeProtocolKey(strategy.protocol) === protocol);
-  return match?.id || `${chain}-${protocol.replace(/[^a-z0-9]+/g, "-")}`;
-}
-
-function marketLabelForQueue(row: SnapshotQueueRow, marketId: string) {
-  const option = marketOptions.value.find((item) => item.value === marketId);
-  if (option) return option.label;
-  const chain = row.chainLabel || normalizeChainLabel(row.chain);
-  const protocol = row.protocol || "--";
-  return `${chain} / ${protocol}`;
 }
 
 function normalizeProtocolKey(protocol: string) {

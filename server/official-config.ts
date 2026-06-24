@@ -1,8 +1,6 @@
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { hasConfiguredQueueWssToken, queueWssToken } from "./queue-token";
-import { stateRpc, stateRpcEnabledForChain } from "./state-session";
 
 export type SecurityCheckItem = {
   scope: string;
@@ -39,159 +37,14 @@ const OFFICIAL_ENDPOINTS: OfficialEndpointRule[] = [
     paths: ["/api/public/liquidations/snapshot"],
     required: true,
   },
-  {
-    key: "MANAGE_LIQUIDATION_QUEUE_INGEST_URL",
-    label: "管理端上报地址",
-    defaultValue: "https://manage.supermtnode.io/api/ingest/liquidation-queue",
-    protocols: ["https:"],
-    hosts: ["manage.supermtnode.io"],
-    paths: ["/api/ingest/liquidation-queue"],
-    required: true,
-  },
-  {
-    key: "LIQUIDATION_QUEUE_INGEST_URL",
-    label: "备用队列上报地址",
-    defaultValue: "",
-    protocols: ["https:"],
-    hosts: ["manage.supermtnode.io"],
-    paths: ["/api/ingest/liquidation-queue"],
-    required: false,
-  },
-  {
-    key: "LIQUIDATION_QUEUE_WSS_URL",
-    label: "队列 WSS 地址",
-    defaultValue: "wss://private.superarb.ai/ws/liquidation-queue-v2",
-    protocols: ["wss:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/ws/liquidation-queue-v2"],
-    required: true,
-  },
-  {
-    key: "MANAGE_LIQUIDATION_QUEUE_WSS_URL",
-    label: "备用队列 WSS 地址",
-    defaultValue: "",
-    protocols: ["wss:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/ws/liquidation-queue-v2"],
-    required: false,
-  },
-  {
-    key: "LIQUIDATION_QUEUE_STATUS_URL",
-    label: "队列状态接口",
-    defaultValue: "https://api.supermtnode.io/api/public/liquidations/queue-status",
-    protocols: ["https:"],
-    hosts: ["api.supermtnode.io"],
-    paths: ["/api/public/liquidations/queue-status"],
-    required: false,
-  },
-  {
-    key: "LIQUIDATION_QUEUE_PUBLIC_STATUS_URL",
-    label: "公共队列状态接口",
-    defaultValue: "",
-    protocols: ["https:"],
-    hosts: ["api.supermtnode.io"],
-    paths: ["/api/public/liquidations/queue-status"],
-    required: false,
-  },
-  {
-    key: "LIQUIDATION_QUEUE_WSS_STATUS_URL",
-    label: "WSS 队列状态接口",
-    defaultValue: "",
-    protocols: ["https:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/api/liquidation-queue/status"],
-    required: false,
-  },
-  {
-    key: "PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL",
-    label: "privateMember 队列状态接口",
-    defaultValue: "",
-    protocols: ["https:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/api/liquidation-queue/status"],
-    required: false,
-  },
-  {
-    key: "LIQUIDATION_QUEUE_TX_EVENTS_URL",
-    label: "执行流水接口",
-    defaultValue: "",
-    protocols: ["https:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/api/liquidation-queue/contract-events/today"],
-    required: false,
-  },
-  {
-    key: "PRIVATE_MEMBER_TX2_CONTRACT_EVENTS_URL",
-    label: "备用执行流水接口",
-    defaultValue: "",
-    protocols: ["https:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/api/liquidation-queue/contract-events/today"],
-    required: false,
-  },
-  {
-    key: "LIQ2_PRIVATE_MEMBER_API_URL",
-    label: "安全通道主机",
-    defaultValue: "https://private.superarb.ai",
-    protocols: ["https:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/"],
-    required: true,
-  },
-  {
-    key: "PRIVATE_MEMBER_ADMIN_API_URL",
-    label: "备用安全通道主机",
-    defaultValue: "",
-    protocols: ["https:"],
-    hosts: ["private.superarb.ai"],
-    paths: ["/"],
-    required: false,
-  },
-  {
-    key: "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH",
-    label: "安全通道路径",
-    defaultValue: "/api/internal/liq2-wallet/bootstrap",
-    protocols: [],
-    hosts: [],
-    paths: ["/api/internal/liq2-wallet/bootstrap"],
-    required: true,
-  },
 ];
 
-const OFFICIAL_PATHS = {
-  TX_WALLET_PUBLIC_KEY_PATH: "server/tx-wallet-public.pem",
-};
-
 export function checkOfficialConfig(scope: string, env: Record<string, string>): SecurityCheckItem[] {
-  const items = OFFICIAL_ENDPOINTS.map((rule) => checkOfficialEndpoint(scope, env, rule));
-  const txPublicKeyPath = env.TX_WALLET_PUBLIC_KEY_PATH?.trim() || OFFICIAL_PATHS.TX_WALLET_PUBLIC_KEY_PATH;
-  items.push({
-    scope,
-    key: "TX_WALLET_PUBLIC_KEY_PATH",
-    label: "安全校验文件",
-    value: txPublicKeyPath,
-    ok: txPublicKeyPath === OFFICIAL_PATHS.TX_WALLET_PUBLIC_KEY_PATH,
-    message:
-      txPublicKeyPath === OFFICIAL_PATHS.TX_WALLET_PUBLIC_KEY_PATH
-        ? "官方校验文件"
-        : `应使用 ${OFFICIAL_PATHS.TX_WALLET_PUBLIC_KEY_PATH}`,
-  });
-  if (env.TX_WALLET_PUBLIC_KEY?.trim()) {
-    items.push({
-      scope,
-      key: "TX_WALLET_PUBLIC_KEY",
-      label: "自定义安全校验材料",
-      value: "已配置自定义校验材料",
-      ok: false,
-      message: "请使用官方校验文件，避免安全通道被替换",
-    });
-  }
-  return items;
+  return OFFICIAL_ENDPOINTS.map((rule) => checkOfficialEndpoint(scope, env, rule));
 }
 
 export async function checkRuntimeSettings(scope: string, env: Record<string, string>, authCode = ""): Promise<SecurityCheckItem[]> {
   const wallet = checkWallet(scope, env);
-  const queueToken = checkQueueWssToken(scope, env, authCode);
   const tokenPromise = checkSuperMtNodeToken(scope, env);
   const licensePromise = authCode ? checkLicenseEndpoints(env, authCode) : Promise.resolve({ endpoints: [], error: "" });
   const [token, license] = await Promise.all([tokenPromise, licensePromise]);
@@ -199,7 +52,7 @@ export async function checkRuntimeSettings(scope: string, env: Record<string, st
   if (license.endpoints.length) bindingSources.push({ label: "当前授权码", endpoints: license.endpoints });
   if (token.endpoints.length) bindingSources.push({ label: "SUPERMTNODE_APP_TOKEN", endpoints: token.endpoints });
   const bnbRpc = await checkBnbRpc(scope, env, bindingSources);
-  const items = [wallet, token.item, bnbRpc, queueToken];
+  const items = [wallet, token.item, bnbRpc];
   if (license.error) {
     items.push({
       scope,
@@ -302,21 +155,6 @@ function checkWallet(scope: string, env: Record<string, string>): SecurityCheckI
     value: walletAddress ?? "",
     ok: Boolean(walletAddress),
     message: walletAddress ? "已解析钱包地址" : "钱包授权格式无效，请检查输入",
-  };
-}
-
-function checkQueueWssToken(scope: string, env: Record<string, string>, authCode = ""): SecurityCheckItem {
-  const token = queueWssToken(env);
-  const ok = Boolean(token);
-  const fallbackMessage = authCode || usableToken(env.SUPERMTNODE_APP_TOKEN) ? "使用内置官方队列 Token" : "使用内置官方队列 Token";
-  const message = hasConfiguredQueueWssToken(env) ? "队列 WSS Token 已配置" : fallbackMessage;
-  return {
-    scope,
-    key: "LIQUIDATION_QUEUE_WSS_TOKEN",
-    label: "队列 WSS Token",
-    value: hasConfiguredQueueWssToken(env) ? "已配置" : "内置官方 Token",
-    ok,
-    message,
   };
 }
 
@@ -427,13 +265,6 @@ function isPermissiveRpcCheckError(message: string): boolean {
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: Record<string, string>): Promise<T> {
-  if (env && stateRpcEnabledForChain("bnb", env) && normalizeComparableUrl(rpcUrl) === normalizeComparableUrl(env.BNB_RPC_URL?.trim())) {
-    try {
-      return await stateRpc<T>("bnb", env, method, params);
-    } catch (error) {
-      console.warn(`[state-rpc] bnb ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   const response = await fetch(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -455,7 +286,7 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: R
 }
 
 async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: string): Promise<Array<Record<string, unknown>>> {
-  const apiBase = (env.SUPERMTNODE_API_BASE_URL?.trim() || "https://api.supermtnode.io").replace(/\/+$/, "");
+  const apiBase = "https://api.supermtnode.io";
   const response = await fetch(`${apiBase}/api/rpc-endpoints`, {
     headers: { accept: "application/json", authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(4_000),
@@ -517,8 +348,8 @@ async function fetchSuperMtNodeEndpointsByLicense(env: Record<string, string>, a
   throw new Error(errors.join("; "));
 }
 
-function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
-  return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), "https://supermtnode.io", "https://api.supermtnode.io"]).map((value) => value.replace(/\/+$/, ""));
+function superMtNodeApiBaseUrls(_env: Record<string, string>): string[] {
+  return ["https://supermtnode.io", "https://api.supermtnode.io"].map((value) => value.replace(/\/+$/, ""));
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

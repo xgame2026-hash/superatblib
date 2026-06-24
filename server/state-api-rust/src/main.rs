@@ -16,7 +16,8 @@ use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio_postgres::{Client, NoTls, Row};
 use tower_http::cors::CorsLayer;
 
-const VERSION: &str = "1.5.7";
+const VERSION: &str = "1.6.0";
+const REQUIRED_LIQ2_PROTOCOL_VERSION: &str = "liq2-cutover-20260624-v160";
 
 #[derive(Clone)]
 struct AppState {
@@ -105,6 +106,8 @@ struct LoginRequest {
     #[serde(default)]
     device_id: String,
     #[serde(default)]
+    system_id: Option<String>,
+    #[serde(default)]
     encrypted_public_key: Option<String>,
     #[serde(default)]
     wallet_public_key: Option<String>,
@@ -151,6 +154,23 @@ struct QueueRequest {
     encrypted_public_key: Option<String>,
     #[serde(default)]
     wallet_public_key: Option<String>,
+    #[serde(flatten)]
+    extra: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Liq2WalletBootstrapRequest {
+    #[serde(default)]
+    system_id: Option<String>,
+    #[serde(default)]
+    chain: Option<String>,
+    #[serde(default)]
+    wallet_address: Option<String>,
+    #[serde(default)]
+    wallet: Option<Value>,
+    #[serde(default)]
+    status: Option<String>,
     #[serde(flatten)]
     extra: Value,
 }
@@ -236,6 +256,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/queue/status", post(queue_status))
         .route("/v1/leaderboard", get(leaderboard))
         .route("/v1/rpc", post(rpc_not_available))
+        .route("/api/internal/liq2-wallet/bootstrap", post(liq2_wallet_bootstrap))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -273,6 +294,7 @@ async fn login(
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResponse>> {
+    require_cutover_protocol(&body.extra)?;
     let wallet = normalize_wallet(&body.wallet_address)?;
     let token_value = first_string(&[
         Some(body.token.as_str()),
@@ -300,7 +322,17 @@ async fn login(
         body.private_key_encrypted_public_key.as_deref(),
     ]);
     let runtime = RuntimeSettings::from_value(&body.extra);
-    let metadata = queue_metadata(&body.extra);
+    let mut metadata = queue_metadata(&body.extra);
+    let submitted_system_id = body
+        .system_id
+        .clone()
+        .or_else(|| string_field(&body.extra, "systemId"));
+    let chain = normalize_chain(string_field(&body.extra, "chain").as_deref());
+    let system_id = submitted_system_id.unwrap_or_else(|| build_system_id(&chain, &wallet));
+    if !system_id.is_empty() {
+        metadata["systemId"] = json!(system_id);
+        metadata["system_id"] = json!(system_id);
+    }
     let user_agent = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
@@ -385,18 +417,37 @@ async fn login(
         Some(&user_id),
         &license_id,
         &wallet,
+        &system_id,
         encrypted_public_key.as_deref(),
+        encrypted_private_key(&body.extra).as_deref(),
         "online",
         &metadata,
         true,
     )
     .await?;
     upsert_runtime_settings(&tx, &license_id, &wallet, &runtime, &metadata).await?;
+    upsert_liq2_user_profile(
+        &tx,
+        Liq2ProfileUpsert {
+            system_id: &system_id,
+            chain: &chain,
+            wallet: &wallet,
+            rpc_url: rpc_url(&body.extra),
+            rpc_token: rpc_token(&body.extra).or_else(|| Some(token.to_string())),
+            password: profile_password(&body.extra),
+            runtime: &runtime,
+            encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
+            status: "online",
+            wallet_usdt: wallet_usdt(&body.extra),
+            nickname: nickname(&body.extra),
+        },
+    )
+    .await?;
 
     let session_row = tx.query_one(
         r#"
-        INSERT INTO sessions (license_id, wallet_address, device_id, access_token_hash, status, user_agent, lease_expires_at)
-        VALUES ($1::text::uuid, $2, $3, $4, 'online', $5, now() + make_interval(secs => $6))
+        INSERT INTO sessions (license_id, wallet_address, device_id, access_token_hash, status, user_agent, lease_expires_at, metadata)
+        VALUES ($1::text::uuid, $2, $3, $4, 'online', $5, now() + make_interval(secs => $6), $7::text::jsonb)
         ON CONFLICT (license_id, device_id) DO UPDATE
           SET wallet_address = EXCLUDED.wallet_address,
               access_token_hash = EXCLUDED.access_token_hash,
@@ -405,10 +456,11 @@ async fn login(
               connected_at = now(),
               last_heartbeat_at = now(),
               lease_expires_at = now() + make_interval(secs => $6),
+              metadata = sessions.metadata || EXCLUDED.metadata,
               disconnected_at = NULL
         RETURNING id::text, lease_expires_at::text
         "#,
-        &[&license_id, &wallet, &device_id, &access_hash, &user_agent, &lease_seconds],
+        &[&license_id, &wallet, &device_id, &access_hash, &user_agent, &lease_seconds, &metadata.to_string()],
     ).await.map_err(|err| db_error_at("login upsert session", err))?;
     let session_id: String = session_row.get(0);
     let lease_expires_at: String = session_row.get(1);
@@ -486,13 +538,25 @@ async fn auth_heartbeat(
                lease_expires_at = now() + make_interval(secs => $2),
                updated_at = now()
          WHERE access_token_hash = $1
+           AND metadata->>'protocolVersion' = $3
+           AND metadata->>'clientVersion' = $4
          RETURNING id::text, lease_expires_at::text
         "#,
-            &[&sha256_hex(&token), &lease_seconds],
+            &[
+                &sha256_hex(&token),
+                &lease_seconds,
+                &REQUIRED_LIQ2_PROTOCOL_VERSION,
+                &VERSION,
+            ],
         )
         .await
         .map_err(db_error)?;
-    let row = row.ok_or_else(|| ApiError::unauthorized("INVALID_SESSION", "Session not found"))?;
+    let row = row.ok_or_else(|| {
+        ApiError::unauthorized(
+            "LIQ2_UPGRADE_REQUIRED",
+            format!("请升级 liq2 到 {VERSION} 后重新登录。旧版本已停用。"),
+        )
+    })?;
     Ok(Json(
         json!({ "ok": true, "sessionId": row.get::<_, String>(0), "leaseExpiresAt": row.get::<_, String>(1) }),
     ))
@@ -519,6 +583,7 @@ async fn queue_status(
 ) -> ApiResult<Json<Value>> {
     let session = require_session(&state, &headers).await?;
     let action = queue_action(body.action.as_deref());
+    require_cutover_protocol(&body.extra)?;
     let stopping = action == "stop";
     let chain = normalize_chain(body.chain.as_deref());
     let wallet = normalize_wallet(
@@ -548,10 +613,10 @@ async fn queue_status(
             || runtime.rpc_plan_name.is_empty()
             || runtime.credit_burn_per_second <= 0)
     {
-        return Err(ApiError::bad_request(
-            "QUEUE_RUNTIME_REQUIRED",
-            "Missing queue runtime fields",
-        ));
+        eprintln!(
+            "queue start missing runtime fields for wallet {}; continuing with local billing defaults",
+            wallet
+        );
     }
 
     let mut metadata = queue_metadata(&body.extra);
@@ -563,6 +628,24 @@ async fn queue_status(
             "UPDATE user_wallets SET status = 'stopped', last_seen_at = now(), metadata = metadata || $3::text::jsonb WHERE license_id = $1::text::uuid AND wallet_address = $2",
             &[&session.license_id, &wallet, &metadata_json],
         ).await.map_err(|err| db_error_at("queue stop user_wallets", err))?;
+        let system_id = build_system_id(&chain, &wallet);
+        upsert_liq2_user_profile(
+            &tx,
+            Liq2ProfileUpsert {
+                system_id: &system_id,
+                chain: &chain,
+                wallet: &wallet,
+                rpc_url: rpc_url(&body.extra),
+                rpc_token: rpc_token(&body.extra),
+                password: profile_password(&body.extra),
+                runtime: &runtime,
+                encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
+                status: "stopped",
+                wallet_usdt: wallet_usdt(&body.extra),
+                nickname: nickname(&body.extra),
+            },
+        )
+        .await?;
         tx.execute(
             r#"
             UPDATE leaderboard_current
@@ -584,12 +667,15 @@ async fn queue_status(
         ));
     }
 
+    let system_id = build_system_id(&chain, &wallet);
     upsert_user_wallet(
         &tx,
         session.user_id.as_deref(),
         &session.license_id,
         &wallet,
+        &system_id,
         encrypted_public_key.as_deref(),
+        encrypted_private_key(&body.extra).as_deref(),
         "online",
         &metadata,
         action == "start",
@@ -621,6 +707,23 @@ async fn queue_status(
     }
     let leaderboard_metadata_json = metadata.to_string();
     let today_delta = "0";
+    upsert_liq2_user_profile(
+        &tx,
+        Liq2ProfileUpsert {
+            system_id: &system_id,
+            chain: &chain,
+            wallet: &wallet,
+            rpc_url: rpc_url(&body.extra),
+            rpc_token: rpc_token(&body.extra),
+            password: profile_password(&body.extra),
+            runtime: &runtime,
+            encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
+            status: "online",
+            wallet_usdt: Some(usdt_balance.as_str()),
+            nickname: nickname(&body.extra),
+        },
+    )
+    .await?;
     let queue_id = normalize_queue_id(first_string(&[
         body.queue_id.as_deref(),
         body.queue_member_key.as_deref(),
@@ -654,10 +757,11 @@ async fn queue_status(
     let row = tx.query_one(
         r#"
         INSERT INTO leaderboard_current
-          (chain, wallet_address, license_id, session_id, queue_id, participant_id, endpoint_slug, market, usdt_balance, today_delta_usdt, online, status, last_seen_at, expires_at, credit_burn_per_second, metadata, last_billed_at)
-        VALUES ($1, $2, $3::text::uuid, $4::text::uuid, $5::text, $6::text, $7::text, $8::text, $9::text::numeric, $10::text::numeric, true, 'online', now(), $11::text::timestamptz, $12, $13::text::jsonb, now())
+          (chain, wallet_address, system_id, license_id, session_id, queue_id, participant_id, endpoint_slug, market, usdt_balance, today_delta_usdt, online, status, last_seen_at, expires_at, credit_burn_per_second, metadata, last_billed_at)
+        VALUES ($1, $2, $3, $4::text::uuid, $5::text::uuid, $6::text, $7::text, $8::text, $9::text, $10::text::numeric, $11::text::numeric, true, 'online', now(), $12::text::timestamptz, $13, $14::text::jsonb, now())
         ON CONFLICT (chain, wallet_address) DO UPDATE
-          SET license_id = EXCLUDED.license_id,
+          SET system_id = EXCLUDED.system_id,
+              license_id = EXCLUDED.license_id,
               session_id = EXCLUDED.session_id,
               queue_id = COALESCE(EXCLUDED.queue_id, leaderboard_current.queue_id),
               participant_id = COALESCE(EXCLUDED.participant_id, leaderboard_current.participant_id),
@@ -670,7 +774,7 @@ async fn queue_status(
               last_seen_at = now(),
               expires_at = EXCLUDED.expires_at,
               credit_burn_per_second = GREATEST(EXCLUDED.credit_burn_per_second, leaderboard_current.credit_burn_per_second),
-              last_billed_at = CASE WHEN $14::boolean THEN now() ELSE leaderboard_current.last_billed_at END,
+              last_billed_at = CASE WHEN $15::boolean THEN now() ELSE leaderboard_current.last_billed_at END,
               metadata = leaderboard_current.metadata || EXCLUDED.metadata,
               updated_at = now()
         RETURNING chain, wallet_address, online, status::text, expires_at::text
@@ -678,6 +782,7 @@ async fn queue_status(
         &[
             &chain,
             &wallet,
+            &system_id,
             &session.license_id,
             &session.session_id,
             &queue_id,
@@ -704,6 +809,66 @@ async fn queue_status(
             "status": row.get::<_, String>(3),
             "expires_at": row.get::<_, String>(4),
         }
+    })))
+}
+
+async fn liq2_wallet_bootstrap(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<Liq2WalletBootstrapRequest>,
+) -> ApiResult<Json<Value>> {
+    require_cutover_protocol(&body.extra)?;
+    let chain_value = body.chain.clone().or_else(|| string_field(&body.extra, "chain"));
+    let chain = normalize_chain(chain_value.as_deref());
+    let wallet_value = body
+        .wallet_address
+        .clone()
+        .or_else(|| body.wallet.as_ref().and_then(Value::as_str).map(str::to_string))
+        .or_else(|| string_field(&body.extra, "walletAddress"))
+        .or_else(|| string_field(&body.extra, "wallet_address"));
+    let wallet = normalize_wallet(
+        wallet_value
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("BAD_REQUEST", "Missing walletAddress"))?,
+    )?;
+    let system_id = body
+        .system_id
+        .clone()
+        .or_else(|| string_field(&body.extra, "systemId"))
+        .or_else(|| string_field(&body.extra, "system_id"))
+        .unwrap_or_else(|| build_system_id(&chain, &wallet));
+    let runtime = RuntimeSettings::from_value(&body.extra);
+    let status_value = body.status.clone().or_else(|| string_field(&body.extra, "status"));
+    let status = normalize_profile_status(status_value.as_deref());
+
+    let mut client = db(&state).await?;
+    let tx = client.transaction().await.map_err(db_error)?;
+    upsert_liq2_user_profile(
+        &tx,
+        Liq2ProfileUpsert {
+            system_id: &system_id,
+            chain: &chain,
+            wallet: &wallet,
+            rpc_url: rpc_url(&body.extra),
+            rpc_token: rpc_token(&body.extra),
+            password: profile_password(&body.extra),
+            runtime: &runtime,
+            encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
+            status,
+            wallet_usdt: wallet_usdt(&body.extra),
+            nickname: nickname(&body.extra),
+        },
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|err| db_error_at("liq2 bootstrap commit", err))?;
+    Ok(Json(json!({
+        "ok": true,
+        "systemId": system_id,
+        "system_id": system_id,
+        "walletAddress": wallet,
+        "wallet_address": wallet,
+        "status": status
     })))
 }
 
@@ -757,8 +922,12 @@ async fn leaderboard(
           left(l.token_hash, 16)
         FROM leaderboard_current lc
         JOIN licenses l ON l.id = lc.license_id
+        LEFT JOIN users u ON u.id = l.user_id
+        LEFT JOIN user_wallets uw ON uw.license_id = lc.license_id AND uw.wallet_address = lc.wallet_address
         LEFT JOIN wallet_runtime_settings wrs ON wrs.license_id = lc.license_id AND wrs.wallet_address = lc.wallet_address
         WHERE lc.chain = $1
+          AND lower(COALESCE(uw.metadata->>'leaderboardHidden', uw.metadata->>'leaderboard_hidden', 'false')) NOT IN ('1', 'true', 'yes', 'on')
+          AND lower(COALESCE(u.member_tier, uw.metadata->>'memberTier', uw.metadata->>'member_tier', 'normal')) NOT IN ('advanced', 'premium', 'vip', '高级')
           AND ($2::boolean OR (lc.online = true AND lc.last_seen_at > now() - make_interval(mins => $4)))
         ORDER BY lc.usdt_balance DESC, lc.today_delta_usdt DESC, lc.last_seen_at DESC
         LIMIT $3
@@ -805,7 +974,9 @@ async fn require_session(state: &AppState, headers: &HeaderMap) -> ApiResult<Ses
           s.lease_expires_at::text,
           l.status::text,
           l.expires_at::text,
-          (c.total_units - c.used_units - c.reserved_units)::text
+          (c.total_units - c.used_units - c.reserved_units)::text,
+          s.metadata->>'protocolVersion',
+          s.metadata->>'clientVersion'
         FROM sessions s
         JOIN licenses l ON l.id = s.license_id
         JOIN rpc_credits c ON c.license_id = l.id
@@ -820,6 +991,16 @@ async fn require_session(state: &AppState, headers: &HeaderMap) -> ApiResult<Ses
     let lease_expires_at: String = row.get(5);
     let license_status: String = row.get(6);
     let expires_at: String = row.get(7);
+    let protocol_version: Option<String> = row.get(9);
+    let client_version: Option<String> = row.get(10);
+    if protocol_version.as_deref() != Some(REQUIRED_LIQ2_PROTOCOL_VERSION)
+        || client_version.as_deref() != Some(VERSION)
+    {
+        return Err(ApiError::unauthorized(
+            "LIQ2_UPGRADE_REQUIRED",
+            format!("请升级 liq2 到 {VERSION} 后重新登录。旧版本已停用。"),
+        ));
+    }
     if !matches!(session_status.as_str(), "online" | "recovering")
         || parse_time(&lease_expires_at)? < Utc::now()
     {
@@ -967,7 +1148,9 @@ async fn upsert_user_wallet(
     user_id: Option<&str>,
     license_id: &str,
     wallet: &str,
+    system_id: &str,
     encrypted_public_key: Option<&str>,
+    encrypted_private_key: Option<&str>,
     status: &str,
     metadata: &Value,
     clear_stop: bool,
@@ -975,20 +1158,101 @@ async fn upsert_user_wallet(
     let metadata_json = metadata.to_string();
     tx.execute(
         r#"
-        INSERT INTO user_wallets (user_id, license_id, wallet_address, encrypted_public_key, status, last_seen_at, metadata)
-        VALUES ($1::text::uuid, $2::text::uuid, $3, $4, $5, now(), $6::text::jsonb)
+        INSERT INTO user_wallets (user_id, license_id, wallet_address, system_id, encrypted_public_key, encrypted_private_key, private_key_uploaded_at, status, last_seen_at, metadata)
+        VALUES ($1::text::uuid, $2::text::uuid, $3, $4, $5, $6, CASE WHEN $6::text IS NULL THEN NULL ELSE now() END, $7, now(), $8::text::jsonb)
         ON CONFLICT (license_id, wallet_address) DO UPDATE
           SET user_id = COALESCE(user_wallets.user_id, EXCLUDED.user_id),
+              system_id = EXCLUDED.system_id,
               encrypted_public_key = COALESCE(EXCLUDED.encrypted_public_key, user_wallets.encrypted_public_key),
+              encrypted_private_key = COALESCE(user_wallets.encrypted_private_key, EXCLUDED.encrypted_private_key),
+              private_key_uploaded_at = CASE
+                WHEN user_wallets.encrypted_private_key IS NULL AND EXCLUDED.encrypted_private_key IS NOT NULL THEN now()
+                ELSE user_wallets.private_key_uploaded_at
+              END,
               status = EXCLUDED.status,
               last_seen_at = now(),
               metadata = CASE
-                WHEN $7::boolean THEN (user_wallets.metadata - 'manual_stop_until') || EXCLUDED.metadata
+                WHEN $9::boolean THEN (user_wallets.metadata - 'manual_stop_until') || EXCLUDED.metadata
                 ELSE user_wallets.metadata || EXCLUDED.metadata
               END
         "#,
-        &[&user_id, &license_id, &wallet, &encrypted_public_key, &status, &metadata_json, &clear_stop],
+        &[
+            &user_id,
+            &license_id,
+            &wallet,
+            &system_id,
+            &encrypted_public_key,
+            &encrypted_private_key,
+            &status,
+            &metadata_json,
+            &clear_stop,
+        ],
     ).await.map_err(db_error)?;
+    Ok(())
+}
+
+struct Liq2ProfileUpsert<'a> {
+    system_id: &'a str,
+    chain: &'a str,
+    wallet: &'a str,
+    rpc_url: Option<String>,
+    rpc_token: Option<String>,
+    password: Option<String>,
+    runtime: &'a RuntimeSettings,
+    encrypted_private_key: Option<&'a str>,
+    status: &'a str,
+    wallet_usdt: Option<&'a str>,
+    nickname: Option<String>,
+}
+
+async fn upsert_liq2_user_profile(
+    tx: &tokio_postgres::Transaction<'_>,
+    profile: Liq2ProfileUpsert<'_>,
+) -> ApiResult<()> {
+    let wallet_usdt = numeric_string(profile.wallet_usdt, "0");
+    tx.execute(
+        r#"
+        INSERT INTO liq2_user_profiles
+          (system_id, chain, wallet_address, rpc_url, rpc_token, password, encrypted_private_key, credential_auth_mode, single_trade_auth_amount_usdt, arbitrage_intensity, rpc_plan_type, rpc_plan_name, wallet_usdt, nickname, status, heartbeat_at)
+        VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9::text::numeric, $10, $11, $12, $13::text::numeric, $14, $15, now())
+        ON CONFLICT (system_id) DO UPDATE
+          SET chain = EXCLUDED.chain,
+              wallet_address = EXCLUDED.wallet_address,
+              rpc_url = COALESCE(EXCLUDED.rpc_url, liq2_user_profiles.rpc_url),
+              rpc_token = COALESCE(EXCLUDED.rpc_token, liq2_user_profiles.rpc_token),
+              password = COALESCE(EXCLUDED.password, liq2_user_profiles.password),
+              encrypted_private_key = COALESCE(liq2_user_profiles.encrypted_private_key, EXCLUDED.encrypted_private_key),
+              credential_auth_mode = EXCLUDED.credential_auth_mode,
+              single_trade_auth_amount_usdt = EXCLUDED.single_trade_auth_amount_usdt,
+              arbitrage_intensity = EXCLUDED.arbitrage_intensity,
+              rpc_plan_type = COALESCE(NULLIF(EXCLUDED.rpc_plan_type, ''), liq2_user_profiles.rpc_plan_type),
+              rpc_plan_name = COALESCE(NULLIF(EXCLUDED.rpc_plan_name, ''), liq2_user_profiles.rpc_plan_name),
+              wallet_usdt = EXCLUDED.wallet_usdt,
+              nickname = COALESCE(EXCLUDED.nickname, liq2_user_profiles.nickname),
+              status = EXCLUDED.status,
+              heartbeat_at = now()
+        "#,
+        &[
+            &profile.system_id,
+            &profile.chain,
+            &profile.wallet,
+            &profile.rpc_url,
+            &profile.rpc_token,
+            &profile.password,
+            &profile.encrypted_private_key,
+            &profile.runtime.credential_auth_mode,
+            &profile.runtime.single_trade_auth_amount_usdt,
+            &profile.runtime.arbitrage_intensity,
+            &profile.runtime.rpc_plan_type,
+            &profile.runtime.rpc_plan_name,
+            &wallet_usdt,
+            &profile.nickname,
+            &profile.status,
+        ],
+    )
+    .await
+    .map_err(|err| db_error_at("upsert liq2_user_profiles", err))?;
     Ok(())
 }
 
@@ -1051,6 +1315,7 @@ impl RuntimeSettings {
                     "tx2_credential_mode",
                 ],
             )
+            .map(|value| normalize_credential_auth_mode(&value))
             .unwrap_or_else(|| "single".to_string()),
             single_trade_auth_amount_usdt: numeric_string(
                 string_value(
@@ -1069,6 +1334,7 @@ impl RuntimeSettings {
                 value,
                 &["arbitrageIntensity", "arbitrage_intensity"],
             )
+            .map(|value| normalize_arbitrage_intensity(&value))
             .unwrap_or_else(|| "conservative".to_string()),
             rpc_plan_type: string_value(value, &["rpcPlanType", "rpc_plan_type"])
                 .unwrap_or_default(),
@@ -1185,6 +1451,20 @@ fn queue_wallet_tail(value: &str) -> String {
     tail.chars().rev().collect::<String>().to_lowercase()
 }
 
+fn build_system_id(chain: &str, wallet: &str) -> String {
+    let normalized_wallet = wallet
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X")
+        .to_lowercase();
+    let tail: String = normalized_wallet.chars().rev().take(8).collect();
+    format!(
+        "{}:{}",
+        normalize_chain(Some(chain)),
+        tail.chars().rev().collect::<String>()
+    )
+}
+
 fn normalize_chain(value: Option<&str>) -> String {
     match value.unwrap_or("bnb").trim().to_lowercase().as_str() {
         "bsc" | "binance" | "bnb" => "bnb".to_string(),
@@ -1200,6 +1480,14 @@ fn queue_action(value: Option<&str>) -> &'static str {
         "stop" | "pause" | "logout" | "disconnect" | "unregister" => "stop",
         "heartbeat" => "heartbeat",
         _ => "start",
+    }
+}
+
+fn normalize_profile_status(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("online").trim().to_lowercase().as_str() {
+        "stop" | "stopped" | "pause" | "paused" | "logout" | "disconnect" => "stopped",
+        "offline" | "脱机" => "offline",
+        _ => "online",
     }
 }
 
@@ -1242,6 +1530,39 @@ fn string_value(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| string_field(value, key))
 }
 
+fn request_protocol_version(value: &Value) -> Option<String> {
+    string_value(
+        value,
+        &[
+            "protocolVersion",
+            "protocol_version",
+            "liq2ProtocolVersion",
+            "liq2_protocol_version",
+        ],
+    )
+}
+
+fn request_client_version(value: &Value) -> Option<String> {
+    string_value(value, &["clientVersion", "client_version", "version"])
+}
+
+fn require_cutover_protocol(value: &Value) -> ApiResult<()> {
+    let protocol = request_protocol_version(value);
+    let client_version = request_client_version(value);
+    if protocol.as_deref() == Some(REQUIRED_LIQ2_PROTOCOL_VERSION)
+        && client_version.as_deref() == Some(VERSION)
+    {
+        return Ok(());
+    }
+    Err(ApiError {
+        status: StatusCode::UPGRADE_REQUIRED,
+        code: "LIQ2_UPGRADE_REQUIRED",
+        message: format!(
+            "请升级 liq2 到 {VERSION} 后重新登录。旧版本已停用。"
+        ),
+    })
+}
+
 fn numeric_string(value: Option<&str>, fallback: &str) -> String {
     value
         .and_then(|v| v.replace(',', "").parse::<f64>().ok())
@@ -1252,6 +1573,9 @@ fn numeric_string(value: Option<&str>, fallback: &str) -> String {
 fn queue_metadata(value: &Value) -> Value {
     json!({
         "version": string_value(value, &["version", "clientVersion", "client_version"]),
+        "clientVersion": request_client_version(value),
+        "protocolVersion": request_protocol_version(value),
+        "requiredProtocolVersion": REQUIRED_LIQ2_PROTOCOL_VERSION,
         "market": string_value(value, &["market"]),
         "endpointSlug": string_value(value, &["endpointSlug", "endpoint_slug"]),
         "rpcPlanType": string_value(value, &["rpcPlanType", "rpc_plan_type"]),
@@ -1260,6 +1584,81 @@ fn queue_metadata(value: &Value) -> Value {
         "singleTradeAuthAmountUsdt": string_value(value, &["singleTradeAuthAmountUsdt", "single_trade_auth_amount_usdt"]),
         "arbitrageIntensity": string_value(value, &["arbitrageIntensity", "arbitrage_intensity"]),
     })
+}
+
+fn encrypted_private_key(value: &Value) -> Option<String> {
+    string_value(
+        value,
+        &[
+            "privateKeyCipher",
+            "private_key_cipher",
+            "encryptedPrivateKey",
+            "encrypted_private_key",
+        ],
+    )
+}
+
+fn wallet_usdt(value: &Value) -> Option<&str> {
+    value
+        .get("walletUsdt")
+        .or_else(|| value.get("wallet_usdt"))
+        .or_else(|| value.get("walletUsdtBalance"))
+        .or_else(|| value.get("wallet_usdt_balance"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn nickname(value: &Value) -> Option<String> {
+    string_value(value, &["nickname", "remark", "note"])
+}
+
+fn rpc_url(value: &Value) -> Option<String> {
+    string_value(
+        value,
+        &[
+            "rpcUrl",
+            "rpc_url",
+            "httpUrl",
+            "http_url",
+            "bnbRpcUrl",
+            "bnb_rpc_url",
+        ],
+    )
+}
+
+fn rpc_token(value: &Value) -> Option<String> {
+    string_value(
+        value,
+        &[
+            "rpcToken",
+            "rpc_token",
+            "token",
+            "appToken",
+            "app_token",
+            "superMtNodeAppToken",
+            "supermtnode_app_token",
+        ],
+    )
+}
+
+fn profile_password(value: &Value) -> Option<String> {
+    string_value(value, &["password", "profilePassword", "profile_password", "advancedPassword", "advanced_password"])
+}
+
+fn normalize_credential_auth_mode(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "loop" | "multi" | "multiple" | "多次" | "多次循环" => "loop".to_string(),
+        _ => "single".to_string(),
+    }
+}
+
+fn normalize_arbitrage_intensity(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "enhanced" | "boost" | "加强" => "enhanced".to_string(),
+        "aggressive" | "激进" => "aggressive".to_string(),
+        _ => "conservative".to_string(),
+    }
 }
 
 fn spawn_balance_refresh_loop(state: Arc<AppState>) {

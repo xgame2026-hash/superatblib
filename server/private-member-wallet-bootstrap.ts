@@ -12,7 +12,9 @@ const DEFAULT_PRIVATE_MEMBER_API_URL = "https://private.superarb.ai";
 const DEFAULT_BOOTSTRAP_PATH = "/api/internal/liq2-wallet/bootstrap";
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_TIMEOUT_MS = 10_000;
-const BOOTSTRAP_STATE_VERSION = "v4";
+const BOOTSTRAP_STATE_VERSION = "v6";
+const CLIENT_VERSION = "1.6.0";
+const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 
 type BootstrapState = {
   submitted: Record<string, SubmittedWallet>;
@@ -20,6 +22,7 @@ type BootstrapState = {
 
 type SubmittedWallet = {
   username: string;
+  systemId: string;
   walletAddress: string;
   txPublicKeyFingerprint?: string;
   authIdentityHash?: string;
@@ -28,6 +31,7 @@ type SubmittedWallet = {
   singleTradeAuthAmountUsdt?: string;
   rpcPlanType?: string;
   rpcPlanName?: string;
+  profilePayloadHash?: string;
   endpoint: string;
   submittedAt: string;
 };
@@ -65,18 +69,38 @@ export function privateMemberWalletBootstrapStatus(env: Record<string, string>):
   try {
     if (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED?.trim() === "false") return { ok: false, message: "安全同步已关闭", action: "repair_secure_upload" };
     const privateKey = env.PRIVATE_KEY?.trim();
-    const appToken = env.SUPERMTNODE_APP_TOKEN?.trim();
+    const authIdentity = privateMemberAuthIdentity(env);
     if (!privateKey) return { ok: false, message: "本地未配置钱包授权" };
-    if (!appToken) return { ok: false, message: "本地未配置服务授权 Token" };
+    if (!authIdentity) return { ok: false, message: "本地未配置授权码" };
 
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
+    const username = walletAddress.slice(2, 10).toLowerCase();
+    const chain = defaultChain(env);
+    const systemId = buildSystemId(chain, walletAddress);
     const endpoint = privateMemberBootstrapEndpoint(env);
-    const txPublicKeyPem = readTxPublicKeyPem(env);
+    const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
+    const rpcUrl = readRpcUrl(chain, env);
+    const rpcToken = appToken || undefined;
+    const rpcPlan = readLocalRpcPlanInfo(env);
+    const profilePayloadHash = profilePayloadFingerprint(buildProfilePayload(env, {
+      reason: "status-check",
+      username,
+      systemId,
+      chain,
+      walletAddress,
+      rpcUrl,
+      rpcToken,
+      authCode: privateMemberAuthCode(env),
+      authIdentity,
+      rpcPlan,
+    }));
+    const txPublicKeyPem = readTxPublicKeyPem();
     const state = readState();
     return hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
       txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
-      authIdentityHash: tokenFingerprint(appToken),
+      authIdentityHash: tokenFingerprint(authIdentity),
+      profilePayloadHash,
     })
       ? { ok: true, message: "安全同步已完成" }
       : { ok: false, message: "安全同步未完成", action: "repair_secure_upload" };
@@ -101,7 +125,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
 
     const privateKey = env.PRIVATE_KEY?.trim();
     const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
-    const authCode = options.authCode?.trim();
+    const authCode = options.authCode?.trim() || privateMemberAuthCode(env);
     const authIdentity = authCode || appToken;
     if (!privateKey) return { ok: true, skipped: true, reason: "missing_private_key" };
     if (!authIdentity) return { ok: true, skipped: true, reason: "missing_auth" };
@@ -110,19 +134,37 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
     const username = walletAddress.slice(2, 10).toLowerCase();
+    const chain = defaultChain(env);
+    const systemId = buildSystemId(chain, walletAddress);
     const endpoint = privateMemberBootstrapEndpoint(env);
-    const txPublicKeyPem = readTxPublicKeyPem(env);
+    const rpcUrl = readRpcUrl(chain, env);
+    const rpcToken = appToken || undefined;
+    const txPublicKeyPem = readTxPublicKeyPem();
     const rpcPlan =
       options.rpcPlanType && options.rpcPlanName
         ? { rpcPlanType: options.rpcPlanType, rpcPlanName: options.rpcPlanName }
-        : await readRpcPlanInfo(env, appToken);
-    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, authIdentity);
+        : readLocalRpcPlanInfo(env);
+    const profilePayload = buildProfilePayload(env, {
+      reason,
+      username,
+      systemId,
+      chain,
+      walletAddress,
+      rpcUrl,
+      rpcToken,
+      authCode,
+      authIdentity,
+      rpcPlan,
+    });
+    const profilePayloadHash = profilePayloadFingerprint(profilePayload);
+    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, authIdentity, profilePayloadHash);
     const state = readState();
     if (
       state.submitted[stateKey] &&
       hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
         txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
         authIdentityHash: tokenFingerprint(authIdentity),
+        profilePayloadHash,
       })
     ) {
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_locally" };
@@ -139,15 +181,11 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
         "x-liq2-bootstrap-reason": reason,
       },
       body: JSON.stringify({
-        source: "liq2-client",
-        reason,
-        username,
-        password: env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PASSWORD?.trim() || bootstrapPassword(walletAddress, authIdentity || endpoint),
-        appToken: appToken || "",
-        authCode,
-        authIdentity,
-        walletAddress,
+        ...profilePayload,
         privateKeyCipher,
+        private_key_cipher: privateKeyCipher,
+        encryptedPrivateKey: privateKeyCipher,
+        encrypted_private_key: privateKeyCipher,
         encryption: {
           v: 1,
           alg: "RSA-OAEP-256+AES-256-GCM",
@@ -162,21 +200,21 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       return { ok: false, skipped: true, username, walletAddress, endpoint, reason: "remote_bootstrap_endpoint_not_found" };
     }
     if (response.status === 409 || isAlreadySubmittedPayload(payload)) {
-      markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...rpcPlan });
+      markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
       writeState(state);
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
     }
     if (!response.ok || payload.ok === false) {
       const message = stringValue(payload.error, payload.message) || `private.superarb.ai returned HTTP ${response.status}`;
       if (isAlreadySubmittedMessage(message)) {
-        markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...rpcPlan });
+        markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
         writeState(state);
         return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
       }
       throw new Error(message);
     }
 
-    markSubmitted(state, stateKey, { username, walletAddress, txPublicKeyPem, authIdentity, endpoint, ...rpcPlan });
+    markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
     writeState(state);
     return { ok: true, skipped: Boolean(payload.skipped), username, walletAddress, endpoint };
   } catch (error) {
@@ -191,19 +229,23 @@ function markSubmitted(
   stateKey: string,
   payload: {
     username: string;
+    systemId?: string;
     walletAddress: string;
     txPublicKeyPem: string;
     authIdentity: string;
     endpoint: string;
     rpcPlanType?: string;
     rpcPlanName?: string;
+    profilePayloadHash?: string;
   },
 ): void {
   const { txPublicKeyPem, authIdentity, ...publicPayload } = payload;
   state.submitted[stateKey] = {
     ...publicPayload,
+    systemId: publicPayload.systemId || buildSystemId(defaultChain(readEnv()), publicPayload.walletAddress),
     txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
     authIdentityHash: tokenFingerprint(authIdentity),
+    profilePayloadHash: payload.profilePayloadHash,
     submittedAt: new Date().toISOString(),
   };
 }
@@ -216,7 +258,7 @@ function hasLatestSubmittedWalletSettings(
   state: BootstrapState,
   endpoint: string,
   walletAddress: string,
-  identity?: { txPublicKeyFingerprint?: string; authIdentityHash?: string },
+  identity?: { txPublicKeyFingerprint?: string; authIdentityHash?: string; profilePayloadHash?: string },
 ): boolean {
   const normalizedEndpoint = endpoint.replace(/\/+$/, "");
   const normalizedWallet = walletAddress.toLowerCase();
@@ -225,7 +267,8 @@ function hasLatestSubmittedWalletSettings(
     .sort((left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime())[0];
   return (
     (!identity?.txPublicKeyFingerprint || latestSubmitted?.txPublicKeyFingerprint === identity.txPublicKeyFingerprint) &&
-    (!identity?.authIdentityHash || latestSubmitted?.authIdentityHash === identity.authIdentityHash)
+    (!identity?.authIdentityHash || latestSubmitted?.authIdentityHash === identity.authIdentityHash) &&
+    (!identity?.profilePayloadHash || latestSubmitted?.profilePayloadHash === identity.profilePayloadHash)
   );
 }
 
@@ -258,16 +301,22 @@ function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
 }
 
 function privateMemberBootstrapEndpoint(env: Record<string, string>): string {
-  const baseUrl = (env.LIQ2_PRIVATE_MEMBER_API_URL || env.PRIVATE_MEMBER_ADMIN_API_URL || DEFAULT_PRIVATE_MEMBER_API_URL).trim().replace(/\/+$/, "");
+  const configuredBase = (env.LIQ2_PRIVATE_MEMBER_API_URL || DEFAULT_PRIVATE_MEMBER_API_URL).trim().replace(/\/+$/, "");
+  const baseUrl = isPrivateSuperarbBase(configuredBase) ? configuredBase : DEFAULT_PRIVATE_MEMBER_API_URL;
   const path = (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH || DEFAULT_BOOTSTRAP_PATH).trim();
   return `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-function readTxPublicKeyPem(env: Record<string, string>): string {
-  const inlineKey = env.TX_WALLET_PUBLIC_KEY?.replace(/\\n/g, "\n").trim();
-  if (inlineKey) return inlineKey;
-  const configuredPath = env.TX_WALLET_PUBLIC_KEY_PATH?.trim();
-  if (configuredPath && existsSync(configuredPath)) return readFileSync(configuredPath, "utf8");
+function isPrivateSuperarbBase(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "private.superarb.ai";
+  } catch {
+    return false;
+  }
+}
+
+function readTxPublicKeyPem(): string {
   if (!existsSync(DEFAULT_TX_PUBLIC_KEY_PATH)) throw new Error(`TX wallet public key not found: ${DEFAULT_TX_PUBLIC_KEY_PATH}`);
   return readFileSync(DEFAULT_TX_PUBLIC_KEY_PATH, "utf8");
 }
@@ -291,6 +340,90 @@ function bootstrapPassword(walletAddress: string, secret: string): string {
   return crypto.createHash("sha256").update(`liq2-bootstrap:${walletAddress.toLowerCase()}:${secret}`).digest("hex").slice(0, 32);
 }
 
+function buildProfilePayload(
+  env: Record<string, string>,
+  input: {
+    reason: string;
+    username: string;
+    systemId: string;
+    chain: string;
+    walletAddress: string;
+    rpcUrl?: string;
+    rpcToken?: string;
+    authCode?: string;
+    authIdentity: string;
+    rpcPlan: { rpcPlanType: string; rpcPlanName: string };
+  },
+): Record<string, unknown> {
+  const credentialAuthMode = readCredentialAuthMode(env);
+  const singleTradeAuthAmountUsdt = normalizeUsdtAmount(env.SINGLE_TRADE_AUTH_AMOUNT_USDT);
+  const arbitrageIntensity = normalizeArbitrageIntensity(env.ARBITRAGE_INTENSITY);
+  const password = env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PASSWORD?.trim() || bootstrapPassword(input.walletAddress, input.authIdentity);
+  const walletUsdt = env.WALLET_USDT_BALANCE?.trim() || undefined;
+  const nickname = env.LIQ2_NICKNAME?.trim() || env.NICKNAME?.trim() || undefined;
+  return {
+    source: "liq2-client",
+    reason: input.reason,
+    version: CLIENT_VERSION,
+    clientVersion: CLIENT_VERSION,
+    client_version: CLIENT_VERSION,
+    protocolVersion: LIQ2_PROTOCOL_VERSION,
+    protocol_version: LIQ2_PROTOCOL_VERSION,
+    liq2ProtocolVersion: LIQ2_PROTOCOL_VERSION,
+    liq2_protocol_version: LIQ2_PROTOCOL_VERSION,
+    username: input.username,
+    systemId: input.systemId,
+    system_id: input.systemId,
+    password,
+    appToken: input.rpcToken || undefined,
+    rpcUrl: input.rpcUrl,
+    rpc_url: input.rpcUrl,
+    rpcToken: input.rpcToken,
+    rpc_token: input.rpcToken,
+    authCode: input.authCode,
+    authIdentity: input.authIdentity,
+    auth_identity: input.authIdentity,
+    chain: input.chain,
+    walletAddress: input.walletAddress,
+    wallet_address: input.walletAddress,
+    credentialAuthMode,
+    credential_auth_mode: credentialAuthMode,
+    singleTradeAuthAmountUsdt,
+    single_trade_auth_amount_usdt: singleTradeAuthAmountUsdt,
+    authorizedAmountUsdt: singleTradeAuthAmountUsdt,
+    arbitrageIntensity,
+    arbitrage_intensity: arbitrageIntensity,
+    rpcPlanType: input.rpcPlan.rpcPlanType,
+    rpc_plan_type: input.rpcPlan.rpcPlanType,
+    rpcPlanName: input.rpcPlan.rpcPlanName,
+    rpc_plan_name: input.rpcPlan.rpcPlanName,
+    purchasedPlan: input.rpcPlan.rpcPlanName || input.rpcPlan.rpcPlanType,
+    walletUsdt,
+    wallet_usdt: walletUsdt,
+    nickname,
+    status: "online",
+  };
+}
+
+function profilePayloadFingerprint(payload: Record<string, unknown>): string {
+  return tokenFingerprint(JSON.stringify({
+    systemId: payload.systemId,
+    chain: payload.chain,
+    walletAddress: payload.walletAddress,
+    rpcUrl: payload.rpcUrl,
+    rpcToken: payload.rpcToken,
+    password: payload.password,
+    credentialAuthMode: payload.credentialAuthMode,
+    singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
+    arbitrageIntensity: payload.arbitrageIntensity,
+    rpcPlanType: payload.rpcPlanType,
+    rpcPlanName: payload.rpcPlanName,
+    walletUsdt: payload.walletUsdt,
+    nickname: payload.nickname,
+    status: payload.status,
+  }));
+}
+
 function tokenFingerprint(value?: string): string {
   const token = value?.trim() ?? "";
   if (!token) return "no-token";
@@ -302,6 +435,7 @@ function submittedStateKey(
   walletAddress: string,
   publicKeyPem: string,
   authIdentity: string,
+  profilePayloadHash: string,
 ): string {
   return crypto
     .createHash("sha256")
@@ -311,36 +445,47 @@ function submittedStateKey(
       walletAddress.toLowerCase(),
       publicKeyPem,
       authIdentity,
+      profilePayloadHash,
     ].join("\n"))
     .digest("hex");
 }
 
-async function readRpcPlanInfo(env: Record<string, string>, appToken?: string): Promise<{ rpcPlanType: string; rpcPlanName: string }> {
-  const token = appToken?.trim();
-  if (!token) return { rpcPlanType: "unknown", rpcPlanName: "Unknown" };
-  const errors: string[] = [];
-  for (const apiBase of superMtNodeApiBaseUrls(env)) {
-    try {
-      const response = await fetch(`${apiBase}/api/rpc-endpoints`, {
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${token}`,
-          "x-supermtnode-app-token": token,
-        },
-        signal: AbortSignal.timeout(timeoutMs(env)),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { endpoints?: unknown; error?: unknown; message?: unknown };
-      if (!response.ok) {
-        throw new Error(stringValue(payload.error, payload.message) || `HTTP ${response.status}`);
-      }
-      const endpoints = Array.isArray(payload.endpoints) ? payload.endpoints.filter(isRecord) : [];
-      return inferRpcPlanInfo(endpoints);
-    } catch (error) {
-      errors.push(`${apiBase}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  console.warn(`[liq2] rpc plan lookup skipped: ${errors.join("; ")}`);
-  return { rpcPlanType: "unknown", rpcPlanName: "Unknown" };
+function privateMemberAuthCode(env: Record<string, string>): string {
+  return (env.AUTH_CODE?.trim() || env.SUPERARB_AUTH_CODE?.trim() || env.LICENSE_CODE?.trim() || "").toUpperCase();
+}
+
+function privateMemberAuthIdentity(env: Record<string, string>): string {
+  return privateMemberAuthCode(env) || usableToken(env.SUPERMTNODE_APP_TOKEN);
+}
+
+function defaultChain(env: Record<string, string>): string {
+  const normalized = (env.LIQ2_CHAIN || env.DEFAULT_CHAIN || env.CHAIN || "bnb").trim().toLowerCase();
+  if (["bsc", "binance", "bnb"].includes(normalized)) return "bnb";
+  if (["eth", "ethereum"].includes(normalized)) return "ethereum";
+  if (["arb", "arbitrum"].includes(normalized)) return "arbitrum";
+  return normalized || "bnb";
+}
+
+function readRpcUrl(chain: string, env: Record<string, string>): string | undefined {
+  const normalized = defaultChain({ LIQ2_CHAIN: chain });
+  const keys =
+    normalized === "bnb"
+      ? ["BNB_RPC_URL", "BSC_RPC_URL", "BNB_FALLBACK_RPC_URL"]
+      : normalized === "ethereum"
+        ? ["ETHEREUM_RPC_URL", "ETH_RPC_URL"]
+        : normalized === "arbitrum"
+          ? ["ARBITRUM_RPC_URL", "ARB_RPC_URL"]
+          : [];
+  return keys.map((key) => env[key]?.trim()).find(Boolean);
+}
+
+function buildSystemId(chain: string, walletAddress: string): string {
+  return `${chain}:${walletAddress.toLowerCase().replace(/^0x/i, "").slice(-8)}`;
+}
+
+function readLocalRpcPlanInfo(env: Record<string, string>): { rpcPlanType: string; rpcPlanName: string } {
+  const rpcPlanType = normalizeRpcPlanType(env.RPC_PLAN_TYPE) || "unknown";
+  return { rpcPlanType, rpcPlanName: env.RPC_PLAN_NAME?.trim() || rpcPlanLabel(rpcPlanType) };
 }
 
 function inferRpcPlanInfo(endpoints: Record<string, unknown>[]): { rpcPlanType: string; rpcPlanName: string } {
@@ -387,10 +532,6 @@ function rpcPlanRank(plan: string): number {
 
 function rpcPlanLabel(plan: string): string {
   return { build: "Build / 189", accelerate: "Accelerate / 489", scale: "Scale / 899", business: "Business / 2999" }[plan as "build" | "accelerate" | "scale" | "business"] ?? "Unknown";
-}
-
-function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
-  return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), "https://supermtnode.io", "https://api.supermtnode.io"]).map((value) => value.replace(/\/+$/, ""));
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

@@ -349,8 +349,6 @@ type FeedKey =
   | "snapshotToken"
   | "snapshotTimeoutMs";
 type QueueKey =
-  | "manageIngestUrl"
-  | "manageIngestToken"
   | "wssUrl"
   | "wssToken"
   | "statusUrl"
@@ -364,7 +362,7 @@ const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.5.7";
+const appVersion = "1.6.0";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
@@ -475,9 +473,7 @@ const settingsForm = reactive({
   queue: {
     wssUrl: "wss://private.superarb.ai/ws/liquidation-queue-v2",
     wssToken: "",
-    manageIngestUrl: "https://manage.supermtnode.io/api/ingest/liquidation-queue",
-    manageIngestToken: "",
-    statusUrl: "https://api.supermtnode.io/api/public/liquidations/queue-status",
+    statusUrl: "https://private.superarb.ai/api/liquidation-queue/status",
     heartbeatIntervalMs: "1000",
     txEventsUrl: "",
   } as Record<QueueKey, string>,
@@ -513,16 +509,6 @@ const settingsSaveTitle = computed(() => {
 
 const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"];
 const hiddenPassingSecurityKeys = [
-  "LIQUIDATION_QUEUE_INGEST_URL",
-  "MANAGE_LIQUIDATION_QUEUE_WSS_URL",
-  "LIQUIDATION_QUEUE_PUBLIC_STATUS_URL",
-  "LIQUIDATION_QUEUE_WSS_STATUS_URL",
-  "PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL",
-  "LIQUIDATION_QUEUE_WSS_TOKEN",
-  "LIQ2_PRIVATE_MEMBER_API_URL",
-  "PRIVATE_MEMBER_ADMIN_API_URL",
-  "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH",
-  "TX_WALLET_PUBLIC_KEY_PATH",
   "SECURE_UPLOAD_STATUS",
 ];
 const visibleSecurityItems = computed(() =>
@@ -972,13 +958,7 @@ function formatSecurityCheckedAt(value?: string) {
 }
 
 function formatSecurityLabel(item: SecurityCheckItem) {
-  if (item.key === "LIQUIDATION_QUEUE_TX_EVENTS_URL") return "执行流水接口";
   if (item.key === "AUTH_CODE") return "登录授权码";
-  if (item.key === "PRIVATE_MEMBER_TX2_CONTRACT_EVENTS_URL") return "备用执行流水接口";
-  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") return "安全通道主机";
-  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") return "安全通道路径";
-  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") return "安全校验文件";
-  if (item.key === "TX_WALLET_PUBLIC_KEY") return "自定义安全校验材料";
   if (item.key === "SECURE_UPLOAD_STATUS") return "安全同步";
   return item.label;
 }
@@ -986,12 +966,7 @@ function formatSecurityLabel(item: SecurityCheckItem) {
 function formatSecurityKey(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return "WALLET_ADDRESS";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return "SERVICE_TOKEN";
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return "QUEUE_TOKEN";
   if (item.key === "AUTH_CODE") return "AUTH_CODE";
-  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") return "SECURE_CHANNEL_HOST";
-  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") return "SECURE_CHANNEL_PATH";
-  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") return "SECURE_VERIFY_FILE";
-  if (item.key === "TX_WALLET_PUBLIC_KEY") return "CUSTOM_VERIFY_MATERIAL";
   if (item.key === "SECURE_UPLOAD_STATUS") return "SECURE_SYNC";
   return item.key;
 }
@@ -1004,20 +979,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
     return item.ok ? "已配置" : "未配置";
   }
   if (item.key === "AUTH_CODE") return item.ok ? "已验证" : "校验失败";
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "官方内置" : "官方队列不可用";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
-  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
-    return item.ok ? "官方安全通道" : "非官方安全通道";
-  }
-  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") {
-    return item.ok ? "官方安全路径" : "非官方安全路径";
-  }
-  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") {
-    return item.ok ? "官方校验文件" : "非官方校验文件";
-  }
-  if (item.key === "TX_WALLET_PUBLIC_KEY") {
-    return "已配置自定义校验材料";
-  }
   if (item.key === "SECURE_UPLOAD_STATUS") return item.value;
   return item.value || "未配置，使用默认值";
 }
@@ -1026,20 +988,7 @@ function formatSecurityMessage(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? "已从钱包授权解析出地址" : "请先配置有效的钱包授权，否则无法提交执行任务";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? "服务授权已配置" : "请先配置服务授权 Token，否则部分官方服务无法完成授权";
   if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "官方内置队列 Token 可用" : "官方内置队列 Token 不可用";
   if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
-  if (item.key === "LIQ2_PRIVATE_MEMBER_API_URL" || item.key === "PRIVATE_MEMBER_ADMIN_API_URL") {
-    return item.ok ? "官方安全通道" : "请恢复为官方安全通道";
-  }
-  if (item.key === "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH") {
-    return item.ok ? "官方安全路径" : "请恢复为官方安全路径";
-  }
-  if (item.key === "TX_WALLET_PUBLIC_KEY_PATH") {
-    return item.ok ? "官方校验文件" : "请恢复为官方校验文件";
-  }
-  if (item.key === "TX_WALLET_PUBLIC_KEY") {
-    return "请使用官方校验文件，避免安全通道被替换";
-  }
   if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
   return item.message;
 }
@@ -1048,7 +997,6 @@ function formatSecuritySummary(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? `钱包地址 ${shortAddress(item.value)}` : "本地未配置";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : item.message;
   if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "LIQUIDATION_QUEUE_WSS_TOKEN") return item.ok ? "官方内置队列 Token" : "官方队列不可用";
   if (item.key === "BNB_RPC_URL") return item.ok || item.value ? item.message : "本地未配置";
   if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
   if (item.ok) return "检查通过";
@@ -1062,7 +1010,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.5.7 internal settings.",
+    "# Generated from SuperARB 1.6.0 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",
@@ -1094,8 +1042,6 @@ function generateEnvText() {
     `ETHEREUM_RPC_URL=${settingsForm.rpc.ethereum}`,
     `BNB_RPC_URL=${settingsForm.rpc.bnb}`,
     `ARBITRUM_RPC_URL=${settingsForm.rpc.arbitrum}`,
-    "STATE_RPC_CHAINS=bnb",
-    "STATE_RPC_TIMEOUT_MS=12000",
     `BASE_RPC_URL=${settingsForm.rpc.base}`,
     `POLYGON_RPC_URL=${settingsForm.rpc.polygon}`,
     "",
@@ -1105,28 +1051,6 @@ function generateEnvText() {
     `LIQUIDATION_SNAPSHOT_API_URL=${settingsForm.feeds.snapshotApiUrl}`,
     `LIQUIDATION_SNAPSHOT_TOKEN=${settingsForm.feeds.snapshotToken}`,
     `LIQUIDATION_SNAPSHOT_TIMEOUT_MS=${settingsForm.feeds.snapshotTimeoutMs}`,
-    "",
-    "# -----------------------------------------------------------------------------",
-    "# 6. Execution Queue",
-    "# -----------------------------------------------------------------------------",
-    `LIQUIDATION_QUEUE_WSS_CORRECTION=${settingsForm.wssCorrectionMode}`,
-    `QUEUE_TOKEN=${settingsForm.queue.wssToken}`,
-    `LIQUIDATION_QUEUE_WSS_URL=${settingsForm.queue.wssUrl}`,
-    `LIQUIDATION_QUEUE_STATUS_URL=${settingsForm.queue.statusUrl}`,
-    `LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS=${settingsForm.queue.heartbeatIntervalMs}`,
-    `LIQUIDATION_QUEUE_TX_EVENTS_URL=${settingsForm.queue.txEventsUrl}`,
-    `MANAGE_LIQUIDATION_QUEUE_INGEST_URL=${settingsForm.queue.manageIngestUrl}`,
-    `MANAGE_INGEST_TOKEN=${settingsForm.queue.manageIngestToken}`,
-    "",
-    "# -----------------------------------------------------------------------------",
-    "# 7. Official Services",
-    "# -----------------------------------------------------------------------------",
-    "SUPERMTNODE_API_BASE_URL=https://api.supermtnode.io",
-    "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED=true",
-    "LIQ2_PRIVATE_MEMBER_API_URL=https://private.superarb.ai",
-    "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH=/api/internal/liq2-wallet/bootstrap",
-    "TX_WALLET_PUBLIC_KEY_PATH=server/tx-wallet-public.pem",
-    "GITHUB_REPOSITORY=xgame2026-hash/superatblib",
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -1141,7 +1065,7 @@ function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePor
   settingsForm.credentialAuthMode = normalizeCredentialAuthMode(env.CREDENTIAL_AUTH_MODE ?? settingsForm.credentialAuthMode);
   settingsForm.singleTradeAuthAmountUsdt = env.SINGLE_TRADE_AUTH_AMOUNT_USDT ?? settingsForm.singleTradeAuthAmountUsdt;
   settingsForm.startupDetectionMode = normalizeStartupDetectionMode(env.STARTUP_DETECTION_MODE ?? settingsForm.startupDetectionMode);
-  settingsForm.wssCorrectionMode = normalizeWssCorrectionMode(env.LIQUIDATION_QUEUE_WSS_CORRECTION ?? settingsForm.wssCorrectionMode);
+  settingsForm.wssCorrectionMode = normalizeWssCorrectionMode(settingsForm.wssCorrectionMode);
   const envDashboardPort = normalizeDashboardPort(env.DASHBOARD_PORT ?? settingsForm.dashboardPort);
   settingsForm.dashboardPort = options.syncRuntimePort ? runtimeDashboardPort(envDashboardPort) : envDashboardPort;
   settingsForm.launchSoundMode = normalizeLaunchSoundMode(localStorage.getItem(LAUNCH_SOUND_KEY) ?? env.LAUNCH_SOUND_ENABLED ?? settingsForm.launchSoundMode);
@@ -1153,13 +1077,6 @@ function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePor
   settingsForm.feeds.snapshotApiUrl = env.LIQUIDATION_SNAPSHOT_API_URL ?? settingsForm.feeds.snapshotApiUrl;
   settingsForm.feeds.snapshotToken = env.LIQUIDATION_SNAPSHOT_TOKEN ?? settingsForm.feeds.snapshotToken;
   settingsForm.feeds.snapshotTimeoutMs = env.LIQUIDATION_SNAPSHOT_TIMEOUT_MS ?? settingsForm.feeds.snapshotTimeoutMs;
-  settingsForm.queue.manageIngestUrl = env.MANAGE_LIQUIDATION_QUEUE_INGEST_URL ?? settingsForm.queue.manageIngestUrl;
-  settingsForm.queue.manageIngestToken = env.MANAGE_INGEST_TOKEN ?? settingsForm.queue.manageIngestToken;
-  settingsForm.queue.wssUrl = env.LIQUIDATION_QUEUE_WSS_URL ?? settingsForm.queue.wssUrl;
-  settingsForm.queue.wssToken = env.QUEUE_TOKEN ?? env.LIQUIDATION_QUEUE_WSS_TOKEN ?? settingsForm.queue.wssToken;
-  settingsForm.queue.statusUrl = env.LIQUIDATION_QUEUE_STATUS_URL ?? settingsForm.queue.statusUrl;
-  settingsForm.queue.heartbeatIntervalMs = env.LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS ?? settingsForm.queue.heartbeatIntervalMs;
-  settingsForm.queue.txEventsUrl = env.LIQUIDATION_QUEUE_TX_EVENTS_URL ?? settingsForm.queue.txEventsUrl;
   settingsForm.superMtNodeAppToken = env.SUPERMTNODE_APP_TOKEN ?? settingsForm.superMtNodeAppToken;
 }
 

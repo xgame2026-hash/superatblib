@@ -70,7 +70,6 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const payload = JSON.parse(body || "{}") as SettingsPayload;
         const submittedEnv = typeof payload.env === "string" ? parseEnv(payload.env) : {};
         const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        preserveSavedQueueToken(submittedEnv, savedEnv);
         const authCode = requestAuthCode(req, savedEnv);
         const submittedPromise = buildSecurityItems("当前页面配置", submittedEnv, authCode);
         const savedPromise =
@@ -160,10 +159,8 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           json(res, 400, { ok: false, error: "Missing env text." });
           return;
         }
-        const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
         const submittedEnv = parseEnv(payload.env);
-        preserveSavedQueueToken(submittedEnv, savedEnv);
-        let normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(serializeEnvWithPreservedValues(payload.env, submittedEnv)));
+        let normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(payload.env));
         normalizedEnv = await enrichEnvWithSuperMtNodePlan(normalizedEnv);
         writeFileSync(ENV_FILE, normalizedEnv, "utf8");
         json(res, 200, { ok: true, file: ".env", path: ENV_FILE });
@@ -237,26 +234,9 @@ const SECURITY_RELEVANT_KEYS = [
   "SINGLE_TRADE_AUTH_AMOUNT_USDT",
   "STARTUP_DETECTION_MODE",
   "BNB_RPC_URL",
-  "QUEUE_TOKEN",
-  "LIQUIDATION_QUEUE_WSS_TOKEN",
-  "LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS",
   "LIQUIDATION_SNAPSHOT_API_URL",
-  "MANAGE_LIQUIDATION_QUEUE_INGEST_URL",
-  "LIQUIDATION_QUEUE_INGEST_URL",
-  "LIQUIDATION_QUEUE_WSS_URL",
-  "MANAGE_LIQUIDATION_QUEUE_WSS_URL",
-  "LIQUIDATION_QUEUE_STATUS_URL",
-  "LIQUIDATION_QUEUE_PUBLIC_STATUS_URL",
-  "LIQUIDATION_QUEUE_WSS_STATUS_URL",
-  "PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL",
-  "LIQUIDATION_QUEUE_TX_EVENTS_URL",
-  "PRIVATE_MEMBER_TX2_CONTRACT_EVENTS_URL",
-  "LIQ2_PRIVATE_MEMBER_API_URL",
-  "PRIVATE_MEMBER_ADMIN_API_URL",
-  "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH",
-  "TX_WALLET_PUBLIC_KEY_PATH",
-  "TX_WALLET_PUBLIC_KEY",
-  "LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED",
+  "LIQUIDATION_SNAPSHOT_TOKEN",
+  "LIQUIDATION_SNAPSHOT_TIMEOUT_MS",
 ] as const;
 
 function parseEnv(source: string): Record<string, string> {
@@ -269,31 +249,6 @@ function parseEnv(source: string): Record<string, string> {
     parsed[line.slice(0, separator).trim()] = line.slice(separator + 1);
   }
   return parsed;
-}
-
-function preserveSavedQueueToken(submittedEnv: Record<string, string>, savedEnv: Record<string, string>): void {
-  const submittedToken = submittedEnv.QUEUE_TOKEN?.trim() || submittedEnv.LIQUIDATION_QUEUE_WSS_TOKEN?.trim();
-  if (submittedToken) return;
-  const savedToken = savedEnv.QUEUE_TOKEN?.trim() || savedEnv.LIQUIDATION_QUEUE_WSS_TOKEN?.trim();
-  if (!savedToken) return;
-  submittedEnv.QUEUE_TOKEN = savedToken;
-}
-
-function serializeEnvWithPreservedValues(source: string, env: Record<string, string>): string {
-  const required = new Set(Object.keys(env).filter((key) => env[key] !== undefined));
-  const lines = source.replace(/\r\n/g, "\n").split("\n").map((rawLine) => {
-    const line = rawLine.trim();
-    const separator = line.indexOf("=");
-    if (!line || line.startsWith("#") || separator <= 0) return rawLine;
-    const key = line.slice(0, separator).trim();
-    required.delete(key);
-    if (key !== "QUEUE_TOKEN" && key !== "LIQUIDATION_QUEUE_WSS_TOKEN") return rawLine;
-    return `${key}=${env[key] ?? ""}`;
-  });
-  for (const key of required) {
-    if (key === "QUEUE_TOKEN" && env[key]) lines.push(`${key}=${env[key]}`);
-  }
-  return lines.join("\n");
 }
 
 function migrateLegacySnapshotEndpoint(envText: string): string {
@@ -381,8 +336,8 @@ async function fetchSuperMtNodeEndpointsByLicense(authCode: string, env: Record<
   throw new Error(errors.join("; "));
 }
 
-function superMtNodeApiBaseUrls(env: Record<string, string>): string[] {
-  return uniqueStrings([env.SUPERMTNODE_API_BASE_URL?.trim(), ...SUPERMTNODE_API_BASES]).map((value) => value.replace(/\/+$/, ""));
+function superMtNodeApiBaseUrls(_env: Record<string, string>): string[] {
+  return SUPERMTNODE_API_BASES.map((value) => value.replace(/\/+$/, ""));
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

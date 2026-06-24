@@ -4,7 +4,6 @@ import { dirname, resolve } from "node:path";
 import { assertOfficialConfig } from "./official-config";
 import { PHASE1_LIQUIDATION_STRATEGIES, type Phase1Strategy } from "./phase1-liquidation-strategies";
 import { queueWssToken } from "./queue-token";
-import { stateLeaderboard, stateRpc, stateRpcEnabledForChain } from "./state-session";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
@@ -260,6 +259,21 @@ const blockAtTimestampCache = new Map<string, BlockCacheEntry>();
 const assetChangeRefreshInFlight = new Set<string>();
 
 export function handleLatestLiquidationsRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  if (req.url?.startsWith("/api/market-snapshot")) {
+    if (req.method !== "GET") {
+      json(res, 405, { ok: false, error: "Method not allowed." });
+      return true;
+    }
+
+    fetchMarketSnapshot(req)
+      .then((payload) => json(res, 200, payload))
+      .catch((error: unknown) => {
+        json(res, 200, emptySnapshot(error instanceof Error ? error.message : String(error)));
+      });
+
+    return true;
+  }
+
   if (!req.url?.startsWith("/api/latest-liquidations")) return false;
 
   if (req.method !== "GET") {
@@ -279,6 +293,22 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
   return true;
 }
 
+async function fetchMarketSnapshot(req: IncomingMessage) {
+  const env = readEnv();
+  assertOfficialConfig("全部市场快照读取", env);
+  const snapshotUrl = normalizeSnapshotUrl(env.LIQUIDATION_SNAPSHOT_API_URL?.trim() || DEFAULT_SNAPSHOT_API_URL);
+  const payload = await fetchSnapshotPayload(snapshotUrl, env, req);
+  const response = buildSnapshotResponse(payload, env, [], emptyWssQueueSnapshot());
+  response.queueTransport = "snapshot";
+  response.queueSource = "liquidation-snapshot-service";
+  response.queueParticipantCount = 0;
+  response.queueSubscribers = 0;
+  response.queueUpdatedAt = response.updatedAt;
+  response.queuedWallets = [];
+  response.queue = response.queue.filter(isLicensedQueueRow);
+  return response;
+}
+
 async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: boolean; queueOnly?: boolean } = {}) {
   const env = readEnv();
   assertOfficialConfig("清算快照读取", env);
@@ -287,20 +317,10 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const wssQueue = options.fast ? emptyWssQueueSnapshot() : await fetchWssQueuedWallets(env, req).catch(() => emptyWssQueueSnapshot());
   const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
   const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
-  const stateQueuedWallets = await readStateLeaderboardQueuedWallets(env).catch((error) => {
-    console.warn(`[state-leaderboard] unavailable: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
-  });
   const localQueuedWallets = readLocalQueuedWallets();
-  if (stateQueuedWallets) {
-    response.queuedWallets = mergeStateQueuedWallets(stateQueuedWallets, localQueuedWallets);
-    response.queueTransport = "state";
-    response.queueSource = "supermt-state-leaderboard";
-  } else {
-    response.queuedWallets = localQueuedWallets;
-    response.queueTransport = localQueuedWallets.length > 0 ? "state-local-mirror" : "state-unavailable";
-    response.queueSource = localQueuedWallets.length > 0 ? "supermt-state-local-mirror" : "supermt-state-leaderboard";
-  }
+  response.queuedWallets = dedupeAndSortStateRows([...wssQueue.rows, ...localQueuedWallets]);
+  response.queueTransport = wssQueue.ok ? "private" : localQueuedWallets.length > 0 ? "private-local-mirror" : "private-local-empty";
+  response.queueSource = wssQueue.ok ? "private.superarb.ai" : "private.superarb.ai/local-liq2";
   response.queueParticipantCount = response.queuedWallets.length;
   response.queueUpdatedAt = new Date().toISOString();
   if (options.queueOnly) {
@@ -314,24 +334,6 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   return response;
 }
 
-async function readStateLeaderboardQueuedWallets(env: Record<string, string>): Promise<SnapshotQueueRow[] | null> {
-  const chains: ChainKey[] = ["bnb", "ethereum", "arbitrum"];
-  const results = await Promise.allSettled(chains.map((chain) => stateLeaderboard(env, chain, 200)));
-  const rows: SnapshotQueueRow[] = [];
-  let successfulReads = 0;
-
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue;
-    successfulReads += 1;
-    const payload = result.value;
-    if (isRecord(payload) && payload.ok === false) continue;
-    rows.push(...(isRecord(payload) && Array.isArray(payload.queuedWallets) ? readQueue(payload.queuedWallets) : []));
-  }
-
-  if (successfulReads === 0) return null;
-  return dedupeAndSortStateRows(rows);
-}
-
 function readLocalQueuedWallets(): SnapshotQueueRow[] {
   if (!existsSync(LOCAL_QUEUE_STATE_FILE)) return [];
   try {
@@ -340,11 +342,6 @@ function readLocalQueuedWallets(): SnapshotQueueRow[] {
   } catch {
     return [];
   }
-}
-
-function mergeStateQueuedWallets(stateRows: SnapshotQueueRow[], localRows: SnapshotQueueRow[]): SnapshotQueueRow[] {
-  if (localRows.length === 0) return stateRows;
-  return dedupeAndSortStateRows([...stateRows, ...localRows]);
 }
 
 function dedupeAndSortStateRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
@@ -424,7 +421,6 @@ function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: 
     queueToken,
     env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
-    env.MANAGE_INGEST_TOKEN,
   );
   return {
     accept: "application/json",
@@ -1049,7 +1045,6 @@ function privateMemberTodayContractEventsHeaders(env: Record<string, string>, au
     queueWssToken(env),
     env.SUPERMTNODE_APP_TOKEN,
     env.LIQUIDATION_SNAPSHOT_TOKEN,
-    env.MANAGE_INGEST_TOKEN,
   );
   return {
     accept: "application/json",
@@ -1474,14 +1469,6 @@ async function getLogsWithFallback(
 }
 
 async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env: Record<string, string>): Promise<T> {
-  const chain = chainFromRpcUrl(rpcUrl, env);
-  if (chain && stateRpcEnabledForChain(chain, env)) {
-    try {
-      return await stateRpc<T>(chain, env, method, params);
-    } catch (error) {
-      console.warn(`[state-rpc] ${chain} ${method} fallback to local RPC: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   let lastError: unknown;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
