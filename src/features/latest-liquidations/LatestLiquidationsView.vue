@@ -349,7 +349,7 @@ function updateWssStatus(transport: string): void {
 }
 
 function isLiveQueueTransport(transport: string): boolean {
-  return ["wss", "state", "http"].includes(transport.toLowerCase());
+  return ["wss", "state", "http", "private", "private-local-mirror"].includes(transport.toLowerCase());
 }
 
 function markWssStaleIfNeeded(): void {
