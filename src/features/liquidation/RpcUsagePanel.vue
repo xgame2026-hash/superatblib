@@ -11,6 +11,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { t } from "../../i18n";
 
 const props = withDefaults(defineProps<{ active?: boolean }>(), {
   active: true,
@@ -32,8 +33,8 @@ type RpcUsageMetric = {
 const loading = ref(false);
 const error = ref("");
 const rpcUsage = ref<Record<ChainKey, RpcUsageMetric>>(createEmptyRpcUsage());
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const RPC_USAGE_REFRESH_INTERVAL_MS = 60_000;
 const RPC_USAGE_TICK_INTERVAL_MS = 1_000;
@@ -88,13 +89,13 @@ async function refresh() {
       },
     });
     const payload = (await response.json().catch(() => ({}))) as { metrics?: Partial<Record<ChainKey, RpcUsageMetric>>; error?: string };
-    if (!response.ok && !payload.metrics) throw new Error(payload.error ?? "RPC 使用量读取失败");
+    if (!response.ok && !payload.metrics) throw new Error(payload.error ?? t("rpc.usageReadFailed"));
     rpcUsage.value = {
       ...createEmptyRpcUsage(),
       ...payload.metrics,
     };
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "RPC 使用量读取失败";
+    error.value = cause instanceof Error ? cause.message : t("rpc.usageReadFailed");
   } finally {
     loading.value = false;
   }
@@ -178,13 +179,13 @@ function formatRpcUsage(metric: RpcUsageMetric): string {
 }
 
 function formatRpcStatus(metric: RpcUsageMetric): string {
-  if (/expired/i.test(metric.message ?? "")) return "RPC Token 过期";
+  if (/expired/i.test(metric.message ?? "")) return t("rpc.expired");
   const statusText: Record<RpcUsageMetric["status"], string> = {
-    ok: "正常",
-    missing_rpc: "未配置 RPC",
-    missing_credentials: "缺少 Token",
-    unmatched: "未匹配端点",
-    error: /invalid token|missing token|401/i.test(metric.message ?? "") ? "Token 失效" : "读取失败",
+    ok: t("rpc.ok"),
+    missing_rpc: t("rpc.missingRpc"),
+    missing_credentials: t("rpc.missingCredentials"),
+    unmatched: t("rpc.unmatched"),
+    error: /invalid token|missing token|401/i.test(metric.message ?? "") ? t("rpc.tokenInvalid") : t("dashboard.readFailed"),
   };
   return statusText[metric.status] ?? "--";
 }

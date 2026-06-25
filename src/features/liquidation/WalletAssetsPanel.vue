@@ -1,20 +1,20 @@
 <template>
   <article class="panel wallet-panel">
     <div class="wallet-panel-header">
-      <h3>钱包资产</h3>
+      <h3>{{ t("wallet.assets") }}</h3>
       <button class="wallet-refresh-button" type="button" :disabled="loading" @click="refresh">
-        {{ loading ? "查询中" : "刷新" }}
+        {{ loading ? t("wallet.refreshing") : t("wallet.refresh") }}
       </button>
     </div>
 
     <table class="wallet-table">
       <thead>
         <tr>
-          <th>链</th>
-          <th>GAS 余额</th>
+          <th>{{ t("wallet.chain") }}</th>
+          <th>{{ t("wallet.gasBalance") }}</th>
           <th>USDC</th>
           <th>USDT</th>
-          <th>RPC 用量</th>
+          <th>{{ t("wallet.rpcUsage") }}</th>
         </tr>
       </thead>
       <tbody>
@@ -43,6 +43,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { t } from "../../i18n";
 import arbIcon from "../../img/arb.svg";
 import bnbIcon from "../../img/bnb.svg";
 import ethIcon from "../../img/eth.svg";

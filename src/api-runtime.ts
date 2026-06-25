@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 const API_PORT_KEY = "liq2-api-port";
 
 export function installLocalApiPortFallback(): void {
@@ -18,7 +20,7 @@ export function installLocalApiPortFallback(): void {
         lastError = error;
       }
     }
-    throw lastError instanceof Error ? lastError : new Error("本地 API 连接失败");
+    throw lastError instanceof Error ? lastError : new Error(t("api.localConnectFailed"));
   };
 }
 

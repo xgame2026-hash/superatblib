@@ -31,7 +31,7 @@
           </div>
 
           <el-form class="auth-form" @submit.prevent="submitLogin">
-            <label class="field-label" for="auth-code">授权码</label>
+            <label class="field-label" for="auth-code">{{ t("app.authCode") }}</label>
             <el-input
               id="auth-code"
               v-model="authCode"
@@ -47,7 +47,7 @@
                 <button
                   class="visibility-toggle"
                   type="button"
-                  :aria-label="showAuthCode ? '隐藏授权码' : '显示授权码'"
+                  :aria-label="showAuthCode ? t('app.hideAuthCode') : t('app.showAuthCode')"
                   @click="showAuthCode = !showAuthCode"
                 >
                   <el-icon><component :is="showAuthCode ? Hide : View" /></el-icon>
@@ -55,7 +55,7 @@
               </template>
             </el-input>
             <div class="form-row">
-              <el-checkbox v-model="rememberCode">保存授权码</el-checkbox>
+              <el-checkbox v-model="rememberCode">{{ t("app.rememberAuthCode") }}</el-checkbox>
             </div>
             <el-alert
               v-if="authMessage"
@@ -72,7 +72,7 @@
               native-type="submit"
               :loading="loginLoading"
             >
-              进入控制台
+              {{ t("app.enterConsole") }}
             </el-button>
           </el-form>
         </main>
@@ -91,14 +91,14 @@
             class="sound-toggle-button"
             type="button"
             :class="{ muted: !launchSoundEnabled }"
-            :aria-label="launchSoundEnabled ? '关闭启动音效' : '打开启动音效'"
-            :title="launchSoundEnabled ? '关闭启动音效' : '打开启动音效'"
+            :aria-label="launchSoundEnabled ? t('app.turnOffSound') : t('app.turnOnSound')"
+            :title="launchSoundEnabled ? t('app.turnOffSound') : t('app.turnOnSound')"
             @click="toggleLaunchSound"
           >
             <img class="sound-toggle-icon" :src="launchSoundEnabled ? musicOpenIconUrl : musicCloseIconUrl" alt="" aria-hidden="true" />
           </button>
           <div ref="githubVersionControl" class="github-version-control">
-            <button class="github-version-button" type="button" aria-label="GitHub 版本状态" @click="githubMenuOpen = !githubMenuOpen">
+            <button class="github-version-button" type="button" :aria-label="t('app.githubStatus')" @click="githubMenuOpen = !githubMenuOpen">
               <span class="github-version-main">
                 <img :src="githubIconUrl" alt="" aria-hidden="true" />
                 <span>GitHub v{{ githubLatestDisplayVersion }}</span>
@@ -113,9 +113,9 @@
                 {{ githubVersionTitle }}
               </strong>
               <div class="github-version-lines">
-                <span>当前版本</span>
+                <span>{{ t("app.currentVersion") }}</span>
                 <strong>v{{ displayVersion }}</strong>
-                <span>GitHub 最新</span>
+                <span>{{ t("app.githubLatest") }}</span>
                 <strong>v{{ githubLatestDisplayVersion }}</strong>
               </div>
               <p v-if="githubVersionMessage">{{ githubVersionMessage }}</p>
@@ -196,6 +196,7 @@
             :settings-security-checking="settingsSecurityChecking"
             :settings-env-path="settingsEnvPath"
             :save-icon-url="saveIconUrl"
+            :locale-options="localeOptions"
             :rpc-fields="rpcFields"
             :feed-fields="feedFields"
             @security-check="checkOfficialSettings"
@@ -210,9 +211,9 @@
       <footer class="fixed-footer">
         <span class="footer-copyright">
           <img :src="footerLogoUrl" alt="SuperARB" />
-          Copyright © 2026 SuperMT Node. Internal testing only.
+          {{ t("app.footerCopyright") }}
         </span>
-        <span>Local: http://127.0.0.1:{{ runningDashboardPort }}</span>
+        <span>{{ t("app.local") }}: http://127.0.0.1:{{ runningDashboardPort }}</span>
       </footer>
     </section>
 
@@ -250,7 +251,7 @@
               {{ settingsSecurityTitle }}
             </div>
             <p>
-              已检查当前页面配置与已保存 .env，包含运行必填项、安全通道和官方服务地址。
+              {{ t("security.description") }}
             </p>
           </div>
         </div>
@@ -258,16 +259,16 @@
 
       <div class="security-check-summary">
         <div>
-          <span>检测结果</span>
-          <strong>{{ settingsSecurityOk ? "全部通过" : `${settingsSecurityFailedCount} 项风险` }}</strong>
+          <span>{{ t("security.result") }}</span>
+          <strong>{{ settingsSecurityOk ? t("security.allPassed") : t("security.riskCount", { count: settingsSecurityFailedCount }) }}</strong>
         </div>
         <div>
-          <span>显示项目</span>
+          <span>{{ t("security.visibleItems") }}</span>
           <strong>{{ visibleSecurityItems.length }}</strong>
         </div>
         <div>
-          <span>检测时间</span>
-          <strong>{{ settingsSecurityCheckedAt || "刚刚" }}</strong>
+          <span>{{ t("security.checkedAt") }}</span>
+          <strong>{{ settingsSecurityCheckedAt || t("security.now") }}</strong>
         </div>
       </div>
 
@@ -279,9 +280,9 @@
           :class="{ danger: !item.ok }"
         >
           <div class="security-check-item-main">
-            <span class="security-check-status">{{ item.ok ? "通过" : "风险" }}</span>
+            <span class="security-check-status">{{ item.ok ? t("security.pass") : t("security.risk") }}</span>
             <div>
-              <strong>{{ item.scope }}：{{ formatSecurityLabel(item) }}</strong>
+              <strong>{{ formatSecurityScope(item) }}：{{ formatSecurityLabel(item) }}</strong>
               <small>{{ formatSecurityKey(item) }}</small>
             </div>
             <p>{{ formatSecuritySummary(item) }}</p>
@@ -293,7 +294,7 @@
             :disabled="settingsSecurityRepairing"
             @click="repairSecurityItem(item)"
           >
-            {{ settingsSecurityRepairing ? "修复中" : "修复" }}
+            {{ settingsSecurityRepairing ? t("security.repairing") : t("security.repair") }}
           </button>
         </div>
       </div>
@@ -306,6 +307,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, r
 import { ElMessage } from "element-plus";
 import { Hide, Key, View } from "@element-plus/icons-vue";
 import { useNews } from "./composables/useNews";
+import { getLocale, localeOptions, normalizeLocale, setLocale, t } from "./i18n";
 import DashboardView from "./features/dashboard/DashboardView.vue";
 import LatestLiquidationsView from "./features/latest-liquidations/LatestLiquidationsView.vue";
 import LiquidationView from "./features/liquidation/LiquidationView.vue";
@@ -355,14 +357,14 @@ type QueueKey =
   | "heartbeatIntervalMs"
   | "txEventsUrl";
 
-const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.0";
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
+const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.1";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
 const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.6.0";
+const appVersion = "1.6.1";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
@@ -382,7 +384,7 @@ const settingsSecretsVisible = ref(false);
 const settingsEnvPath = ref(".env");
 const settingsSaveDialogVisible = ref(false);
 const settingsSaveState = ref<SettingsSaveState>("saving");
-const settingsSaveMessage = ref("正在保存 .env 并刷新联动设置...");
+const settingsSaveMessage = ref(t("save.savingLong"));
 const settingsSecurityChecking = ref(false);
 const settingsSecurityRepairing = ref(false);
 const settingsSecurityDialogVisible = ref(false);
@@ -392,29 +394,29 @@ const selectedNewsId = ref("");
 const githubLatestVersion = ref(appVersion);
 const githubLatestCommit = ref("");
 const githubVersionState = ref<GithubVersionState>("checking");
-const githubVersionMessage = ref("正在检查 GitHub 最新版本...");
+const githubVersionMessage = ref(t("github.checking"));
 const githubMenuOpen = ref(false);
 const githubVersionControl = ref<HTMLElement | null>(null);
 const txGraphInitialQuery = ref<{ chain: "ethereum" | "bnb" | "arbitrum"; hash: string; nonce: number } | null>(null);
 const liquidationViewRef = ref<InstanceType<typeof LiquidationView> | null>(null);
 const { newsItems, newsLoading, newsError, loadNews } = useNews();
 
-const navItems = [
-  { key: "overview" as const, label: "总览", iconUrl: homeIconUrl },
-  { key: "execution" as const, label: "最新清算", iconUrl: newLiqIconUrl },
-  { key: "analytics" as const, label: "清算控制面板", iconUrl: controlIconUrl },
-  { key: "liquidationTopic" as const, label: "清算专题", iconUrl: liqItemIconUrl },
-  { key: "news" as const, label: "资讯", iconUrl: infoIconUrl },
-  { key: "txgraph" as const, label: "查询", iconUrl: queryIconUrl },
-  { key: "settings" as const, label: "设置", iconUrl: setupIconUrl },
-];
+const navItems = computed(() => [
+  { key: "overview" as const, label: t("nav.overview"), iconUrl: homeIconUrl },
+  { key: "execution" as const, label: t("nav.execution"), iconUrl: newLiqIconUrl },
+  { key: "analytics" as const, label: t("nav.analytics"), iconUrl: controlIconUrl },
+  { key: "liquidationTopic" as const, label: t("nav.liquidationTopic"), iconUrl: liqItemIconUrl },
+  { key: "news" as const, label: t("nav.news"), iconUrl: infoIconUrl },
+  { key: "txgraph" as const, label: t("nav.txgraph"), iconUrl: queryIconUrl },
+  { key: "settings" as const, label: t("nav.settings"), iconUrl: setupIconUrl },
+]);
 
-const settingsSections = [
-  { key: "general" as const, label: "通用", hint: "私钥、Token、语言", eyebrow: "General" },
-  { key: "credentials" as const, label: "凭证管理", hint: "单次、多次循环", eyebrow: "Credentials" },
-  { key: "rpc" as const, label: "RPC", hint: "各链端点", eyebrow: "Network" },
-  { key: "feeds" as const, label: "公共 Feed", hint: "清算候选数据源", eyebrow: "Feeds" },
-];
+const settingsSections = computed(() => [
+  { key: "general" as const, label: t("settings.general"), hint: t("settings.generalHint"), eyebrow: "General" },
+  { key: "credentials" as const, label: t("settings.credentials"), hint: t("settings.credentialsHint"), eyebrow: "Credentials" },
+  { key: "rpc" as const, label: t("settings.rpc"), hint: t("settings.rpcHint"), eyebrow: "Network" },
+  { key: "feeds" as const, label: t("settings.feeds"), hint: t("settings.feedsHint"), eyebrow: "Feeds" },
+]);
 
 const rpcFields = [
   { key: "ethereum" as const, label: "Ethereum", env: "ETHEREUM_RPC_URL", icon: ethIcon },
@@ -427,20 +429,20 @@ const rpcFields = [
 const feedFields = [
   {
     key: "snapshotApiUrl" as const,
-    label: "清算快照接口",
+    labelKey: "settings.snapshotApi",
     env: "LIQUIDATION_SNAPSHOT_API_URL",
     placeholder: "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
   },
   {
     key: "snapshotToken" as const,
-    label: "清算快照 Token",
+    labelKey: "settings.snapshotToken",
     env: "LIQUIDATION_SNAPSHOT_TOKEN",
     placeholder: "snapshot service token",
     secret: true,
   },
   {
     key: "snapshotTimeoutMs" as const,
-    label: "快照请求超时",
+    labelKey: "settings.snapshotTimeout",
     env: "LIQUIDATION_SNAPSHOT_TIMEOUT_MS",
     placeholder: "8000",
   },
@@ -480,31 +482,31 @@ const settingsForm = reactive({
 });
 
 const currentNavLabel = computed(() => {
-  return navItems.find((item) => item.key === activeView.value)?.label ?? "总览";
+  return navItems.value.find((item) => item.key === activeView.value)?.label ?? t("nav.overview");
 });
 
 const pageEyebrow = computed(() => {
-  if (activeView.value === "settings") return "System Setup";
-  if (activeView.value === "news") return "News";
-  if (activeView.value === "txgraph") return "Query";
-  if (activeView.value === "execution") return "Latest Liquidations";
-  if (activeView.value === "analytics") return "Liquidation Control Panel";
-  if (activeView.value === "liquidationTopic") return "Liquidation Strategy Atlas";
-  return "Operations Overview";
+  if (activeView.value === "settings") return t("hero.settings");
+  if (activeView.value === "news") return t("hero.news");
+  if (activeView.value === "txgraph") return t("hero.txgraph");
+  if (activeView.value === "execution") return t("hero.execution");
+  if (activeView.value === "analytics") return t("hero.analytics");
+  if (activeView.value === "liquidationTopic") return t("hero.liquidationTopic");
+  return t("hero.overview");
 });
 const hidePageHero = computed(() => activeView.value === "news" && Boolean(selectedNewsId.value));
 
 const currentSettingsSection = computed(() => {
-  return settingsSections.find((section) => section.key === settingsSection.value) ?? settingsSections[0];
+  return settingsSections.value.find((section) => section.key === settingsSection.value) ?? settingsSections.value[0];
 });
 
 const dashboardPort = computed(() => normalizeDashboardPort(settingsForm.dashboardPort));
 const runningDashboardPort = computed(() => runtimeDashboardPort(dashboardPort.value));
 const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");
 const settingsSaveTitle = computed(() => {
-  if (settingsSaveState.value === "done") return "保存完成";
-  if (settingsSaveState.value === "error") return "保存失败";
-  return "保存中";
+  if (settingsSaveState.value === "done") return t("save.doneTitle");
+  if (settingsSaveState.value === "error") return t("save.errorTitle");
+  return t("save.inProgress");
 });
 
 const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"];
@@ -520,20 +522,20 @@ const visibleSecurityItems = computed(() =>
 const settingsSecurityFailedCount = computed(() => visibleSecurityItems.value.filter((item) => !item.ok).length);
 const settingsSecurityOk = computed(() => visibleSecurityItems.value.length > 0 && settingsSecurityFailedCount.value === 0);
 const settingsSecurityTitle = computed(() => {
-  if (settingsSecurityOk.value) return "官方配置检测通过";
+  if (settingsSecurityOk.value) return t("security.titlePassed");
   const failed = visibleSecurityItems.value.filter((item) => !item.ok);
-  if (failed.some(isAuthorizationFailureItem)) return "授权失效";
-  if (failed.some((item) => item.key === "BNB_RPC_URL" && /未绑定到/.test(item.message))) return "RPC 未绑定";
+  if (failed.some(isAuthorizationFailureItem)) return t("security.authExpired");
+  if (failed.some((item) => item.key === "BNB_RPC_URL" && /未绑定到/.test(item.message))) return t("security.rpcUnbound");
   const onlyMissingLocalConfig = failed.length > 0 && failed.every((item) => missingLocalConfigKeys.includes(item.key));
-  return onlyMissingLocalConfig ? "本地未配置" : "检测到非官方配置";
+  return onlyMissingLocalConfig ? t("security.localMissing") : t("security.unofficial");
 });
 
 const githubVersionTitle = computed(() => {
-  if (githubVersionState.value === "update") return "发现 GitHub 新版本";
-  if (githubVersionState.value === "checking") return "正在检查版本";
-  if (githubVersionState.value === "unconfigured") return "未配置版本检测";
-  if (githubVersionState.value === "error") return "版本检测失败";
-  return "已经是最新版";
+  if (githubVersionState.value === "update") return t("github.updateFound");
+  if (githubVersionState.value === "checking") return t("github.checkingTitle");
+  if (githubVersionState.value === "unconfigured") return t("github.unconfigured");
+  if (githubVersionState.value === "error") return t("github.error");
+  return t("github.latest");
 });
 const githubLatestDisplayVersion = computed(() => {
   return versionWithCommit(githubLatestVersion.value, githubLatestCommit.value);
@@ -546,10 +548,10 @@ const githubIsLatestBuild = computed(() => {
 });
 
 const metrics = ref([
-  { label: "候选账户", value: "0", trend: 0 },
-  { label: "可执行机会", value: "0", trend: 0 },
-  { label: "预计收益", value: "$0", trend: 0 },
-  { label: "失败保护", value: "0%", trend: 0 },
+  { label: t("metrics.candidateAccounts"), value: "0", trend: 0 },
+  { label: t("metrics.executableOpportunities"), value: "0", trend: 0 },
+  { label: t("metrics.estimatedProfit"), value: "$0", trend: 0 },
+  { label: t("metrics.failureProtection"), value: "0%", trend: 0 },
 ]);
 
 let notLaunchedReminderTimer = 0;
@@ -594,6 +596,19 @@ watch(activeView, (view) => {
 watch(settingsSection, (section) => {
   localStorage.setItem(SETTINGS_SECTION_KEY, section);
 });
+
+watch(
+  () => settingsForm.language,
+  (language) => {
+    const normalized = normalizeLocale(language);
+    if (settingsForm.language !== normalized) {
+      settingsForm.language = normalized;
+      return;
+    }
+    setLocale(normalized);
+  },
+  { immediate: true },
+);
 
 function readStoredValue<T extends string>(key: string, allowedValues: readonly T[], fallback: T): T {
   const value = localStorage.getItem(key);
@@ -672,7 +687,7 @@ async function submitLogin() {
   authMessage.value = "";
 
   if (!AUTH_CODE_PATTERN.test(code)) {
-    authMessage.value = "请输入正确的授权码";
+    authMessage.value = t("auth.invalidCode");
     authMessageType.value = "error";
     return;
   }
@@ -703,9 +718,9 @@ async function submitLogin() {
     sessionStorage.setItem(AUTH_CODE_SESSION_KEY, code);
     sessionStorage.setItem(AUTH_STORAGE_KEY, "authorized");
     isAuthenticated.value = true;
-    ElMessage.success("授权验证成功");
+    ElMessage.success(t("auth.success"));
   } catch (error) {
-    authMessage.value = error instanceof Error ? error.message : "授权服务暂时不可用";
+    authMessage.value = error instanceof Error ? error.message : t("auth.serviceUnavailable");
     authMessageType.value = "error";
   } finally {
     loginLoading.value = false;
@@ -718,21 +733,21 @@ function logout() {
   sessionStorage.removeItem(AUTH_CODE_SESSION_KEY);
   isAuthenticated.value = false;
   githubMenuOpen.value = false;
-  ElMessage.success("已退出登录");
+  ElMessage.success(t("auth.loggedOut"));
 }
 
 function mapAuthError(error: string) {
   const normalized = error.toLowerCase();
   if (normalized.includes("expired") || normalized.includes("inactive") || normalized.includes("revoked")) {
-    return "授权码已失效";
+    return t("auth.expired");
   }
   if (normalized.includes("missing") || normalized.includes("not_found") || normalized.includes("not found")) {
-    return "授权码不存在";
+    return t("auth.notFound");
   }
   if (normalized.includes("http 404")) {
-    return "授权服务地址不可用";
+    return t("auth.serviceNotFound");
   }
-  return "请输入正确的授权码";
+  return t("auth.invalidCode");
 }
 
 function marketIcon(chain: string) {
@@ -776,7 +791,7 @@ async function fetchSettingsApi(path: string, init?: RequestInit): Promise<Respo
       lastError = error;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("设置接口连接失败");
+  throw lastError instanceof Error ? lastError : new Error(t("security.apiConnectFailed"));
 }
 
 function settingsApiUrls(path: string): string[] {
@@ -812,10 +827,10 @@ async function loadSettings(options: { syncRuntimePort?: boolean } = {}) {
 
 async function loadGithubVersion() {
   githubVersionState.value = "checking";
-  githubVersionMessage.value = "正在检查 GitHub 最新版本...";
+  githubVersionMessage.value = t("github.checking");
   try {
     const response = await fetch("/api/github-version");
-    if (!response.ok) throw new Error("GitHub 版本接口暂不可用");
+    if (!response.ok) throw new Error(t("github.apiUnavailable"));
     const payload = (await response.json()) as {
       configured?: boolean;
       currentVersion?: string;
@@ -833,13 +848,13 @@ async function loadGithubVersion() {
     githubLatestVersion.value = appVersion;
     githubLatestCommit.value = "";
     githubVersionState.value = "error";
-    githubVersionMessage.value = error instanceof Error ? error.message : "GitHub 版本检测失败";
+    githubVersionMessage.value = error instanceof Error ? error.message : t("github.checkFailed");
   }
 }
 
 async function saveSettings() {
   settingsSaveState.value = "saving";
-  settingsSaveMessage.value = "正在保存 .env...";
+  settingsSaveMessage.value = t("save.saving");
   settingsSaveDialogVisible.value = true;
 
   try {
@@ -850,13 +865,13 @@ async function saveSettings() {
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new Error(payload.error ?? "保存失败");
+      throw new Error(payload.error ?? t("save.failed"));
     }
     const payload = (await response.json().catch(() => ({}))) as { path?: string };
     settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
     await loadSettings();
     settingsSaveState.value = "done";
-    settingsSaveMessage.value = "设置已保存到 .env；端口设置重启客户端后生效。";
+    settingsSaveMessage.value = t("save.doneMessage");
     window.setTimeout(() => {
       if (settingsSaveState.value === "done") {
         settingsSaveDialogVisible.value = false;
@@ -864,7 +879,7 @@ async function saveSettings() {
     }, 1200);
   } catch (error) {
     settingsSaveState.value = "error";
-    settingsSaveMessage.value = error instanceof Error ? error.message : "保存失败";
+    settingsSaveMessage.value = error instanceof Error ? error.message : t("save.failed");
   }
 }
 
@@ -888,14 +903,14 @@ async function checkOfficialSettings() {
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new Error(payload.error ?? "检测失败");
+      throw new Error(payload.error ?? t("security.checkFailed"));
     }
     const payload = (await response.json()) as { ok?: boolean; items?: SecurityCheckItem[]; checkedAt?: string };
     settingsSecurityItems.value = payload.items ?? [];
     settingsSecurityCheckedAt.value = formatSecurityCheckedAt(payload.checkedAt);
     settingsSecurityDialogVisible.value = true;
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "检测失败");
+    ElMessage.error(error instanceof Error ? error.message : t("security.checkFailed"));
   } finally {
     settingsSecurityChecking.value = false;
   }
@@ -911,12 +926,12 @@ async function repairSecurityItem(item: SecurityCheckItem) {
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string; reason?: string };
-      throw new Error(payload.error ?? payload.reason ?? "修复失败");
+      throw new Error(payload.error ?? payload.reason ?? t("security.repairFailed"));
     }
-    ElMessage.success("修复已执行");
+    ElMessage.success(t("security.repairDone"));
     await checkOfficialSettings();
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "修复失败");
+    ElMessage.error(error instanceof Error ? error.message : t("security.repairFailed"));
   } finally {
     settingsSecurityRepairing.value = false;
   }
@@ -934,7 +949,7 @@ function dedupeSecurityItems(items: SecurityCheckItem[]) {
     const comparableKey = item.ok ? `${item.key}:ok` : `${item.key}:${item.value}:${item.ok}:${item.message}:${item.action ?? ""}`;
     const existing = byComparableKey.get(comparableKey);
     if (existing) {
-      existing.scope = "本地配置";
+      existing.scope = t("security.scopeLocal");
       if (item.key === "BNB_RPC_URL") existing.message = item.message;
       continue;
     }
@@ -954,13 +969,32 @@ function formatSecurityCheckedAt(value?: string) {
   if (!value) return "";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
-  return date.toLocaleString("zh-CN", { hour12: false });
+  const localeMap = {
+    zh: "zh-CN",
+    en: "en-US",
+    ja: "ja-JP",
+    ko: "ko-KR",
+    ru: "ru-RU",
+    th: "th-TH",
+  };
+  return date.toLocaleString(localeMap[getLocale()], { hour12: false });
 }
 
 function formatSecurityLabel(item: SecurityCheckItem) {
-  if (item.key === "AUTH_CODE") return "登录授权码";
-  if (item.key === "SECURE_UPLOAD_STATUS") return "安全同步";
+  if (item.key === "PRIVATE_KEY") return t("security.walletAddressLabel");
+  if (item.key === "SUPERMTNODE_APP_TOKEN") return t("security.serviceTokenLabel");
+  if (item.key === "BNB_RPC_URL") return t("security.bnbRpcLabel");
+  if (item.key === "LIQUIDATION_SNAPSHOT_API_URL") return t("security.snapshotApiLabel");
+  if (item.key === "AUTH_CODE") return t("security.authCode");
+  if (item.key === "SECURE_UPLOAD_STATUS") return t("security.secureSync");
   return item.label;
+}
+
+function formatSecurityScope(item: SecurityCheckItem) {
+  if (/当前页面配置/.test(item.scope)) return t("security.scopeCurrentPage");
+  if (/已保存/.test(item.scope)) return t("security.scopeSavedEnv");
+  if (/本地配置/.test(item.scope)) return t("security.scopeLocal");
+  return item.scope;
 }
 
 function formatSecurityKey(item: SecurityCheckItem) {
@@ -973,34 +1007,63 @@ function formatSecurityKey(item: SecurityCheckItem) {
 
 function formatSecurityValue(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") {
-    return item.ok ? item.value : "未配置或格式无效";
+    return item.ok ? item.value : t("security.invalidPrivateKey");
   }
   if (item.key === "SUPERMTNODE_APP_TOKEN") {
-    return item.ok ? "已配置" : "未配置";
+    return item.ok ? t("security.configured") : t("security.notConfigured");
   }
-  if (item.key === "AUTH_CODE") return item.ok ? "已验证" : "校验失败";
-  if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
+  if (item.key === "AUTH_CODE") return item.ok ? t("security.verified") : t("security.verifyFailed");
+  if (item.ok && item.message.includes("运行时不使用该备用项")) return t("security.checkPassed");
   if (item.key === "SECURE_UPLOAD_STATUS") return item.value;
-  return item.value || "未配置，使用默认值";
+  return localizeSecurityText(item.value) || t("security.defaultUsed");
 }
 
 function formatSecurityMessage(item: SecurityCheckItem) {
-  if (item.key === "PRIVATE_KEY") return item.ok ? "已从钱包授权解析出地址" : "请先配置有效的钱包授权，否则无法提交执行任务";
-  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? "服务授权已配置" : "请先配置服务授权 Token，否则部分官方服务无法完成授权";
-  if (item.key === "AUTH_CODE") return item.message;
-  if (item.ok && item.message.includes("运行时不使用该备用项")) return "检查通过";
-  if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
-  return item.message;
+  if (item.key === "PRIVATE_KEY") return item.ok ? t("security.privateKeyOk") : t("security.privateKeyMissing");
+  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? t("security.tokenOk") : t("security.tokenMissing");
+  if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
+  if (item.ok && item.message.includes("运行时不使用该备用项")) return t("security.checkPassed");
+  if (item.key === "SECURE_UPLOAD_STATUS") return localizeSecurityText(item.message);
+  return localizeSecurityText(item.message);
 }
 
 function formatSecuritySummary(item: SecurityCheckItem) {
-  if (item.key === "PRIVATE_KEY") return item.ok ? `钱包地址 ${shortAddress(item.value)}` : "本地未配置";
-  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? item.value : item.message;
-  if (item.key === "AUTH_CODE") return item.message;
-  if (item.key === "BNB_RPC_URL") return item.ok || item.value ? item.message : "本地未配置";
-  if (item.key === "SECURE_UPLOAD_STATUS") return item.message;
-  if (item.ok) return "检查通过";
+  if (item.key === "PRIVATE_KEY") return item.ok ? t("security.walletAddress", { address: shortAddress(item.value) }) : t("security.localMissing");
+  if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? formatTokenSecuritySummary(item) : localizeSecurityText(item.message);
+  if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
+  if (item.key === "BNB_RPC_URL") return item.ok || item.value ? formatRpcSecuritySummary(item) : t("security.localMissing");
+  if (item.key === "SECURE_UPLOAD_STATUS") return localizeSecurityText(item.message);
+  if (item.key === "LIQUIDATION_SNAPSHOT_API_URL") return item.ok ? t("security.checkPassed") : localizeSecurityText(item.message);
+  if (item.ok) return t("security.checkPassed");
   return formatSecurityMessage(item);
+}
+
+function formatTokenSecuritySummary(item: SecurityCheckItem) {
+  const text = `${item.value || ""} ${item.message || ""}`;
+  const expiry = text.match(/(\d{4}\/\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}:\d{2})/);
+  if (expiry) return t("security.expiresAt", { time: expiry[1] });
+  if (/官方校验通过|verified|configured/i.test(text)) return t("security.tokenOk");
+  return localizeSecurityText(item.value || item.message);
+}
+
+function formatRpcSecuritySummary(item: SecurityCheckItem) {
+  const message = item.message || item.value || "";
+  const usage = message.match(/用量\s*(\d+)\s*\/\s*(\d+).*剩余\s*(\d+)/);
+  if (usage) {
+    return t("security.rpcHealthyUsage", { used: usage[1], total: usage[2], remaining: usage[3] });
+  }
+  if (/RPC 连接正常|RPC.*normal|connected/i.test(message)) return t("security.rpcHealthy");
+  return localizeSecurityText(message);
+}
+
+function localizeSecurityText(value?: string) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^检查通过$|^Check passed$/i.test(text)) return t("security.checkPassed");
+  if (/^本地未配置$|not configured|missing/i.test(text)) return t("security.localMissing");
+  if (/^已配置$|configured/i.test(text)) return t("security.configured");
+  if (/官方校验通过/.test(text)) return t("security.checkPassed");
+  return text;
 }
 
 function shortAddress(value: string) {
@@ -1010,7 +1073,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.6.0 internal settings.",
+    "# Generated from SuperARB 1.6.1 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",
@@ -1059,7 +1122,7 @@ function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePor
   const envAuthCode = (env.AUTH_CODE || env.SUPERARB_AUTH_CODE || env.LICENSE_CODE || "").trim().toUpperCase();
   if (!authCode.value.trim() && envAuthCode) authCode.value = envAuthCode;
   settingsForm.privateKey = env.PRIVATE_KEY ?? settingsForm.privateKey;
-  settingsForm.language = env.DASHBOARD_LANGUAGE ?? settingsForm.language;
+  settingsForm.language = normalizeLocale(env.DASHBOARD_LANGUAGE ?? settingsForm.language);
   settingsForm.fundingMode = env.FUNDING_MODE ?? settingsForm.fundingMode;
   settingsForm.arbitrageIntensity = env.ARBITRAGE_INTENSITY ?? settingsForm.arbitrageIntensity;
   settingsForm.credentialAuthMode = normalizeCredentialAuthMode(env.CREDENTIAL_AUTH_MODE ?? settingsForm.credentialAuthMode);

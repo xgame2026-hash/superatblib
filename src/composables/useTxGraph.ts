@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import type { TxGraphChainKey, TxGraphPayload } from "../types/txGraph";
+import { t } from "../i18n";
 
 export function useTxGraph() {
   const data = ref<TxGraphPayload | null>(null);
@@ -14,11 +15,11 @@ export function useTxGraph() {
       const response = await fetch(`/api/tx-graph?${query.toString()}`);
       const payload = (await response.json().catch(() => ({}))) as TxGraphPayload | { error?: string };
       if (!response.ok || !("ok" in payload)) {
-        throw new Error("error" in payload ? payload.error ?? "查询失败" : "查询失败");
+        throw new Error("error" in payload ? payload.error ?? t("tx.queryFailed") : t("tx.queryFailed"));
       }
       data.value = payload;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "查询失败";
+      error.value = err instanceof Error ? err.message : t("tx.queryFailed");
     } finally {
       loading.value = false;
     }

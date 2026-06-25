@@ -16,7 +16,7 @@ use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio_postgres::{Client, NoTls, Row};
 use tower_http::cors::CorsLayer;
 
-const VERSION: &str = "1.6.0";
+const VERSION: &str = "1.6.1";
 const REQUIRED_LIQ2_PROTOCOL_VERSION: &str = "liq2-cutover-20260624-v160";
 
 #[derive(Clone)]

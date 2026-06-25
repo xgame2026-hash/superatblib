@@ -6,7 +6,7 @@ const privateUrl = process.env.VERIFY_STATE_URL || "https://private.superarb.ai"
 const shouldCheckRemote = process.env.VERIFY_PRIVATE_REMOTE === "1" || Boolean(process.env.VERIFY_STATE_URL);
 const forbiddenUiTerms = ["数据库"];
 const sourceDirs = ["src", "server"];
-const requiredVersion = "1.6.0";
+const requiredVersion = "1.6.1";
 const requiredProtocol = "liq2-cutover-20260624-v160";
 
 function fail(message) {
@@ -30,7 +30,7 @@ function walk(dir) {
 
 async function checkPrivateService() {
   if (!shouldCheckRemote) return;
-  const healthResponse = await fetch(`${privateUrl}/health`, { signal: AbortSignal.timeout(8_000) });
+  const healthResponse = await fetch(`${privateUrl}/api/health`, { signal: AbortSignal.timeout(8_000) });
   if (!healthResponse.ok) {
     fail(`private health HTTP ${healthResponse.status}`);
     return;

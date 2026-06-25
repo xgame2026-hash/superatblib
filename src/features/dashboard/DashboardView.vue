@@ -1,6 +1,6 @@
 <template>
   <section class="overview-strip">
-    <article v-for="metric in overviewMetrics" :key="metric.label" class="overview-stat" :class="metricClass(metric)">
+    <article v-for="metric in overviewMetrics" :key="metric.key" class="overview-stat" :class="metricClass(metric)">
       <span>{{ metric.label }}</span>
       <div>
         <span class="overview-stat-copy">
@@ -8,7 +8,7 @@
           <em :class="metric.tone === 'ready' ? 'trend-up' : 'trend-flat'">{{ metric.note }}</em>
         </span>
         <span
-          v-if="metric.label === '清算启动'"
+          v-if="metric.key === 'liquidationStarted'"
           class="liquidation-state-icon"
           :class="metric.tone === 'ready' ? 'is-running' : 'is-paused'"
           aria-hidden="true"
@@ -23,20 +23,20 @@
     <article class="panel dashboard-news-panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">Latest News</p>
-          <h3>最新资讯</h3>
+          <p class="eyebrow">{{ t("dashboard.newsEyebrow") }}</p>
+          <h3>{{ t("dashboard.latestNews") }}</h3>
         </div>
-        <button class="panel-link-button" type="button" @click="emit('openNews')">全部资讯</button>
+        <button class="panel-link-button" type="button" @click="emit('openNews')">{{ t("dashboard.allNews") }}</button>
       </div>
 
-      <div v-if="newsLoading" class="dashboard-news-skeleton" aria-label="正在加载资讯">
+      <div v-if="newsLoading" class="dashboard-news-skeleton" :aria-label="t('dashboard.loadingNews')">
         <span v-for="index in 5" :key="index"></span>
       </div>
       <div v-else-if="newsError && !latestNews.length" class="dashboard-news-state is-error">
         {{ newsError }}
       </div>
       <div v-else-if="!latestNews.length" class="dashboard-news-state">
-        暂无资讯
+        {{ t("dashboard.noNews") }}
       </div>
       <div v-else class="dashboard-news-list">
         <button
@@ -61,15 +61,15 @@
     <article class="panel market-status-panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">Market Classification</p>
-          <h3>可接入市场状态</h3>
+          <p class="eyebrow">{{ t("dashboard.marketEyebrow") }}</p>
+          <h3>{{ t("dashboard.marketStatus") }}</h3>
         </div>
         <div class="market-status-actions">
           <span class="market-status-time" :class="{ 'is-loading': marketStatusLoading && marketStatusRows.length === 0 }">
-            {{ marketStatusLoading && marketStatusRows.length === 0 ? "读取中" : marketStatusUpdatedAt }}
+            {{ marketStatusLoading && marketStatusRows.length === 0 ? t("dashboard.loading") : marketStatusUpdatedAt }}
           </span>
           <button class="market-status-refresh" type="button" :disabled="marketStatusLoading" @click="refreshMarketStatus">
-            {{ marketStatusLoading ? "刷新中" : "刷新" }}
+            {{ marketStatusLoading ? t("dashboard.refreshing") : t("dashboard.refresh") }}
           </button>
         </div>
       </div>
@@ -85,7 +85,7 @@
               <strong>{{ source.chainLabel }}</strong>
               <span>{{ source.source }}</span>
             </div>
-            <em :class="statusClass(source.status)">{{ source.status }}</em>
+            <em :class="statusClass(source.status)">{{ displayStatus(source.status) }}</em>
           </header>
           <dl class="market-source-metrics">
             <div>
@@ -93,22 +93,22 @@
               <dd>{{ source.rpc }}</dd>
             </div>
             <div>
-              <dt>候选队列</dt>
+              <dt>{{ t("dashboard.candidateQueue") }}</dt>
               <dd>{{ source.queueCount }}</dd>
             </div>
             <div>
-              <dt>清算快照</dt>
+              <dt>{{ t("dashboard.snapshot") }}</dt>
               <dd>{{ source.liquidationCount }}</dd>
             </div>
             <div>
-              <dt>更新时间</dt>
+              <dt>{{ t("dashboard.updatedAt") }}</dt>
               <dd>{{ formatDateTime(source.updatedAt) }}</dd>
             </div>
           </dl>
         </article>
       </div>
       <div v-else class="market-status-empty" :class="{ 'is-error': marketStatusError }">
-        {{ marketStatusError || "暂无候选运行中的市场。" }}
+        {{ marketStatusError || t("dashboard.noMarket") }}
       </div>
     </article>
   </section>
@@ -117,6 +117,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { NewsItem } from "../../types/news";
+import { currentLocale, displayStatus, t } from "../../i18n";
 import runIconUrl from "../../img/run.svg";
 import stopIconUrl from "../../img/stop.svg";
 
@@ -127,6 +128,7 @@ type Metric = {
 };
 
 type OverviewMetric = {
+  key: string;
   label: string;
   value: string;
   note: string;
@@ -182,16 +184,16 @@ const overviewMetrics = ref<OverviewMetric[]>(createOverviewMetrics());
 const animatedOverviewValues = ref<Record<string, number>>({});
 const overviewValueTargets = new Map<string, number>();
 const overviewValueAnimationTimers = new Map<string, number>();
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
 const OVERVIEW_METRICS_CACHE_KEY = "liq2-overview-metrics-cache";
 const MARKET_STATUS_CACHE_KEY = "liq2-market-status-cache";
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 const SAFETY_OPERATION_START_DATE = "2026-02-16";
-const SAFETY_OPERATION_START_LABEL = "2026年2月16日";
 let overviewRefreshTimer = 0;
 let overviewRuntimeTicker = 0;
+let paidProfitRefreshTimer = 0;
 let marketStatusRequested = false;
 let overviewMetricsRequested = false;
 
@@ -202,6 +204,7 @@ const marketStatusRows = computed(() => {
 
 onMounted(() => {
   restoreOverviewMetricsCache();
+  translateOverviewMetrics();
   restoreMarketStatusCache();
   if (props.active ?? true) startDashboardView();
   window.addEventListener(OVERVIEW_REFRESH_EVENT, handleOverviewRuntimeEvent);
@@ -217,6 +220,10 @@ watch(
     stopDashboardView();
   },
 );
+
+watch(currentLocale, () => {
+  translateOverviewMetrics();
+});
 
 onBeforeUnmount(() => {
   stopDashboardView();
@@ -241,22 +248,69 @@ function startDashboardView() {
       tickRunningRpcMetric();
     }, 1_000);
   }
+  if (!paidProfitRefreshTimer) {
+    paidProfitRefreshTimer = window.setInterval(() => {
+      void readPaidProfitMetric().then(updateOverviewMetric);
+    }, 5_000);
+  }
 }
 
 function stopDashboardView() {
   if (overviewRefreshTimer) window.clearInterval(overviewRefreshTimer);
   if (overviewRuntimeTicker) window.clearInterval(overviewRuntimeTicker);
+  if (paidProfitRefreshTimer) window.clearInterval(paidProfitRefreshTimer);
   overviewRefreshTimer = 0;
   overviewRuntimeTicker = 0;
+  paidProfitRefreshTimer = 0;
 }
 
 function createOverviewMetrics(): OverviewMetric[] {
   return [
-    { label: "BNB", value: "--", note: "钱包资产", tone: "flat" },
-    { label: "BNB RPC", value: "--", note: "到期 --", tone: "flat" },
+    { key: "bnb", label: "BNB", value: "--", note: t("dashboard.walletAsset"), tone: "flat" },
+    { key: "bnbRpc", label: "BNB RPC", value: "--", note: t("dashboard.expiresAt", { value: "--" }), tone: "flat" },
     readSafetyOperationMetric(),
-    { label: "清算启动", value: "--", note: "本地状态", tone: "flat" },
+    { key: "paidProfit", label: t("dashboard.paidProfit"), value: "--", note: t("dashboard.totalNetwork"), tone: "flat" },
+    { key: "liquidationStarted", label: t("dashboard.liquidationStarted"), value: "--", note: t("dashboard.localStatus"), tone: "flat" },
   ];
+}
+
+function translateOverviewMetrics() {
+  overviewMetrics.value = overviewMetrics.value.map((metric) => ({
+    ...metric,
+    label: overviewMetricLabel(metric.key),
+    note: translateOverviewNote(metric),
+    value: translateOverviewValue(metric),
+  }));
+}
+
+function overviewMetricLabel(key: string): string {
+  if (key === "paidProfit") return t("dashboard.paidProfit");
+  if (key === "liquidationStarted") return t("dashboard.liquidationStarted");
+  if (key === "safetyOperation") return t("dashboard.securityOperation");
+  if (key === "bnbRpc") return "BNB RPC";
+  return "BNB";
+}
+
+function translateOverviewNote(metric: OverviewMetric): string {
+  if (metric.key === "bnb") return metric.note === "--" ? "--" : t("dashboard.walletAsset");
+  if (metric.key === "bnbRpc") return metric.note === "--" ? "--" : t("dashboard.expiresAt", { value: extractTrailingValue(metric.note) || "--" });
+  if (metric.key === "safetyOperation") return t("dashboard.zeroAccident", { date: t("dashboard.safetyStartDate") });
+  if (metric.key === "paidProfit") {
+    const countMatch = metric.note.replace(/,/g, "").match(/\d+/);
+    return countMatch ? t("dashboard.payoutCount", { count: Number(countMatch[0]).toLocaleString("en-US") }) : t("dashboard.totalNetwork");
+  }
+  if (metric.key === "liquidationStarted") return t("dashboard.localStatus");
+  return metric.note;
+}
+
+function translateOverviewValue(metric: OverviewMetric): string {
+  if (metric.key !== "liquidationStarted") return metric.value;
+  return metric.tone === "ready" ? t("dashboard.started") : t("dashboard.notStarted");
+}
+
+function extractTrailingValue(value: string): string {
+  const parts = value.trim().split(/\s+/);
+  return parts.length > 1 ? parts.slice(1).join(" ") : value.replace(/^到期\s*/, "");
 }
 
 async function loadOverviewMetrics() {
@@ -264,6 +318,7 @@ async function loadOverviewMetrics() {
   updateOverviewMetric(readSafetyOperationMetric());
   void readBnbUsdtMetric().then(updateOverviewMetric);
   void readBnbRpcMetric().then(updateOverviewMetric);
+  void readPaidProfitMetric().then(updateOverviewMetric);
 }
 
 function handleOverviewRuntimeEvent() {
@@ -271,10 +326,11 @@ function handleOverviewRuntimeEvent() {
   updateOverviewMetric(readSafetyOperationMetric());
   tickRunningRpcMetric();
   void readBnbRpcMetric().then(updateOverviewMetric);
+  void readPaidProfitMetric().then(updateOverviewMetric);
 }
 
 function updateOverviewMetric(nextMetric: OverviewMetric) {
-  overviewMetrics.value = overviewMetrics.value.map((metric) => (metric.label === nextMetric.label ? nextMetric : metric));
+  overviewMetrics.value = overviewMetrics.value.map((metric) => (metric.key === nextMetric.key ? nextMetric : metric));
   saveOverviewMetricsCache();
   animateOverviewValues([nextMetric]);
 }
@@ -284,9 +340,9 @@ function restoreOverviewMetricsCache() {
   if (!raw) return;
   try {
     const cached = JSON.parse(raw) as { metrics?: OverviewMetric[] };
-    const expectedLabels = overviewMetrics.value.map((metric) => metric.label).join("|");
-    const cachedLabels = Array.isArray(cached.metrics) ? cached.metrics.map((metric) => metric.label).join("|") : "";
-    if (Array.isArray(cached.metrics) && cached.metrics.length === overviewMetrics.value.length && cachedLabels === expectedLabels) {
+    const expectedKeys = overviewMetrics.value.map((metric) => metric.key).join("|");
+    const cachedKeys = Array.isArray(cached.metrics) ? cached.metrics.map((metric) => metric.key).join("|") : "";
+    if (Array.isArray(cached.metrics) && cached.metrics.length === overviewMetrics.value.length && cachedKeys === expectedKeys) {
       overviewMetrics.value = cached.metrics;
       animateOverviewValues(cached.metrics);
     }
@@ -297,9 +353,10 @@ function restoreOverviewMetricsCache() {
 
 function readSafetyOperationMetric(): OverviewMetric {
   return {
-    label: "安全运营",
+    key: "safetyOperation",
+    label: t("dashboard.securityOperation"),
     value: safetyOperationDuration(),
-    note: `零事故 · 始于 ${SAFETY_OPERATION_START_LABEL}`,
+    note: t("dashboard.zeroAccident", { date: t("dashboard.safetyStartDate") }),
     tone: "ready",
   };
 }
@@ -307,14 +364,14 @@ function readSafetyOperationMetric(): OverviewMetric {
 function safetyOperationDuration(): string {
   const start = new Date(`${SAFETY_OPERATION_START_DATE}T00:00:00+07:00`).getTime();
   const now = Date.now();
-  if (!Number.isFinite(start) || now < start) return "0天 0小时 0分钟 0秒";
+  if (!Number.isFinite(start) || now < start) return t("dashboard.duration", { days: 0, hours: 0, minutes: 0, seconds: 0 });
   const elapsedSeconds = Math.floor((now - start) / 1000);
   const days = Math.floor(elapsedSeconds / 86_400) + 1;
   const secondsInCurrentDay = elapsedSeconds % 86_400;
   const hours = Math.floor(secondsInCurrentDay / 3_600);
   const minutes = Math.floor((secondsInCurrentDay % 3_600) / 60);
   const seconds = secondsInCurrentDay % 60;
-  return `${days}天 ${padTimeUnit(hours)}小时 ${padTimeUnit(minutes)}分钟 ${padTimeUnit(seconds)}秒`;
+  return t("dashboard.duration", { days, hours: padTimeUnit(hours), minutes: padTimeUnit(minutes), seconds: padTimeUnit(seconds) });
 }
 
 function padTimeUnit(value: number): string {
@@ -345,9 +402,9 @@ async function readBnbUsdtMetric(): Promise<OverviewMetric> {
     const payload = (await response.json().catch(() => ({}))) as { rows?: Array<{ key?: string; usdt?: string }> };
     const bnb = payload.rows?.find((row) => row.key === "bnb");
     const value = formatAssetAmount(bnb?.usdt);
-    return { label: "BNB", value: value === "--" ? "--" : `${value} USDT`, note: "钱包资产", tone: value === "--" ? "flat" : "ready" };
+    return { key: "bnb", label: "BNB", value: value === "--" ? "--" : `${value} USDT`, note: t("dashboard.walletAsset"), tone: value === "--" ? "flat" : "ready" };
   } catch {
-    return { label: "BNB", value: "--", note: "读取失败", tone: "flat" };
+    return { key: "bnb", label: "BNB", value: "--", note: t("dashboard.readFailed"), tone: "flat" };
   }
 }
 
@@ -364,9 +421,36 @@ async function readBnbRpcMetric(): Promise<OverviewMetric> {
     const used = formatRpcUsed(metric);
     const expiry = formatRpcExpiry(metric?.tokenExpiresAt, metric?.message);
     const configured = metric?.status && metric.status !== "missing_rpc";
-    return { label: "BNB RPC", value: used, note: `到期 ${expiry}`, tone: configured ? "ready" : "flat" };
+    return { key: "bnbRpc", label: "BNB RPC", value: used, note: t("dashboard.expiresAt", { value: expiry }), tone: configured ? "ready" : "flat" };
   } catch {
-    return { label: "BNB RPC", value: "--", note: "到期 --", tone: "flat" };
+    return { key: "bnbRpc", label: "BNB RPC", value: "--", note: t("dashboard.expiresAt", { value: "--" }), tone: "flat" };
+  }
+}
+
+async function readPaidProfitMetric(): Promise<OverviewMetric> {
+  try {
+    const response = await fetch(`/api/liq2/paid-profit?t=${Date.now()}`, {
+      cache: "no-store",
+      headers: { accept: "application/json" },
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      totalPaidUsdt?: string;
+      total_paid_usdt?: string;
+      payoutCount?: number;
+      payout_count?: number;
+    };
+    if (!response.ok) throw new Error("paid profit request failed");
+    const total = formatAssetAmount(payload.totalPaidUsdt || payload.total_paid_usdt || "0");
+    const count = typeof payload.payoutCount === "number" ? payload.payoutCount : typeof payload.payout_count === "number" ? payload.payout_count : 0;
+    return {
+      key: "paidProfit",
+      label: t("dashboard.paidProfit"),
+      value: `${total} USDT`,
+      note: count > 0 ? t("dashboard.payoutCount", { count: count.toLocaleString("en-US") }) : t("dashboard.totalNetwork"),
+      tone: "ready",
+    };
+  } catch {
+    return { key: "paidProfit", label: t("dashboard.paidProfit"), value: "--", note: t("dashboard.readFailed"), tone: "flat" };
   }
 }
 
@@ -399,7 +483,13 @@ function refreshMarketStatus() {
 
 function readLiquidationStartedMetric(): OverviewMetric {
   const started = Boolean(readRunningMarketState());
-  return { label: "清算启动", value: started ? "已启动" : "未启动", note: "本地状态", tone: started ? "ready" : "danger" };
+  return {
+    key: "liquidationStarted",
+    label: t("dashboard.liquidationStarted"),
+    value: started ? t("dashboard.started") : t("dashboard.notStarted"),
+    note: t("dashboard.localStatus"),
+    tone: started ? "ready" : "danger",
+  };
 }
 
 function tickRunningRpcMetric() {
@@ -407,21 +497,23 @@ function tickRunningRpcMetric() {
   if (!runningMarket || runningMarketChain(runningMarket) !== "bnb") return;
   const burn = typeof runningMarket.creditBurnPerSecond === "number" && runningMarket.creditBurnPerSecond > 0 ? runningMarket.creditBurnPerSecond : 0;
   if (!burn) return;
-  const current = overviewMetrics.value.find((metric) => metric.label === "BNB RPC");
+  const current = overviewMetrics.value.find((metric) => metric.key === "bnbRpc");
   const currentValue = current ? parseOverviewNumericValue(current.value) : null;
   if (currentValue === null) return;
   updateOverviewMetric({
+    key: "bnbRpc",
     label: "BNB RPC",
     value: Math.round(currentValue + burn).toLocaleString("en-US"),
-    note: current?.note || "运行中",
+    note: current?.note || t("dashboard.running"),
     tone: "ready",
   });
 }
 
 function metricClass(metric: OverviewMetric) {
   return {
-    "is-liquidation-started": metric.label === "清算启动",
-    "is-safety-operation": metric.label === "安全运营",
+    "is-liquidation-started": metric.key === "liquidationStarted",
+    "is-safety-operation": metric.key === "safetyOperation",
+    "is-paid-profit": metric.key === "paidProfit",
   };
 }
 
@@ -439,14 +531,14 @@ async function loadMarketStatus() {
       updatedAt?: string;
       message?: string;
     };
-    if (!response.ok) throw new Error(payload.message ?? "策略快照读取失败");
+    if (!response.ok) throw new Error(payload.message ?? t("dashboard.snapshotReadFailed"));
     const strategies = Array.isArray(payload.strategies) ? payload.strategies.map(strategyToMarketSource) : [];
     marketSources.value = strategies.length > 0 ? strategies : Array.isArray(payload.sources) ? payload.sources : [];
-    marketStatusUpdatedAt.value = payload.updatedAt ? `更新 ${formatDateTime(payload.updatedAt)}` : "--";
+    marketStatusUpdatedAt.value = payload.updatedAt ? t("dashboard.updated", { time: formatDateTime(payload.updatedAt) }) : "--";
     saveMarketStatusCache();
     if (marketSources.value.length === 0 && payload.message) marketStatusError.value = payload.message;
   } catch (error) {
-    marketStatusError.value = error instanceof Error ? error.message : "策略快照读取失败";
+    marketStatusError.value = error instanceof Error ? error.message : t("dashboard.snapshotReadFailed");
     if (marketSources.value.length === 0) marketStatusUpdatedAt.value = "--";
   } finally {
     marketStatusLoading.value = false;
@@ -469,28 +561,28 @@ function formatAssetAmount(value?: string): string {
 }
 
 function displayOverviewValue(metric: OverviewMetric): string {
-  if (metric.label === "安全运营") return metric.value;
+  if (metric.key === "safetyOperation") return metric.value;
   const target = parseOverviewNumericValue(metric.value);
   if (target === null) return metric.value;
-  const animated = animatedOverviewValues.value[metric.label] ?? target;
+  const animated = animatedOverviewValues.value[metric.key] ?? target;
   const formatted = animated.toLocaleString("en-US", { maximumFractionDigits: metric.value.includes(".") ? 2 : 0 });
   return metric.value.includes("USDT") ? `${formatted} USDT` : formatted;
 }
 
 function animateOverviewValues(metrics: OverviewMetric[]) {
   for (const metric of metrics) {
-    if (metric.label === "安全运营") continue;
+    if (metric.key === "safetyOperation") continue;
     const target = parseOverviewNumericValue(metric.value);
     if (target === null) continue;
-    const previousTarget = overviewValueTargets.get(metric.label);
-    overviewValueTargets.set(metric.label, target);
+    const previousTarget = overviewValueTargets.get(metric.key);
+    overviewValueTargets.set(metric.key, target);
     if (previousTarget === undefined) {
-      animatedOverviewValues.value = { ...animatedOverviewValues.value, [metric.label]: 0 };
-      animateOverviewValue(metric.label, 0, target);
+      animatedOverviewValues.value = { ...animatedOverviewValues.value, [metric.key]: 0 };
+      animateOverviewValue(metric.key, 0, target);
       continue;
     }
     if (previousTarget === target) continue;
-    animateOverviewValue(metric.label, animatedOverviewValues.value[metric.label] ?? previousTarget, target);
+    animateOverviewValue(metric.key, animatedOverviewValues.value[metric.key] ?? previousTarget, target);
   }
 }
 

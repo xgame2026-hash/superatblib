@@ -2,13 +2,13 @@
   <section class="latest-liquidations">
     <article class="latest-card">
       <div class="latest-title-row">
-        <h2>排行榜</h2>
+        <h2>{{ t("latest.rank") }}</h2>
         <label class="latest-wallet-search">
-          <span>钱包搜索</span>
+          <span>{{ t("latest.walletSearch") }}</span>
           <input
             v-model="walletSearchQuery"
             type="search"
-            placeholder="输入钱包地址"
+            :placeholder="t('latest.walletPlaceholder')"
             autocomplete="off"
             autocapitalize="off"
             autocorrect="off"
@@ -18,16 +18,16 @@
         <div class="latest-title-side">
           <div class="latest-wss-stat" :class="wssConnected ? 'is-connected' : 'is-empty'" :title="wssStatusTitle">
             <span class="latest-wss-dot" aria-hidden="true"></span>
-            <span>在线同步</span>
+            <span>{{ t("latest.onlineSync") }}</span>
             <strong>{{ wssConnectionText }}</strong>
           </div>
           <div class="latest-total-stat" :class="totalUsdtPulseClass">
-            <span>总金额</span>
+            <span>{{ t("latest.totalAmount") }}</span>
             <strong>{{ formattedTotalUsdt }}</strong>
           </div>
-          <div class="latest-total-stat" :class="totalTodayPulseClass">
-            <span>今日增加总金额</span>
-            <strong>{{ formattedTotalTodayChange }}</strong>
+          <div class="latest-total-stat latest-paid-profit-stat" :class="paidProfitPulseClass" :title="paidProfitTitle">
+            <span>{{ t("latest.paidProfit") }}</span>
+            <strong>{{ formattedPaidProfit }}</strong>
           </div>
         </div>
       </div>
@@ -38,11 +38,10 @@
         <table class="latest-table">
           <thead>
             <tr>
-              <th>链</th>
-              <th>排队ID</th>
-              <th>钱包</th>
+              <th>{{ t("latest.chain") }}</th>
+              <th>{{ t("latest.queueId") }}</th>
+              <th>{{ t("latest.wallet") }}</th>
               <th>USDT</th>
-              <th>今日增加</th>
             </tr>
           </thead>
           <tbody>
@@ -57,26 +56,23 @@
                 </span>
               </td>
               <td class="latest-asset-summary">{{ formatUsdtAsset(row) }}</td>
-              <td>
-                <span class="latest-today-change" :class="todayChangeToneClass(todayChangeValue(row))">{{ formatTodayChange(row) }}</span>
-              </td>
             </tr>
             <tr v-if="loading && queuedWalletRows.length === 0">
-              <td class="latest-skeleton-row" colspan="5">
+              <td class="latest-skeleton-row" colspan="4">
                 <span></span>
                 <span></span>
               </td>
             </tr>
             <tr v-else-if="filteredQueuedWalletRows.length === 0">
-              <td class="latest-empty-row" colspan="5">{{ walletSearchQuery.trim() ? "没有匹配的钱包。" : "暂无正在排队的钱包。" }}</td>
+              <td class="latest-empty-row" colspan="4">{{ walletSearchQuery.trim() ? t("latest.noMatched") : t("latest.noQueued") }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <div class="latest-pagination" v-if="filteredQueuedWalletRows.length > pageSize">
-        <button type="button" :disabled="currentPage === 1" @click="currentPage = 1">首页</button>
-        <button type="button" :disabled="currentPage === 1" @click="currentPage -= 1">上一页</button>
+        <button type="button" :disabled="currentPage === 1" @click="currentPage = 1">{{ t("latest.first") }}</button>
+        <button type="button" :disabled="currentPage === 1" @click="currentPage -= 1">{{ t("latest.prev") }}</button>
         <button
           v-for="page in visiblePages"
           :key="page"
@@ -86,8 +82,8 @@
         >
           {{ page }}
         </button>
-        <button type="button" :disabled="currentPage === totalPages" @click="currentPage += 1">下一页</button>
-        <button type="button" :disabled="currentPage === totalPages" @click="currentPage = totalPages">尾页</button>
+        <button type="button" :disabled="currentPage === totalPages" @click="currentPage += 1">{{ t("latest.next") }}</button>
+        <button type="button" :disabled="currentPage === totalPages" @click="currentPage = totalPages">{{ t("latest.last") }}</button>
       </div>
     </article>
   </section>
@@ -95,6 +91,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { t } from "../../i18n";
 
 const props = withDefaults(defineProps<{ active?: boolean }>(), {
   active: true,
@@ -159,14 +156,15 @@ const errorMessage = ref("");
 const walletSearchQuery = ref("");
 const currentPage = ref(1);
 const pageSize = 15;
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
 let latestRefreshTimer = 0;
 let activeQueueTimer = 0;
 let latestLoadedAt = 0;
 const LATEST_REFRESH_INTERVAL_MS = 10_000;
 const ACTIVE_QUEUE_INTERVAL_MS = 5_000;
 const WSS_STALE_MS = 45_000;
+const PAID_PROFIT_REFRESH_INTERVAL_MS = 10_000;
 const queuedWalletRows = computed(() => {
   const sourceRows = queuedWalletSourceRows.value;
   const productionRows = sourceRows.filter(isProductionQueueWallet);
@@ -190,21 +188,27 @@ const visiblePages = computed(() => {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 });
 const totalUsdt = computed(() => queuedWalletRows.value.reduce((total, row) => total + usdtValue(row), 0));
-const totalTodayChange = computed(() => totalTodayChangeByWallet(queuedWalletRows.value));
 const formattedTotalUsdt = computed(() => (loading.value && queuedWalletRows.value.length === 0 ? "--" : `${formatDecimal2(totalUsdt.value)} USDT`));
-const formattedTotalTodayChange = computed(() => (loading.value && queuedWalletRows.value.length === 0 ? "--" : `${formatSignedDecimal2(totalTodayChange.value)} USDT`));
+const paidProfitUsdt = ref(0);
+const paidProfitPayoutCount = ref(0);
+const paidProfitLoaded = ref(false);
+const formattedPaidProfit = computed(() => (paidProfitLoaded.value ? `${formatDecimal2(paidProfitUsdt.value)} USDT` : "--"));
+const paidProfitTitle = computed(() =>
+  paidProfitLoaded.value
+    ? t("latest.profitTitle", { amount: formatDecimal2(paidProfitUsdt.value), count: paidProfitPayoutCount.value.toLocaleString("en-US") })
+    : t("latest.profitLoading"),
+);
 const totalUsdtPulse = ref(false);
-const totalTodayPulse = ref(false);
+const paidProfitPulse = ref(false);
 const totalUsdtPulseTone = ref<"up" | "down">("up");
-const totalTodayPulseTone = ref<"up" | "down">("up");
+const paidProfitPulseTone = ref<"up" | "down">("up");
 const totalUsdtPulseClass = computed(() => ({
   "is-pulsing": totalUsdtPulse.value,
   "is-down": totalUsdtPulseTone.value === "down",
 }));
-const totalTodayPulseClass = computed(() => ({
-  "is-pulsing": totalTodayPulse.value,
-  "is-down": totalTodayPulseTone.value === "down",
-  ...todayChangeToneClass(totalTodayChange.value),
+const paidProfitPulseClass = computed(() => ({
+  "is-pulsing": paidProfitPulse.value,
+  "is-down": paidProfitPulseTone.value === "down",
 }));
 const queueTransport = ref("");
 const activeQueueGlobalIndex = ref(0);
@@ -215,16 +219,22 @@ const wssConnected = ref(false);
 let lastWssConnectedAt = 0;
 const stableQueueParticipantCount = computed(() => queuedWalletRows.value.length || queueParticipantCount.value);
 const wssConnectionText = computed(() => {
-  if (!wssConnected.value) return "未连接";
-  return `${stableQueueParticipantCount.value} 个钱包`;
+  if (!wssConnected.value) return t("latest.disconnected");
+  return t("latest.walletCount", { count: stableQueueParticipantCount.value });
 });
 const wssStatusTitle = computed(() => {
-  if (!wssConnected.value) return "在线队列状态未连接";
+  if (!wssConnected.value) return t("latest.queueDisconnected");
   const updatedAt = queueUpdatedAt.value ? new Date(queueUpdatedAt.value).toLocaleString() : "--";
-  return `在线队列：${stableQueueParticipantCount.value} 个钱包，${queueSubscribers.value} 个 tx2 订阅，来源 ${queueTransport.value || "--"}，更新 ${updatedAt}`;
+  return t("latest.queueTitle", {
+    wallets: stableQueueParticipantCount.value,
+    subscribers: queueSubscribers.value,
+    source: queueTransport.value || "--",
+    updatedAt,
+  });
 });
 let totalUsdtPulseTimer = 0;
-let totalTodayPulseTimer = 0;
+let paidProfitPulseTimer = 0;
+let paidProfitRefreshTimer = 0;
 
 watch(totalUsdt, (value, oldValue) => {
   if (value === oldValue) return;
@@ -232,10 +242,10 @@ watch(totalUsdt, (value, oldValue) => {
   totalUsdtPulseTimer = triggerNumberPulse(totalUsdtPulse, totalUsdtPulseTimer);
 });
 
-watch(totalTodayChange, (value, oldValue) => {
+watch(paidProfitUsdt, (value, oldValue) => {
   if (value === oldValue) return;
-  totalTodayPulseTone.value = value < oldValue ? "down" : "up";
-  totalTodayPulseTimer = triggerNumberPulse(totalTodayPulse, totalTodayPulseTimer);
+  paidProfitPulseTone.value = value < oldValue ? "down" : "up";
+  paidProfitPulseTimer = triggerNumberPulse(paidProfitPulse, paidProfitPulseTimer);
 });
 
 watch([filteredQueuedWalletRows, totalPages], ([rows]) => {
@@ -275,22 +285,26 @@ watch(
 onBeforeUnmount(() => {
   stopLatestLiquidationsView();
   if (totalUsdtPulseTimer) window.clearTimeout(totalUsdtPulseTimer);
-  if (totalTodayPulseTimer) window.clearTimeout(totalTodayPulseTimer);
+  if (paidProfitPulseTimer) window.clearTimeout(paidProfitPulseTimer);
 });
 
 function startLatestLiquidationsView(): void {
   if (!latestRefreshTimer) latestRefreshTimer = window.setInterval(loadLatestLiquidations, LATEST_REFRESH_INTERVAL_MS);
   if (!activeQueueTimer) activeQueueTimer = window.setInterval(advanceActiveQueueRow, ACTIVE_QUEUE_INTERVAL_MS);
+  if (!paidProfitRefreshTimer) paidProfitRefreshTimer = window.setInterval(loadPaidProfitSummary, PAID_PROFIT_REFRESH_INTERVAL_MS);
   if (!latestLoadedAt) {
     void loadLatestLiquidations();
   }
+  void loadPaidProfitSummary();
 }
 
 function stopLatestLiquidationsView(): void {
   if (latestRefreshTimer) window.clearInterval(latestRefreshTimer);
   if (activeQueueTimer) window.clearInterval(activeQueueTimer);
+  if (paidProfitRefreshTimer) window.clearInterval(paidProfitRefreshTimer);
   latestRefreshTimer = 0;
   activeQueueTimer = 0;
+  paidProfitRefreshTimer = 0;
 }
 
 async function loadLatestLiquidations(): Promise<void> {
@@ -332,9 +346,30 @@ async function loadLatestLiquidations(): Promise<void> {
       queueUpdatedAt.value = "";
     }
     markWssStaleIfNeeded();
-    errorMessage.value = error instanceof Error ? `排队钱包接口读取失败：${error.message}` : "排队钱包接口读取失败";
+    errorMessage.value = error instanceof Error ? `${t("latest.queueReadFailed")}：${error.message}` : t("latest.queueReadFailed");
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadPaidProfitSummary(): Promise<void> {
+  try {
+    const response = await fetch(`/api/liq2/paid-profit?t=${Date.now()}`, {
+      cache: "no-store",
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = (await response.json()) as {
+      totalPaidUsdt?: string | number;
+      total_paid_usdt?: string | number;
+      payoutCount?: number;
+      payout_count?: number;
+    };
+    paidProfitUsdt.value = parseNumericValue(payload.totalPaidUsdt ?? payload.total_paid_usdt ?? "0");
+    paidProfitPayoutCount.value = Number(payload.payoutCount ?? payload.payout_count ?? 0) || 0;
+    paidProfitLoaded.value = true;
+  } catch {
+    paidProfitLoaded.value = false;
   }
 }
 
@@ -539,44 +574,6 @@ function rawUsdtAssetValue(row: QueueRow) {
   return parsed ? parseNumericValue(parsed[1]) : undefined;
 }
 
-function formatTodayChange(row: QueueRow) {
-  const value = todayChangeValue(row);
-  if (value !== 0 || rawTodayChangeValue(row) !== undefined) return `${formatSignedDecimal2(value)} USDT`;
-  return "--";
-}
-
-function todayChangeToneClass(value: number) {
-  const normalized = Math.abs(value) < 0.005 ? 0 : value;
-  return {
-    "is-positive": normalized > 0,
-    "is-negative": normalized < 0,
-  };
-}
-
-function todayChangeValue(row: QueueRow) {
-  const value = rawTodayChangeValue(row);
-  return value === undefined || value === null ? 0 : parseNumericValue(value);
-}
-
-function rawTodayChangeValue(row: QueueRow) {
-  return row.todayContractChange ?? row.todayAssetChange ?? row.balances?.todayContractChange;
-}
-
-function totalTodayChangeByWallet(rows: QueueRow[]) {
-  const byWallet = new Map<string, { value: number; freshness: number }>();
-  for (const row of rows) {
-    const wallet = rowWallet(row).toLowerCase();
-    if (!wallet) continue;
-    const key = `${(row.chain || row.chainLabel || "").toLowerCase()}:${wallet}`;
-    const entry = { value: todayChangeValue(row), freshness: queueRowFreshness(row) };
-    const existing = byWallet.get(key);
-    if (!existing || entry.freshness >= existing.freshness) {
-      byWallet.set(key, entry);
-    }
-  }
-  return [...byWallet.values()].reduce((total, entry) => total + entry.value, 0);
-}
-
 function parseNumericValue(value: string | number) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const match = value.replace(/,/g, "").match(/[+-]?\d+(?:\.\d+)?/);
@@ -586,12 +583,6 @@ function parseNumericValue(value: string | number) {
 
 function formatDecimal2(value: number) {
   return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
-}
-
-function formatSignedDecimal2(value: number) {
-  const normalized = Math.abs(value) < 0.005 ? 0 : value;
-  const sign = normalized > 0 ? "+" : "";
-  return `${sign}${formatDecimal2(normalized)}`;
 }
 
 function triggerNumberPulse(target: typeof totalUsdtPulse, timer: number) {

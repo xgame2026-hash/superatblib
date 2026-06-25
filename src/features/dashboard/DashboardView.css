@@ -1,6 +1,6 @@
 .overview-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 16px;
 }
@@ -46,6 +46,10 @@
   white-space: nowrap;
 }
 
+.overview-stat.is-paid-profit strong {
+  color: #8fffd0;
+}
+
 .overview-stat div {
   display: grid;
   min-width: 0;
@@ -65,7 +69,7 @@
 }
 
 .overview-stat em {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   font-style: normal;
   line-height: 1.1;

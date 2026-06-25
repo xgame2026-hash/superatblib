@@ -12,7 +12,7 @@
       <article class="panel market-control-panel">
         <div class="market-control">
           <label>
-            <span>执行市场</span>
+            <span>{{ t("liquidation.market") }}</span>
             <el-select v-model="market" :teleported="false" placement="bottom-start" :offset="6" popper-class="market-select-popper">
               <el-option
                 v-for="item in marketOptions"
@@ -23,7 +23,7 @@
               >
                 <span class="market-option">
                   <strong>{{ item.label }}</strong>
-                  <em :class="`is-${item.apiTone}`">{{ item.apiStatus }}</em>
+                  <em :class="`is-${item.apiTone}`">{{ displayStatus(item.apiStatus) }}</em>
                 </span>
               </el-option>
             </el-select>
@@ -32,11 +32,11 @@
             <button :class="['run-button', { 'is-running': marketRunning }]" type="button" :disabled="marketRunning" @click="startMarketExecution">
               <img v-if="marketRunning" class="run-state-icon" :src="runIcon" alt="" />
               <el-icon v-else><VideoPlay /></el-icon>
-              {{ marketRunning ? "运行中" : "启动" }}
+              {{ marketRunning ? t("liquidation.running") : t("liquidation.start") }}
             </button>
             <button class="pause-button" type="button" :disabled="!marketRunning" @click="pauseMarketExecution">
               <el-icon><VideoPause /></el-icon>
-              暂停
+              {{ t("liquidation.pause") }}
             </button>
           </div>
           <MarketMonitor class="market-monitor-field" :messages="monitorMessages" />
@@ -47,7 +47,7 @@
         <div class="terminal-title">
           <span class="terminal-title-label">
             <img :src="tigsIcon" alt="" />
-            执行终端
+            {{ t("liquidation.terminal") }}
           </span>
         </div>
         <pre>{{ terminalText }}</pre>
@@ -68,6 +68,7 @@ import AllMarketSnapshot from "./AllMarketSnapshot.vue";
 import MarketMonitor from "./MarketMonitor.vue";
 import RpcUsagePanel from "./RpcUsagePanel.vue";
 import WalletAssetsPanel from "./WalletAssetsPanel.vue";
+import { displayStatus, t } from "../../i18n";
 
 const props = withDefaults(defineProps<{
   active?: boolean;
@@ -151,13 +152,13 @@ type SnapshotStrategyRow = {
   updatedAt?: string;
 };
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
 const unconfiguredMarket: MarketOption = {
   value: "unconfigured",
-  label: "未配置执行市场",
+  label: t("liquidation.unconfiguredMarket"),
   chain: "--",
-  apiStatus: "未连接",
+  apiStatus: t("liquidation.disconnected"),
   apiTone: "neutral",
   snapshotAge: "--",
   queue: "Idle",
@@ -187,16 +188,16 @@ const marketOptions = computed<MarketOption[]>(() => {
 const currentMarket = computed(() => marketOptions.value.find((item) => item.value === market.value) ?? marketOptions.value[0] ?? unconfiguredMarket);
 const currentMarketLabel = computed(() => currentMarket.value.label);
 const queueStateText = computed(() => {
-  if (queueState.value === "queued") return "已入队";
-  if (queueState.value === "waiting") return "等待清算";
-  if (queueState.value === "paused") return "已暂停";
+  if (queueState.value === "queued") return t("liquidation.queued");
+  if (queueState.value === "waiting") return t("liquidation.waiting");
+  if (queueState.value === "paused") return t("liquidation.paused");
   return currentMarket.value.queue;
 });
 const monitorMessages = computed(() => {
   return [`${currentMarketLabel.value}: ${queueStateText.value}`];
 });
 
-const terminalText = computed(() => terminalLines.value.join("\n") || "等待执行输出");
+const terminalText = computed(() => terminalLines.value.join("\n") || t("liquidation.waitingOutput"));
 
 function handleWalletAssetsRefresh(refreshRpcUsage: () => Promise<void> | void) {
   emit("refresh");
@@ -277,17 +278,17 @@ async function startMarketExecution() {
   if (currentMarket.value.disabled || !currentMarket.value.executable) {
     queueState.value = "idle";
     marketRunning.value = false;
-    appendTerminal(`market unavailable: ${currentMarket.value.apiStatus}`);
+    appendTerminal(`market unavailable: ${displayStatus(currentMarket.value.apiStatus)}`);
     emit("launch-sound", "not-launched");
     return;
   }
   appendTerminal(`snapshot source: ${currentMarket.value.endpoint}`);
-  appendTerminal(`strategy status: ${currentMarket.value.apiStatus}`);
-  appendTerminal("正在进入队列");
+  appendTerminal(`strategy status: ${displayStatus(currentMarket.value.apiStatus)}`);
+  appendTerminal(t("liquidation.enteringQueue"));
   try {
     const payload = await registerMarketQueueStart(currentMarket.value);
     queueState.value = payload.eligible === false ? "waiting" : "queued";
-    appendTerminal(`排队成功: ${displayQueueId(payload)}`);
+    appendTerminal(t("liquidation.queueSuccess", { id: displayQueueId(payload) }));
     appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
     if (typeof payload.remoteQueueWarning === "string") appendTerminal(payload.remoteQueueWarning);
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
@@ -301,7 +302,7 @@ async function startMarketExecution() {
     queueState.value = "idle";
     marketRunning.value = false;
     clearRunningMarketState();
-    const message = error instanceof Error ? error.message : "启动队列上报失败";
+    const message = error instanceof Error ? error.message : t("liquidation.startFailed");
     appendTerminal(`queue register failed: ${message}`);
     notifyQueueError(message);
     emit("launch-sound", "not-launched");
@@ -318,11 +319,11 @@ async function pauseMarketExecution() {
   if (!runningMarket.disabled) {
     try {
       await unregisterMarketQueue(runningMarket);
-      appendTerminal(`队列已暂停: ${runningMarket.label}`);
+      appendTerminal(t("liquidation.queuePaused", { market: runningMarket.label }));
       await loadQueueMonitorStatus();
       await refreshMarketSnapshotDisplay();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "停止队列上报失败";
+      const message = error instanceof Error ? error.message : t("liquidation.stopFailed");
       appendTerminal(`queue unregister failed: ${message}`);
       ElMessage.error(message);
     }
@@ -581,7 +582,7 @@ async function registerMarketQueueStart(item: MarketOption, action = "start"): P
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error("队列服务请求超时，请检查授权、网络端点和服务可用性。");
+      throw new Error(t("liquidation.timeout"));
     }
     throw error;
   }
@@ -622,7 +623,7 @@ async function loadQueueMonitorStatus(): Promise<void> {
     queueMonitorRows.value = normalizeClientQueueRows(payload.rows);
     queueMonitorParticipantCount.value = payload.participantCount ?? maxClientQueueParticipants(queueMonitorRows.value);
   } catch {
-    queueMonitorRows.value = createEmptyClientQueueRows("队列状态不可用");
+    queueMonitorRows.value = createEmptyClientQueueRows(t("liquidation.queueUnavailable"));
     queueMonitorParticipantCount.value = 0;
   }
 }
@@ -697,7 +698,7 @@ function createFallbackExecuteStrategy(id: string, chain: string, chainLabel: st
     chain,
     chainLabel,
     protocol,
-    strategy: "本地执行市场",
+    strategy: t("liquidation.localExecuteMarket"),
     mode: "execute",
     rpc,
     status: "候选运行中",
@@ -736,7 +737,7 @@ function strategyToMarketOption(strategy: SnapshotStrategyRow): MarketOption {
     apiStatus: status,
     apiTone: strategyTone(status, strategy.statusTone),
     snapshotAge: strategy.updatedAt ? formatSnapshotTime(strategy.updatedAt) : "--",
-    queue: queueCount > 0 ? `${queueCount} 个候选` : status,
+    queue: queueCount > 0 ? t("liquidation.candidateCount", { count: queueCount }) : displayStatus(status),
     keeper: modeLabel(strategy.mode),
     endpoint: strategy.rpc || "--",
     executable: runnable,
@@ -766,9 +767,9 @@ function strategyTone(status: string, tone?: SnapshotStrategyRow["statusTone"]):
 }
 
 function modeLabel(mode: SnapshotStrategyRow["mode"]) {
-  if (mode === "monitor") return "监听";
+  if (mode === "monitor") return t("liquidation.monitor");
   if (mode === "stability_pool") return "SP";
-  return "执行";
+  return t("liquidation.execute");
 }
 
 function normalizeProtocolKey(protocol: string) {
@@ -792,7 +793,7 @@ function normalizeClientQueueRows(rows: ClientQueueStatusRow[] | undefined) {
   }));
 }
 
-function createEmptyClientQueueRows(status = "等待队列状态"): ClientQueueStatusRow[] {
+function createEmptyClientQueueRows(status = t("liquidation.waitingQueue")): ClientQueueStatusRow[] {
   return [
     createEmptyClientQueueRow("ethereum", "ETH", status),
     createEmptyClientQueueRow("bnb", "BNB", status),

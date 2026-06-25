@@ -10,7 +10,7 @@
         show-icon
       />
 
-      <div v-if="loading" class="news-list-skeleton" aria-label="正在加载资讯">
+      <div v-if="loading" class="news-list-skeleton" :aria-label="t('news.loading')">
         <span v-for="index in 8" :key="index"></span>
       </div>
       <div v-else-if="pagedItems.length > 0" class="news-full-list">
@@ -31,11 +31,11 @@
           </span>
         </button>
       </div>
-      <p v-else class="news-empty-card">暂无资讯</p>
+      <p v-else class="news-empty-card">{{ t("news.empty") }}</p>
 
-      <nav v-if="sortedItems.length > 0" class="news-pagination" aria-label="资讯分页">
-        <button type="button" :disabled="currentPage === 1" @click="setPage(1)">首页</button>
-        <button type="button" :disabled="currentPage === 1" @click="setPage(currentPage - 1)">上一页</button>
+      <nav v-if="sortedItems.length > 0" class="news-pagination" :aria-label="t('news.pagination')">
+        <button type="button" :disabled="currentPage === 1" @click="setPage(1)">{{ t("latest.first") }}</button>
+        <button type="button" :disabled="currentPage === 1" @click="setPage(currentPage - 1)">{{ t("latest.prev") }}</button>
         <button
           v-for="page in visiblePages"
           :key="page"
@@ -45,15 +45,15 @@
         >
           {{ page }}
         </button>
-        <button type="button" :disabled="currentPage === totalPages" @click="setPage(currentPage + 1)">下一页</button>
-        <button type="button" :disabled="currentPage === totalPages" @click="setPage(totalPages)">尾页</button>
+        <button type="button" :disabled="currentPage === totalPages" @click="setPage(currentPage + 1)">{{ t("latest.next") }}</button>
+        <button type="button" :disabled="currentPage === totalPages" @click="setPage(totalPages)">{{ t("latest.last") }}</button>
       </nav>
     </article>
   </section>
 
   <section v-else class="news-detail-layout">
     <article class="panel news-detail-panel">
-      <button class="news-back-button" type="button" @click="$emit('select', '')">返回</button>
+      <button class="news-back-button" type="button" @click="$emit('select', '')">{{ t("news.back") }}</button>
       <div class="news-detail-header">
         <h2>{{ selectedItem.title }}</h2>
         <div class="news-detail-meta">
@@ -67,7 +67,7 @@
     <aside class="panel news-hot-panel">
       <div class="news-hot-heading">
         <span>Hot News</span>
-        <h3>热门资讯</h3>
+        <h3>{{ t("news.hotTitle") }}</h3>
       </div>
       <div class="news-hot-list">
         <button
@@ -85,7 +85,7 @@
           </span>
         </button>
       </div>
-      <p v-if="hotItems.length === 0" class="news-empty-card">暂无热门资讯</p>
+      <p v-if="hotItems.length === 0" class="news-empty-card">{{ t("news.hotEmpty") }}</p>
     </aside>
   </section>
 </template>
@@ -93,6 +93,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import type { NewsItem } from "../../types/news";
+import { getLocale, t } from "../../i18n";
 
 const props = defineProps<{
   items: NewsItem[];
@@ -142,13 +143,23 @@ function setPage(page: number) {
 function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", {
+  return date.toLocaleString(localeForDate(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function localeForDate(): string {
+  const locale = getLocale();
+  if (locale === "zh") return "zh-CN";
+  if (locale === "ja") return "ja-JP";
+  if (locale === "ko") return "ko-KR";
+  if (locale === "ru") return "ru-RU";
+  if (locale === "th") return "th-TH";
+  return "en-US";
 }
 </script>
 

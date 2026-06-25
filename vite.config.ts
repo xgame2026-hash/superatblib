@@ -7,6 +7,7 @@ import { handleGithubVersionRequest } from "./server/github-version-middleware";
 import { handleLatestLiquidationsRequest } from "./server/latest-liquidations-middleware";
 import { handleLiquidationQueueStatusRequest, restoreLocalQueueHeartbeats } from "./server/liquidation-queue-status-middleware";
 import { handleNewsRequest } from "./server/news-middleware";
+import { handlePaidProfitRequest } from "./server/paid-profit-middleware";
 import { handleRpcUsageRequest } from "./server/rpc-usage-middleware";
 import { handleSettingsRequest } from "./server/settings-middleware";
 import { handleTxGraphRequest } from "./server/tx-graph-middleware";
@@ -48,6 +49,7 @@ export default defineConfig(({ mode }) => {
             !handleLatestLiquidationsRequest(req, res) &&
             !handleLiquidationQueueStatusRequest(req, res) &&
             !handleNewsRequest(req, res) &&
+            !handlePaidProfitRequest(req, res) &&
             !handleTxGraphRequest(req, res) &&
             !handleRpcUsageRequest(req, res) &&
             !handleGithubVersionRequest(req, res) &&

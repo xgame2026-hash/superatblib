@@ -27,14 +27,14 @@
             :loading="settingsSecurityChecking"
             @click="emit('security-check')"
           >
-            检测
+            {{ t("settings.check") }}
           </el-button>
           <el-button
             class="ghost-action"
             :icon="settingsSecretsVisible ? Hide : View"
             @click="emit('update:settingsSecretsVisible', !settingsSecretsVisible)"
           >
-            {{ settingsSecretsVisible ? "隐藏" : "显示" }}
+            {{ settingsSecretsVisible ? t("settings.hide") : t("settings.show") }}
           </el-button>
           <el-button
             class="save-settings-button"
@@ -43,17 +43,17 @@
             @click="emit('save')"
           >
             <img class="settings-action-icon" :src="saveIconUrl" alt="" aria-hidden="true" />
-            保存
+            {{ t("settings.save") }}
           </el-button>
           <el-button class="logout-settings-button" :icon="SwitchButton" @click="emit('logout')">
-            退出
+            {{ t("settings.logout") }}
           </el-button>
         </div>
       </div>
 
       <div v-if="settingsSection === 'general'" class="settings-form-grid">
         <label class="settings-field is-full">
-          <span>钱包私钥</span>
+          <span>{{ t("settings.privateKey") }}</span>
           <el-input
             v-model="settingsForm.privateKey"
             class="settings-secret-input"
@@ -82,22 +82,22 @@
           />
         </label>
         <label class="settings-field">
-          <span>资金模式</span>
+          <span>{{ t("settings.fundingMode") }}</span>
           <el-select v-model="settingsForm.fundingMode">
             <el-option label="Flash Loan" value="flash_loan" />
             <el-option label="Self funded" value="self_funded" />
           </el-select>
         </label>
         <label class="settings-field">
-          <span>套利强度</span>
+          <span>{{ t("settings.arbitrageIntensity") }}</span>
           <el-select v-model="settingsForm.arbitrageIntensity">
-            <el-option label="保守" value="conservative" />
-            <el-option label="加强" value="enhanced" />
-            <el-option label="激进" value="aggressive" />
+            <el-option :label="t('settings.conservative')" value="conservative" />
+            <el-option :label="t('settings.enhanced')" value="enhanced" />
+            <el-option :label="t('settings.aggressive')" value="aggressive" />
           </el-select>
         </label>
         <label class="settings-field">
-          <span>授权金额</span>
+          <span>{{ t("settings.authAmount") }}</span>
           <el-input
             v-model="settingsForm.singleTradeAuthAmountUsdt"
             autocomplete="off"
@@ -109,14 +109,14 @@
           </el-input>
         </label>
         <label class="settings-field">
-          <span>启动检测</span>
+          <span>{{ t("settings.startupDetection") }}</span>
           <el-select v-model="settingsForm.startupDetectionMode">
-            <el-option label="自动" value="auto" />
-            <el-option label="手动" value="manual" />
+            <el-option :label="t('settings.auto')" value="auto" />
+            <el-option :label="t('settings.manual')" value="manual" />
           </el-select>
         </label>
         <label class="settings-field">
-          <span>端口设置</span>
+          <span>{{ t("settings.dashboardPort") }}</span>
           <el-input
             v-model="settingsForm.dashboardPort"
             autocomplete="off"
@@ -126,26 +126,49 @@
           />
         </label>
         <label class="settings-field">
-          <span>启动音效</span>
+          <span>{{ t("settings.launchSound") }}</span>
           <el-select v-model="settingsForm.launchSoundMode">
-            <el-option label="打开音效" value="enabled" />
-            <el-option label="关闭音效" value="disabled" />
+            <el-option :label="t('settings.soundOn')" value="enabled" />
+            <el-option :label="t('settings.soundOff')" value="disabled" />
           </el-select>
         </label>
         <label class="settings-field">
-          <span>界面语言</span>
-          <el-select v-model="settingsForm.language">
-            <el-option label="简体中文" value="zh" />
-          </el-select>
+          <span>{{ t("settings.language") }}</span>
+          <div ref="languageSelectRef" class="settings-language-select" :class="{ open: languageMenuOpen }">
+            <button
+              class="settings-language-trigger"
+              type="button"
+              :aria-expanded="languageMenuOpen"
+              aria-haspopup="listbox"
+              @click="languageMenuOpen = !languageMenuOpen"
+            >
+              <span>{{ selectedLanguageLabel }}</span>
+              <i aria-hidden="true"></i>
+            </button>
+            <div v-if="languageMenuOpen" class="settings-language-menu" role="listbox">
+              <button
+                v-for="option in localeOptions"
+                :key="option.value"
+                class="settings-language-option"
+                :class="{ active: settingsForm.language === option.value }"
+                type="button"
+                role="option"
+                :aria-selected="settingsForm.language === option.value"
+                @click="selectLanguage(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
         </label>
       </div>
 
       <div v-else-if="settingsSection === 'credentials'" class="settings-form-grid">
         <label class="settings-field is-full">
-          <span>凭证管理</span>
+          <span>{{ t("settings.credentialMode") }}</span>
           <el-select v-model="settingsForm.credentialAuthMode">
-            <el-option label="单次" value="single" />
-            <el-option label="多次循环" value="loop" />
+            <el-option :label="t('settings.single')" value="single" />
+            <el-option :label="t('settings.loop')" value="loop" />
           </el-select>
         </label>
       </div>
@@ -174,7 +197,7 @@
       <div v-else-if="settingsSection === 'feeds'" class="settings-form-grid">
         <label v-for="field in feedFields" :key="field.key" class="settings-field is-full">
           <span class="settings-field-meta">
-            <strong>{{ field.label ?? field.env }}</strong>
+            <strong>{{ field.labelKey ? t(field.labelKey) : field.label ?? field.env }}</strong>
             <small>{{ field.env }}</small>
           </span>
           <el-input
@@ -192,18 +215,28 @@
       </div>
 
       <div class="settings-footer">
-        <span>保存位置：{{ settingsEnvPath }}</span>
+        <span>{{ t("settings.savePath", { path: settingsEnvPath }) }}</span>
       </div>
     </article>
   </section>
 </template>
 
 <script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { CircleCheck, Hide, SwitchButton, View } from "@element-plus/icons-vue";
+import { t } from "../../i18n";
 
 type LooseRecord = Record<string, any>;
 
-defineProps<{
+const emit = defineEmits<{
+  "update:settingsSection": [value: string];
+  "update:settingsSecretsVisible": [value: boolean];
+  "security-check": [];
+  save: [];
+  logout: [];
+}>();
+
+const props = defineProps<{
   settingsSections: LooseRecord[];
   settingsSection: string;
   currentSettingsSection?: LooseRecord;
@@ -214,17 +247,37 @@ defineProps<{
   settingsSecurityChecking: boolean;
   settingsEnvPath: string;
   saveIconUrl: string;
+  localeOptions: LooseRecord[];
   rpcFields: LooseRecord[];
   feedFields: LooseRecord[];
 }>();
 
-const emit = defineEmits<{
-  "update:settingsSection": [value: string];
-  "update:settingsSecretsVisible": [value: boolean];
-  "security-check": [];
-  save: [];
-  logout: [];
-}>();
+const languageSelectRef = ref<HTMLElement | null>(null);
+const languageMenuOpen = ref(false);
+
+const selectedLanguageLabel = computed(() => {
+  return props.localeOptions.find((option) => option.value === props.settingsForm.language)?.label ?? props.localeOptions[0]?.label ?? "";
+});
+
+onMounted(() => {
+  document.addEventListener("pointerdown", closeLanguageMenuOnOutside);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", closeLanguageMenuOnOutside);
+});
+
+function selectLanguage(value: string) {
+  props.settingsForm.language = value;
+  languageMenuOpen.value = false;
+}
+
+function closeLanguageMenuOnOutside(event: PointerEvent) {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (languageSelectRef.value?.contains(target)) return;
+  languageMenuOpen.value = false;
+}
 </script>
 
 <style scoped src="./SettingsView.css"></style>

@@ -2,7 +2,7 @@
   <section class="txgraph-page">
     <article class="panel txgraph-controls-panel">
       <div class="txgraph-query-row">
-        <div class="txgraph-chain-icons" aria-label="链">
+        <div class="txgraph-chain-icons" :aria-label="t('tx.chain')">
           <button
             v-for="item in chains"
             :key="item.value"
@@ -18,7 +18,7 @@
         <el-input
           v-model="txHash"
           class="txgraph-hash-input"
-          placeholder="输入交易哈希 0x..."
+          :placeholder="t('tx.placeholder')"
           spellcheck="false"
           @keyup.enter="submit"
         >
@@ -27,14 +27,14 @@
               class="txgraph-search-icon"
               type="button"
               :disabled="!canQuery"
-              aria-label="查询"
+              :aria-label="t('tx.search')"
               @click="submit"
             >
               <img :src="searchIconUrl" alt="" aria-hidden="true" />
             </button>
           </template>
         </el-input>
-        <div class="txgraph-filter-row" aria-label="图谱类型">
+        <div class="txgraph-filter-row" :aria-label="t('tx.graphType')">
           <button
             v-for="filter in filters"
             :key="filter.key"
@@ -58,7 +58,7 @@
       <el-alert
         v-if="rpcMissing"
         class="txgraph-alert"
-        title="当前链没有配置 RPC。BNB 查询需要先到设置里填写 BNB_RPC_URL；ETH / ARB 查询固定使用 .env 的 fallback RPC。"
+        :title="t('tx.rpcMissing')"
         type="warning"
         :closable="false"
         show-icon
@@ -75,9 +75,9 @@
 
     <section class="txgraph-grid">
       <aside class="panel txgraph-summary-panel">
-        <h3>图谱摘要</h3>
+        <h3>{{ t("tx.summary") }}</h3>
         <div class="txgraph-summary-item">
-          <span>交易哈希</span>
+          <span>{{ t("tx.hash") }}</span>
           <a
             v-if="data?.txHash"
             class="txgraph-summary-link"
@@ -90,43 +90,43 @@
           <strong v-else>--</strong>
         </div>
         <div class="txgraph-summary-item">
-          <span>链</span>
+          <span>{{ t("tx.chain") }}</span>
           <strong>{{ currentChainLabel }}</strong>
         </div>
         <div class="txgraph-summary-item">
-          <span>转账</span>
+          <span>{{ t("tx.transfer") }}</span>
           <strong>{{ data?.summary.transferCount ?? 0 }}</strong>
         </div>
         <div class="txgraph-summary-item">
-          <span>合约调用</span>
+          <span>{{ t("tx.call") }}</span>
           <strong>{{ data?.summary.callCount ?? 0 }}</strong>
         </div>
         <div class="txgraph-summary-item">
-          <span>引用</span>
+          <span>{{ t("tx.reference") }}</span>
           <strong>{{ data?.summary.referenceCount ?? 0 }}</strong>
         </div>
         <div class="txgraph-summary-item">
           <span>Trace</span>
-          <strong>{{ data ? (data.traceAvailable ? "可用" : "不可用") : "--" }}</strong>
+          <strong>{{ data ? (data.traceAvailable ? t("tx.available") : t("tx.unavailable")) : "--" }}</strong>
         </div>
       </aside>
 
       <article ref="graphPanel" class="panel txgraph-canvas-panel">
-        <div class="txgraph-canvas-actions" aria-label="图谱工具">
-          <button class="txgraph-tool-button txgraph-tool-zoom" type="button" title="放大" @click="zoomGraph(1.18)">
+        <div class="txgraph-canvas-actions" :aria-label="t('tx.tools')">
+          <button class="txgraph-tool-button txgraph-tool-zoom" type="button" :title="t('tx.zoomIn')" @click="zoomGraph(1.18)">
             <img :src="plusIconUrl" alt="" />
           </button>
-          <button class="txgraph-tool-button txgraph-tool-zoom" type="button" title="缩小" @click="zoomGraph(0.84)">
+          <button class="txgraph-tool-button txgraph-tool-zoom" type="button" :title="t('tx.zoomOut')" @click="zoomGraph(0.84)">
             <img :src="zoomIconUrl" alt="" />
           </button>
-          <button class="txgraph-tool-button" type="button" title="适应屏幕" @click="fitGraph">
+          <button class="txgraph-tool-button" type="button" :title="t('tx.fit')" @click="fitGraph">
             <img :src="zoomBigIconUrl" alt="" />
           </button>
         </div>
         <div ref="graphContainer" class="txgraph-canvas"></div>
         <img class="txgraph-watermark" :src="miniLogoUrl" alt="" aria-hidden="true" />
         <div v-if="!data || loading || !data.nodes.length" class="txgraph-empty">
-          {{ loading ? "图谱加载中..." : "输入 tx hash 后加载交易图。" }}
+          {{ loading ? t("tx.loading") : t("tx.empty") }}
         </div>
       </article>
     </section>
@@ -139,6 +139,7 @@ import { ElMessage } from "element-plus";
 import type cytoscape from "cytoscape";
 import type { Core, ElementDefinition } from "cytoscape";
 import { useTxGraph } from "../../composables/useTxGraph";
+import { t } from "../../i18n";
 import setupIconUrl from "../../img/setupyellow.svg";
 import walletIconUrl from "../../img/pers.svg";
 import tokenIconUrl from "../../img/around.svg";
@@ -167,11 +168,11 @@ const chains: { value: TxGraphChainKey; label: string; icon: string }[] = [
   { value: "arbitrum", label: "Arbitrum", icon: arbIcon },
 ];
 
-const filters: { key: TxGraphEdgeKind; label: string }[] = [
-  { key: "transfer", label: "转账" },
-  { key: "call", label: "合约调用" },
-  { key: "reference", label: "引用" },
-];
+const filters = computed<Array<{ key: TxGraphEdgeKind; label: string }>>(() => [
+  { key: "transfer", label: t("tx.transfer") },
+  { key: "call", label: t("tx.call") },
+  { key: "reference", label: t("tx.reference") },
+]);
 
 const txHash = ref("");
 const chain = ref<TxGraphChainKey>("ethereum");
@@ -242,11 +243,11 @@ document.addEventListener("fullscreenchange", handleFullscreenChange);
 async function submit() {
   const value = txHash.value.trim();
   if (rpcMissing.value) {
-    ElMessage.warning("请先配置 BNB_RPC_URL。");
+    ElMessage.warning(t("tx.configureBnbRpc"));
     return;
   }
   if (!/^0x[a-fA-F0-9]{64}$/.test(value)) {
-    ElMessage.warning("请输入正确的交易哈希。");
+    ElMessage.warning(t("tx.invalidHash"));
     return;
   }
   await loadGraph(chain.value, value);

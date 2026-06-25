@@ -2,7 +2,7 @@
   <article ref="opportunitiesPanel" class="panel opportunities-panel" :style="{ height: opportunitiesPanelHeight }">
     <div class="opportunity-snapshot">
       <div>
-        <strong>全部市场快照</strong>
+        <strong>{{ t("snapshot.allMarkets") }}</strong>
         <span>{{ allMarketSnapshotSummary }}</span>
       </div>
     </div>
@@ -13,15 +13,15 @@
       <table class="opportunity-table">
         <thead>
           <tr>
-            <th>市场</th>
-            <th>用户</th>
+            <th>{{ t("snapshot.market") }}</th>
+            <th>{{ t("snapshot.user") }}</th>
             <th>HF</th>
-            <th>状态</th>
-            <th>执行</th>
-            <th>债务</th>
-            <th>抵押</th>
-            <th>毛利</th>
-            <th>粗净利</th>
+            <th>{{ t("snapshot.status") }}</th>
+            <th>{{ t("snapshot.action") }}</th>
+            <th>{{ t("snapshot.debt") }}</th>
+            <th>{{ t("snapshot.collateral") }}</th>
+            <th>{{ t("snapshot.gross") }}</th>
+            <th>{{ t("snapshot.net") }}</th>
           </tr>
         </thead>
         <tbody>
@@ -33,8 +33,8 @@
                 <button
                   class="copy-account-button"
                   type="button"
-                  title="复制完整地址"
-                  aria-label="复制完整地址"
+                  :title="t('snapshot.copyAddress')"
+                  :aria-label="t('snapshot.copyAddress')"
                   @click.stop="copyAccountAddress(item.accountFull)"
                 >
                   <el-icon><CopyDocument /></el-icon>
@@ -52,7 +52,7 @@
           <tr v-if="filteredCandidates.length === 0">
             <td colspan="9" class="empty-cell">
               <div class="market-snapshot-empty">
-                <strong>全部市场快照</strong>
+                <strong>{{ t("snapshot.allMarkets") }}</strong>
                 <span>{{ emptyCandidateText }}</span>
                 <div class="market-snapshot-stats">
                   <span v-for="item in currentMarketSnapshotStats" :key="item.label">
@@ -73,12 +73,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { CopyDocument } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { t } from "../../i18n";
 
 type MarketValue = string;
 
 type CandidateRow = {
   market: MarketValue;
   marketLabel: string;
+  sourceKey: string;
   source: string;
   account: string;
   accountFull: string;
@@ -147,11 +149,14 @@ const emit = defineEmits<{
   "strategies-updated": [rows: SnapshotStrategyRow[]];
 }>();
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
+const SNAPSHOT_SOURCE_ALL = "all";
+const SNAPSHOT_SOURCE_SCANNER = "scanner";
+const SNAPSHOT_SOURCE_NODE = "node";
 
-const source = ref("策略扫描器");
+const source = ref(SNAPSHOT_SOURCE_ALL);
 const candidateQueueRows = ref<SnapshotQueueRow[]>([]);
 const queuedWalletRows = ref<SnapshotQueueRow[]>([]);
 const snapshotSourceRows = ref<SnapshotSourceRow[]>([]);
@@ -165,11 +170,17 @@ let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 
 const snapshotMarketCount = computed(() => snapshotStrategyRows.value.filter(isDisplayedMarketStrategy).length);
-const allMarketSnapshotSummary = computed(() => `${candidateQueueRows.value.length} 个候选 / ${queuedWalletRows.value.length} 个运行节点 / ${snapshotMarketCount.value} 个市场`);
+const allMarketSnapshotSummary = computed(() =>
+  t("snapshot.summary", {
+    candidates: candidateQueueRows.value.length,
+    nodes: queuedWalletRows.value.length,
+    markets: snapshotMarketCount.value,
+  }),
+);
 const candidateRows = computed<CandidateRow[]>(() => candidateQueueRows.value.map(queueToCandidateRow));
 const filteredCandidates = computed(() => {
   return candidateRows.value.filter((item) => {
-    if (source.value !== "全部" && item.source !== source.value) return false;
+    if (source.value !== SNAPSHOT_SOURCE_ALL && item.sourceKey !== source.value) return false;
     return true;
   });
 });
@@ -178,17 +189,17 @@ const currentMarketSnapshotStats = computed<MarketSnapshotStat[]>(() => {
   const liquidationCount = snapshotStrategyRows.value.reduce((total, row) => total + (row.liquidationCount ?? 0), 0);
   const latestUpdatedAt = snapshotStrategyRows.value.map((row) => row.updatedAt).filter(Boolean).sort().at(-1);
   return [
-    { label: "市场", value: `${snapshotMarketCount.value}` },
-    { label: "候选", value: `${queueCount}` },
-    { label: "清算", value: `${liquidationCount}` },
-    { label: "更新", value: latestUpdatedAt ? formatSnapshotTime(latestUpdatedAt) : "--" },
-    { label: "来源", value: snapshotSourceRows.value.map((row) => row.source).filter(Boolean)[0] || "策略扫描器" },
+    { label: t("snapshot.statMarket"), value: `${snapshotMarketCount.value}` },
+    { label: t("snapshot.statCandidate"), value: `${queueCount}` },
+    { label: t("snapshot.statLiquidation"), value: `${liquidationCount}` },
+    { label: t("snapshot.statUpdated"), value: latestUpdatedAt ? formatSnapshotTime(latestUpdatedAt) : "--" },
+    { label: t("snapshot.statSource"), value: sourceLabel(snapshotSourceRows.value.map((row) => row.source).filter(Boolean)[0]) },
   ];
 });
 const emptyCandidateText = computed(() => {
   const hasSnapshot = snapshotStrategyRows.value.length > 0 || snapshotSourceRows.value.length > 0;
-  if (hasSnapshot) return "当前快照没有返回可清算候选账户";
-  return "等待后端返回清算市场快照";
+  if (hasSnapshot) return t("snapshot.noCandidates");
+  return t("snapshot.waitingSnapshot");
 });
 
 onMounted(() => {
@@ -304,7 +315,7 @@ function isDisplayedMarketStrategy(strategy: SnapshotStrategyRow) {
 }
 
 function queueToCandidateRow(row: SnapshotQueueRow): CandidateRow {
-  const hf = detailValue(row.healthFactor, "待扫描");
+  const hf = detailValue(row.healthFactor, t("snapshot.scanning"));
   const riskTone = hfRiskTone(hf);
   const status = statusLabel(row.status, riskTone);
   const accountFull = row.wallet || row.walletShort || "--";
@@ -312,6 +323,7 @@ function queueToCandidateRow(row: SnapshotQueueRow): CandidateRow {
   return {
     market: marketId,
     marketLabel: marketLabelForQueue(row, marketId),
+    sourceKey: sourceKey(row.source),
     source: sourceLabel(row.source),
     account: row.walletShort || shortAddress(row.wallet) || "--",
     accountFull,
@@ -322,8 +334,8 @@ function queueToCandidateRow(row: SnapshotQueueRow): CandidateRow {
     action: actionLabel(status, riskTone),
     debt: formatDebtValue(row.debt, row.debtSymbol),
     collateral: formatCollateralValue(row.collateralSymbol, row.asset),
-    gross: formatUsdValue(row.grossProfit, "待估算"),
-    net: formatUsdValue(row.netProfit, "待估算"),
+    gross: formatUsdValue(row.grossProfit, t("snapshot.estimatePending")),
+    net: formatUsdValue(row.netProfit, t("snapshot.estimatePending")),
   };
 }
 
@@ -349,7 +361,7 @@ async function copyAccountAddress(address: string) {
   if (!address || address === "--") return;
   try {
     await navigator.clipboard.writeText(address);
-    ElMessage.success("复制成功");
+    ElMessage.success(t("snapshot.copySuccess"));
   } catch {
     const input = document.createElement("textarea");
     input.value = address;
@@ -360,7 +372,7 @@ async function copyAccountAddress(address: string) {
     input.select();
     const copied = document.execCommand("copy");
     document.body.removeChild(input);
-    if (copied) ElMessage.success("复制成功");
+    if (copied) ElMessage.success(t("snapshot.copySuccess"));
   }
 }
 
@@ -373,10 +385,10 @@ function hfRiskTone(value: string): CandidateRow["hfTone"] {
 }
 
 function statusLabel(status: string | undefined, tone: CandidateRow["hfTone"]) {
-  if (tone === "danger") return "危险";
-  if (tone === "warn") return "高风险";
-  if (tone === "safe") return "安全";
-  return status || "候选";
+  if (tone === "danger") return t("snapshot.danger");
+  if (tone === "warn") return t("snapshot.highRisk");
+  if (tone === "safe") return t("snapshot.safe");
+  return status || t("snapshot.candidate");
 }
 
 function statusTone(status: string, tone: CandidateRow["hfTone"]): CandidateRow["statusTone"] {
@@ -388,15 +400,19 @@ function statusTone(status: string, tone: CandidateRow["hfTone"]): CandidateRow[
 }
 
 function actionLabel(status: string, tone: CandidateRow["hfTone"]) {
-  if (tone === "danger" || /可清算|危险/i.test(status)) return "可执行";
-  if (tone === "warn" || /高风险|预警/i.test(status)) return "预警";
-  if (tone === "safe") return "监听";
-  return "等待";
+  if (tone === "danger" || /可清算|危险/i.test(status)) return t("snapshot.executable");
+  if (tone === "warn" || /高风险|预警/i.test(status)) return t("snapshot.warning");
+  if (tone === "safe") return t("liquidation.monitor");
+  return t("snapshot.waiting");
 }
 
 function sourceLabel(value?: string) {
-  if (/scanner|strategy|scan|snapshot|public|aave|策略/i.test(value || "")) return "策略扫描器";
-  return "节点接口";
+  if (sourceKey(value) === SNAPSHOT_SOURCE_SCANNER) return t("snapshot.sourceScanner");
+  return t("snapshot.nodeApi");
+}
+
+function sourceKey(value?: string) {
+  return /scanner|strategy|scan|snapshot|public|aave|策略/i.test(value || "") ? SNAPSHOT_SOURCE_SCANNER : SNAPSHOT_SOURCE_NODE;
 }
 
 function detailValue(value: string | number | undefined, fallback: string) {
@@ -405,8 +421,8 @@ function detailValue(value: string | number | undefined, fallback: string) {
 }
 
 function formatDebtValue(value: string | number | undefined, symbol?: string) {
-  const detail = detailValue(value, "待扫描");
-  if (detail === "待扫描" || !symbol) return detail;
+  const detail = detailValue(value, t("snapshot.scanning"));
+  if (detail === t("snapshot.scanning") || !symbol) return detail;
   return `${detail} ${symbol}`;
 }
 
@@ -511,8 +527,16 @@ function formatSnapshotTime(value: string) {
 .opportunity-snapshot div {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+}
+
+.opportunity-snapshot strong {
+  font-size: 11px;
+}
+
+.opportunity-snapshot span {
+  font-size: 10px;
 }
 
 .opportunity-table-shell {

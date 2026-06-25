@@ -96,13 +96,11 @@
   will-change: color, text-shadow, transform;
 }
 
-.latest-total-stat.is-positive strong,
-.latest-today-change.is-positive {
+.latest-total-stat.is-positive strong {
   color: #5ff2a0;
 }
 
-.latest-total-stat.is-negative strong,
-.latest-today-change.is-negative {
+.latest-total-stat.is-negative strong {
   color: #ff7b7b;
 }
 
@@ -268,10 +266,6 @@
   text-overflow: ellipsis;
 }
 
-.latest-today-change {
-  font-weight: 620;
-}
-
 .latest-activity-dots {
   display: inline-flex;
   align-items: center;
@@ -362,7 +356,7 @@
   }
 
   .latest-table {
-    min-width: 1050px;
+    min-width: 860px;
   }
 }
 

@@ -7,6 +7,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Typed from "typed.js";
+import { t } from "../../i18n";
 
 const props = defineProps<{
   messages: string[];
@@ -56,7 +57,7 @@ function destroyTyped() {
 }
 
 function normalizedMessages() {
-  return props.messages.length > 0 ? props.messages : ["等待监控数据"];
+  return props.messages.length > 0 ? props.messages : [t("liquidation.waitingMonitor")];
 }
 </script>
 

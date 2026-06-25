@@ -1,5 +1,5 @@
 <template>
-  <aside class="icon-sidebar" aria-label="主导航">
+  <aside class="icon-sidebar" :aria-label="t('nav.main')">
     <el-tooltip v-for="item in items" :key="item.key" :content="item.label" placement="right">
       <button
         class="nav-icon"
@@ -17,6 +17,7 @@
 
 <script setup lang="ts">
 import type { Component } from "vue";
+import { t } from "../../i18n";
 
 export type SidebarNavItem = {
   key: string;

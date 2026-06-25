@@ -18,17 +18,17 @@
         <div class="topic-panel-heading">
           <div>
             <p class="topic-kicker">Market Classification</p>
-            <h2>可接入市场状态</h2>
+            <h2>{{ t("topic.marketStatus") }}</h2>
           </div>
           <div class="topic-heading-actions">
-            <span>{{ loading && sources.length === 0 ? "读取中" : snapshotMeta }}</span>
+            <span>{{ loading && sources.length === 0 ? t("dashboard.loading") : snapshotMeta }}</span>
             <button type="button" :disabled="loading" @click="refreshSnapshot">
-              {{ loading ? "刷新中" : "刷新" }}
+              {{ loading ? t("dashboard.refreshing") : t("dashboard.refresh") }}
             </button>
           </div>
         </div>
 
-        <p v-if="loading && sources.length === 0" class="topic-empty-state">正在读取策略快照服务。</p>
+        <p v-if="loading && sources.length === 0" class="topic-empty-state">{{ t("topic.readingSnapshot") }}</p>
         <div v-else-if="sources.length > 0" class="topic-source-grid">
           <article v-for="source in sources" :key="source.id" class="topic-source-card">
             <header class="topic-source-head">
@@ -37,7 +37,7 @@
                 <strong>{{ source.chainLabel }}</strong>
                 <span>{{ source.source }}</span>
               </div>
-              <em :class="statusClass(source.status)">{{ source.status }}</em>
+              <em :class="statusClass(source.status)">{{ displayStatus(source.status) }}</em>
             </header>
             <dl class="topic-source-metrics">
               <div>
@@ -45,28 +45,28 @@
                 <dd>{{ source.rpc }}</dd>
               </div>
               <div>
-                <dt>候选队列</dt>
+                <dt>{{ t("dashboard.candidateQueue") }}</dt>
                 <dd>{{ source.queueCount }}</dd>
               </div>
               <div>
-                <dt>清算快照</dt>
+                <dt>{{ t("dashboard.snapshot") }}</dt>
                 <dd>{{ source.liquidationCount }}</dd>
               </div>
               <div>
-                <dt>更新时间</dt>
+                <dt>{{ t("dashboard.updatedAt") }}</dt>
                 <dd>{{ formatDateTime(source.updatedAt) }}</dd>
               </div>
             </dl>
           </article>
         </div>
-        <p v-else class="topic-empty-state">{{ error || "等待策略快照服务返回市场分类。" }}</p>
+        <p v-else class="topic-empty-state">{{ error || t("topic.waitingClassification") }}</p>
       </article>
 
       <aside class="panel topic-score-panel">
         <div class="topic-panel-heading">
           <div>
             <p class="topic-kicker">Strategy Matrix</p>
-            <h2>策略优先级矩阵</h2>
+            <h2>{{ t("topic.strategyMatrix") }}</h2>
           </div>
         </div>
         <div v-if="sources.length > 0" class="topic-matrix-list">
@@ -76,24 +76,24 @@
             <strong>{{ sourceWeight(source) }}%</strong>
           </div>
         </div>
-        <p v-else class="topic-empty-state">暂无策略矩阵数据。</p>
+        <p v-else class="topic-empty-state">{{ t("topic.noMatrix") }}</p>
       </aside>
 
       <article class="panel topic-strategy-panel">
         <div class="topic-panel-heading">
           <div>
             <p class="topic-kicker">Phase 1 Strategy</p>
-            <h2>第一期策略部署</h2>
+            <h2>{{ t("topic.phaseStrategy") }}</h2>
           </div>
         </div>
         <div v-if="strategies.length > 0" class="topic-strategy-table">
           <div class="topic-strategy-head">
-            <span>链</span>
-            <span>协议</span>
-            <span>策略</span>
-            <span>模式</span>
-            <span>候选</span>
-            <span>状态</span>
+            <span>{{ t("wallet.chain") }}</span>
+            <span>{{ t("topic.protocol") }}</span>
+            <span>{{ t("topic.strategy") }}</span>
+            <span>{{ t("topic.mode") }}</span>
+            <span>{{ t("topic.candidate") }}</span>
+            <span>{{ t("topic.status") }}</span>
           </div>
           <div v-for="strategy in strategies" :key="strategy.id" class="topic-strategy-row">
             <span class="topic-chain-cell">
@@ -104,10 +104,10 @@
             <span>{{ strategy.strategy }}</span>
             <span>{{ modeLabel(strategy.mode) }}</span>
             <span>{{ strategy.queueCount }}</span>
-            <em :class="statusClass(strategy.status)">{{ strategy.status }}</em>
+            <em :class="statusClass(strategy.status)">{{ displayStatus(strategy.status) }}</em>
           </div>
         </div>
-        <p v-else class="topic-empty-state">等待第一期策略注册表。</p>
+        <p v-else class="topic-empty-state">{{ t("topic.waitingRegistry") }}</p>
       </article>
 
     </section>
@@ -119,6 +119,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import arbIcon from "../../img/arb.svg";
 import bnbIcon from "../../img/bnb.svg";
 import ethIcon from "../../img/eth.svg";
+import { displayStatus, t } from "../../i18n";
 
 const props = withDefaults(defineProps<{ active?: boolean }>(), {
   active: true,
@@ -174,8 +175,8 @@ const sources = ref<SourceRow[]>([]);
 const queue = ref<QueueRow[]>([]);
 const strategies = ref<StrategyRow[]>([]);
 const updatedAt = ref("");
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.0";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.0";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
 const TOPIC_SNAPSHOT_CACHE_KEY = "liq2-liquidation-topic-snapshot-cache";
 let snapshotRequested = false;
 
@@ -186,14 +187,14 @@ const summaryCards = computed(() => {
   const executable = queue.value.filter((item) => /可执行|ready/i.test(item.status)).length;
 
   return [
-    { label: "覆盖市场", value: String(total), note: total > 0 ? "策略快照服务" : "等待快照", tone: "market" },
-    { label: "RPC 市场", value: String(rpcReady), note: rpcReady > 0 ? "已接入 RPC 队列" : "等待 RPC", tone: "rpc" },
-    { label: "策略部署", value: `${ready} / ${strategies.value.length}`, note: strategies.value.length > 0 ? "运行 / 总策略" : "等待策略", tone: "node" },
-    { label: "候选队列", value: `${executable} / ${queue.value.length}`, note: queue.value.length > 0 ? "可执行 / 候选" : "等待候选", tone: "queue" },
+    { label: t("topic.coveredMarkets"), value: String(total), note: total > 0 ? t("topic.snapshotService") : t("topic.waitingSnapshot"), tone: "market" },
+    { label: t("topic.rpcMarket"), value: String(rpcReady), note: rpcReady > 0 ? t("topic.rpcReady") : t("topic.waitingRpc"), tone: "rpc" },
+    { label: t("topic.strategyDeployment"), value: `${ready} / ${strategies.value.length}`, note: strategies.value.length > 0 ? t("topic.runningTotal") : t("topic.waitingStrategy"), tone: "node" },
+    { label: t("dashboard.candidateQueue"), value: `${executable} / ${queue.value.length}`, note: queue.value.length > 0 ? t("topic.executableCandidate") : t("topic.waitingCandidate"), tone: "queue" },
   ];
 });
 
-const snapshotMeta = computed(() => (updatedAt.value ? `更新 ${formatDateTime(updatedAt.value)}` : "RPC / Queue / Keeper"));
+const snapshotMeta = computed(() => (updatedAt.value ? t("dashboard.updated", { time: formatDateTime(updatedAt.value) }) : "RPC / Queue / Keeper"));
 
 onMounted(() => {
   restoreSnapshotCache();
@@ -248,7 +249,7 @@ async function loadSnapshot() {
       strategies.value = [];
       updatedAt.value = "";
     }
-    error.value = cause instanceof Error ? cause.message : "快照服务不可用";
+    error.value = cause instanceof Error ? cause.message : t("topic.snapshotUnavailable");
   } finally {
     loading.value = false;
   }
@@ -330,8 +331,8 @@ function isReadyStatus(status: string) {
 }
 
 function modeLabel(mode: StrategyRow["mode"]) {
-  if (mode === "execute") return "执行";
-  if (mode === "monitor") return "监听";
+  if (mode === "execute") return t("liquidation.execute");
+  if (mode === "monitor") return t("liquidation.monitor");
   if (mode === "stability_pool") return "SP";
   return mode || "--";
 }
