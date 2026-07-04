@@ -13,7 +13,7 @@ const DEFAULT_BOOTSTRAP_PATH = "/api/internal/liq2-wallet/bootstrap";
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_TIMEOUT_MS = 10_000;
 const BOOTSTRAP_STATE_VERSION = "v6";
-const CLIENT_VERSION = "1.6.1";
+const CLIENT_VERSION = "1.6.2";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 
 type BootstrapState = {

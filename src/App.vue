@@ -357,14 +357,14 @@ type QueueKey =
   | "heartbeatIntervalMs"
   | "txEventsUrl";
 
-const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.1";
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
+const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.2";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.2";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.2";
 const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.6.1";
+const appVersion = "1.6.2";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
@@ -1073,7 +1073,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.6.1 internal settings.",
+    "# Generated from SuperARB 1.6.2 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",

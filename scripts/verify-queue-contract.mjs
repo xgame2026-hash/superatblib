@@ -6,7 +6,7 @@ const privateUrl = process.env.VERIFY_STATE_URL || "https://private.superarb.ai"
 const shouldCheckRemote = process.env.VERIFY_PRIVATE_REMOTE === "1" || Boolean(process.env.VERIFY_STATE_URL);
 const forbiddenUiTerms = ["数据库"];
 const sourceDirs = ["src", "server"];
-const requiredVersion = "1.6.1";
+const requiredVersion = "1.6.2";
 const requiredProtocol = "liq2-cutover-20260624-v160";
 
 function fail(message) {

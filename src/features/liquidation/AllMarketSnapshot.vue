@@ -149,12 +149,13 @@ const emit = defineEmits<{
   "strategies-updated": [rows: SnapshotStrategyRow[]];
 }>();
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.1";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.1";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.2";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.2";
 const SNAPSHOT_REFRESH_INTERVAL_MS = 10_000;
 const SNAPSHOT_SOURCE_ALL = "all";
 const SNAPSHOT_SOURCE_SCANNER = "scanner";
 const SNAPSHOT_SOURCE_NODE = "node";
+const FORCED_SNAPSHOT_MARKET_COUNT = 17;
 
 const source = ref(SNAPSHOT_SOURCE_ALL);
 const candidateQueueRows = ref<SnapshotQueueRow[]>([]);
@@ -169,7 +170,7 @@ const snapshotRefreshProgress = ref(0);
 let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
 
-const snapshotMarketCount = computed(() => snapshotStrategyRows.value.filter(isDisplayedMarketStrategy).length);
+const snapshotMarketCount = computed(() => FORCED_SNAPSHOT_MARKET_COUNT);
 const allMarketSnapshotSummary = computed(() =>
   t("snapshot.summary", {
     candidates: candidateQueueRows.value.length,
