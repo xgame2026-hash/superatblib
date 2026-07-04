@@ -66,7 +66,8 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
     };
   }
 
-  const sourceUrl = latestUrl || (repository ? `https://raw.githubusercontent.com/${repository}/main/package.json` : "");
+  const latestCommit = repository ? await fetchMainCommit(repository) : "";
+  const sourceUrl = latestUrl || (repository ? `https://raw.githubusercontent.com/${repository}/${latestCommit || "main"}/package.json` : "");
   if (!sourceUrl) {
     return {
       ok: true,
@@ -81,7 +82,6 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
 
   const text = await fetchVersionText(sourceUrl, repository);
   const latestVersion = normalizeVersion(readVersionFromPayload(text));
-  const latestCommit = repository ? await fetchMainCommit(repository) : "";
   if (!latestVersion) {
     throw new Error("GitHub version API did not return a version.");
   }
@@ -92,7 +92,7 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
     currentVersion,
     latestVersion,
     currentCommit,
-    latestCommit,
+    latestCommit: latestCommit.slice(0, 7),
     isLatest: isLatestBuild(currentVersion, latestVersion, currentCommit, latestCommit),
     source: sourceUrl,
   };
@@ -107,7 +107,7 @@ async function fetchMainCommit(repository: string): Promise<string> {
   });
   if (!response.ok) return "";
   const payload = (await response.json().catch(() => ({}))) as { sha?: unknown };
-  if (typeof payload.sha === "string") return payload.sha.slice(0, 7);
+  if (typeof payload.sha === "string") return payload.sha;
   return "";
 }
 

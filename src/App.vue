@@ -842,7 +842,8 @@ async function loadGithubVersion() {
     };
     githubLatestVersion.value = payload.latestVersion || appVersion;
     githubLatestCommit.value = payload.latestCommit || "";
-    githubVersionState.value = payload.configured === false ? "unconfigured" : githubIsLatestBuild.value ? "latest" : "update";
+    const isLatest = payload.isLatest ?? githubIsLatestBuild.value;
+    githubVersionState.value = payload.configured === false ? "unconfigured" : isLatest ? "latest" : "update";
     githubVersionMessage.value = payload.message ?? "";
   } catch (error) {
     githubLatestVersion.value = appVersion;
