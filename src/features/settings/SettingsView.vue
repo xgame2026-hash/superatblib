@@ -81,21 +81,6 @@
             spellcheck="false"
           />
         </label>
-        <label class="settings-field">
-          <span>{{ walletPasswordRequired ? t("settings.userPasswordPending") : t("settings.userPassword") }}</span>
-          <el-input
-            v-model="settingsForm.userPassword"
-            class="settings-secret-input"
-            :class="{ 'is-masked': !settingsSecretsVisible }"
-            type="password"
-            name="settings-user-password"
-            :placeholder="walletPasswordRequired ? t('settings.userPasswordPendingPlaceholder') : t('settings.userPasswordPlaceholder')"
-            autocomplete="new-password"
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-          />
-        </label>
         <label class="settings-field is-full">
           <span>{{ t("settings.fundingMode") }}</span>
           <el-select v-model="settingsForm.fundingMode">
@@ -369,7 +354,6 @@ const props = defineProps<{
   settingsSection: string;
   currentSettingsSection?: LooseRecord;
   settingsForm: LooseRecord;
-  walletPasswordRequired: boolean;
   settingsSecretsVisible: boolean;
   settingsSaveDialogVisible: boolean;
   settingsSaveState: string;

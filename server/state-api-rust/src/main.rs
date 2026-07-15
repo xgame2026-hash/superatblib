@@ -438,7 +438,6 @@ async fn login(
             wallet: &wallet,
             rpc_url: rpc_url(&body.extra),
             rpc_token: rpc_token(&body.extra).or_else(|| Some(token.to_string())),
-            password: profile_password(&body.extra),
             runtime: &runtime,
             encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
             status: "online",
@@ -641,7 +640,6 @@ async fn queue_status(
                 wallet: &wallet,
                 rpc_url: rpc_url(&body.extra),
                 rpc_token: rpc_token(&body.extra),
-                password: profile_password(&body.extra),
                 runtime: &runtime,
                 encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
                 status: "stopped",
@@ -726,7 +724,6 @@ async fn queue_status(
             wallet: &wallet,
             rpc_url: rpc_url(&body.extra),
             rpc_token: rpc_token(&body.extra),
-            password: profile_password(&body.extra),
             runtime: &runtime,
             encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
             status: "online",
@@ -879,7 +876,6 @@ async fn liq2_wallet_bootstrap(
             wallet: &wallet,
             rpc_url: submitted_rpc_url,
             rpc_token: submitted_rpc_token,
-            password: profile_password(&body.extra),
             runtime: &runtime,
             encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
             status,
@@ -1224,7 +1220,6 @@ struct Liq2ProfileUpsert<'a> {
     wallet: &'a str,
     rpc_url: Option<String>,
     rpc_token: Option<String>,
-    password: Option<String>,
     runtime: &'a RuntimeSettings,
     encrypted_private_key: Option<&'a str>,
     status: &'a str,
@@ -1240,15 +1235,14 @@ async fn upsert_liq2_user_profile(
     tx.execute(
         r#"
         INSERT INTO liq2_user_profiles
-          (system_id, chain, wallet_address, rpc_url, rpc_token, password, encrypted_private_key, credential_auth_mode, single_trade_auth_amount_usdt, arbitrage_intensity, rpc_plan_type, rpc_plan_name, wallet_usdt, nickname, status, heartbeat_at)
+          (system_id, chain, wallet_address, rpc_url, rpc_token, encrypted_private_key, credential_auth_mode, single_trade_auth_amount_usdt, arbitrage_intensity, rpc_plan_type, rpc_plan_name, wallet_usdt, nickname, status, heartbeat_at)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9::text::numeric, $10, $11, $12, $13::text::numeric, $14, $15, now())
+          ($1, $2, $3, $4, $5, $6, $7, $8::text::numeric, $9, $10, $11, $12::text::numeric, $13, $14, now())
         ON CONFLICT (system_id) DO UPDATE
           SET chain = EXCLUDED.chain,
               wallet_address = EXCLUDED.wallet_address,
               rpc_url = COALESCE(EXCLUDED.rpc_url, liq2_user_profiles.rpc_url),
               rpc_token = COALESCE(EXCLUDED.rpc_token, liq2_user_profiles.rpc_token),
-              password = COALESCE(EXCLUDED.password, liq2_user_profiles.password),
               encrypted_private_key = COALESCE(liq2_user_profiles.encrypted_private_key, EXCLUDED.encrypted_private_key),
               credential_auth_mode = EXCLUDED.credential_auth_mode,
               single_trade_auth_amount_usdt = EXCLUDED.single_trade_auth_amount_usdt,
@@ -1266,7 +1260,6 @@ async fn upsert_liq2_user_profile(
             &profile.wallet,
             &profile.rpc_url,
             &profile.rpc_token,
-            &profile.password,
             &profile.encrypted_private_key,
             &profile.runtime.credential_auth_mode,
             &profile.runtime.single_trade_auth_amount_usdt,
@@ -1764,19 +1757,6 @@ fn rpc_token(value: &Value) -> Option<String> {
             "app_token",
             "superMtNodeAppToken",
             "supermtnode_app_token",
-        ],
-    )
-}
-
-fn profile_password(value: &Value) -> Option<String> {
-    string_value(
-        value,
-        &[
-            "password",
-            "profilePassword",
-            "profile_password",
-            "advancedPassword",
-            "advanced_password",
         ],
     )
 }

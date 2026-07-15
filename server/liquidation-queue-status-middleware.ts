@@ -1941,7 +1941,6 @@ function privateQueuePayload(payload: {
   username?: string;
   rpcUrl?: string;
   rpcToken?: string;
-  password?: string;
   walletUsdt?: string;
   nickname?: string;
   arbitrageIntensity?: string;
@@ -1989,7 +1988,6 @@ function privateQueuePayload(payload: {
     rpc_url: payload.rpcUrl,
     rpcToken: payload.rpcToken,
     rpc_token: payload.rpcToken,
-    password: payload.password,
     walletUsdt: payload.walletUsdt,
     wallet_usdt: payload.walletUsdt,
     nickname: payload.nickname,
@@ -2092,7 +2090,6 @@ function privateQueuePayload(payload: {
         rpc_url: payload.rpcUrl,
         rpcToken: payload.rpcToken,
         rpc_token: payload.rpcToken,
-        password: payload.password,
         walletUsdt: payload.walletUsdt,
         wallet_usdt: payload.walletUsdt,
         nickname: payload.nickname,

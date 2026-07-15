@@ -5,12 +5,10 @@ import { checkOfficialConfig, checkRuntimeSettings } from "./official-config";
 import { assertActiveSuperMtNodeLicense } from "./supermtnode-license";
 import {
   bootstrapPrivateMemberWalletOnce,
-  isPrivateMemberPasswordUnsetError,
   privateMemberWalletBootstrapStatus,
   setPrivateMemberExecutionPresence,
   startPrivateMemberWalletHeartbeat,
   stopPrivateMemberWalletHeartbeat,
-  verifyPrivateMemberPassword,
 } from "./private-member-wallet-bootstrap";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
@@ -25,7 +23,6 @@ type SettingsPayload = {
   env?: unknown;
   code?: unknown;
   token?: unknown;
-  password?: unknown;
   status?: unknown;
   chain?: unknown;
   market?: unknown;
@@ -76,44 +73,6 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
     return true;
   }
 
-  if (req.url.startsWith("/api/settings/login-password")) {
-    if (req.method !== "POST") {
-      json(res, 405, { ok: false, error: "Method not allowed." });
-      return true;
-    }
-    readBody(req)
-      .then(async (body) => {
-        const payload = JSON.parse(body || "{}") as SettingsPayload;
-        const env = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        const required = loginPasswordRequired(env);
-        if (!required) {
-          json(res, 200, {
-            ok: true,
-            passwordRequired: false,
-            passwordSetupRequired: passwordSetupRequired(env),
-          });
-          return;
-        }
-        const password = typeof payload.password === "string" ? payload.password : "";
-        try {
-          await verifyPrivateMemberPassword(password);
-        } catch (error) {
-          if (!isPrivateMemberPasswordUnsetError(error)) throw error;
-          markPasswordSetupRequired();
-          json(res, 200, {
-            ok: true,
-            passwordRequired: false,
-            passwordSetupRequired: true,
-            message: "当前钱包尚未设置密码。请立即在设置中为该钱包设置密码。",
-          });
-          return;
-        }
-        json(res, 200, { ok: true, passwordRequired: true });
-      })
-      .catch((error: unknown) => json(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
   if (req.url.startsWith("/api/settings/presence/start")) {
     if (req.method !== "POST") {
       json(res, 405, { ok: false, error: "Method not allowed." });
@@ -122,45 +81,6 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
     startPrivateMemberWalletHeartbeat()
       .then((payload) => json(res, payload.ok ? 200 : 503, payload))
       .catch((error: unknown) => json(res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  // Password changes take effect only when the user starts execution. The
-  // pending value is kept locally in .env so changing Settings sections (or
-  // reloading the local dashboard) does not discard it before that point.
-  if (req.url.startsWith("/api/settings/confirm-password-start")) {
-    if (req.method !== "POST") {
-      json(res, 405, { ok: false, error: "Method not allowed." });
-      return true;
-    }
-    readBody(req)
-      .then(async (body) => {
-        const payload = JSON.parse(body || "{}") as SettingsPayload;
-        const env = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        if (!passwordPendingStart(env)) {
-          if (passwordSetupRequired(env)) {
-            json(res, 409, { ok: false, error: "请先在设置中输入新密码并保存，再点击启动。" });
-            return;
-          }
-          json(res, 200, { ok: true, skipped: true });
-          return;
-        }
-        const submittedPassword = typeof payload.password === "string" ? payload.password : "";
-        const password = submittedPassword || pendingUserPassword(env);
-        validateRequiredUserPassword(password);
-        const bootstrap = await bootstrapPrivateMemberWalletOnce("password-start", {
-          authCode: requestAuthCode(req, env),
-          password,
-        });
-        if (!bootstrap.ok) {
-          json(res, 422, { ok: false, error: bootstrap.error || bootstrap.reason || "密码提交失败。", bootstrap });
-          return;
-        }
-        await verifyPrivateMemberPassword(password);
-        writePasswordConfiguredMarker();
-        json(res, 200, { ok: true, bootstrap });
-      })
-      .catch((error: unknown) => json(res, 422, { ok: false, error: error instanceof Error ? error.message : String(error) }));
     return true;
   }
 
@@ -187,10 +107,6 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const payload = JSON.parse(body || "{}") as SettingsPayload;
         const status = payload.status === "running" ? "running" : "stopped";
         const env = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        if (status === "running" && passwordStartRequired(env)) {
-          json(res, 409, { ok: false, error: "新密码尚未在启动时完成远端验证。请先在设置中输入并保存密码，再重新点击启动。" });
-          return;
-        }
         const result = await setPrivateMemberExecutionPresence({
           status,
           chain: typeof payload.chain === "string" ? payload.chain : undefined,
@@ -290,9 +206,6 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
       exists: existsSync(ENV_FILE),
       env: parseEnv(envText),
       example: parseEnv(exampleText),
-      passwordRequired: loginPasswordRequired(parseEnv(envText)),
-      passwordSetupRequired: passwordSetupRequired(parseEnv(envText)),
-      passwordPendingStart: passwordPendingStart(parseEnv(envText)),
     });
     return true;
   }
@@ -306,40 +219,14 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           return;
         }
         const submittedEnv = parseEnv(payload.env);
-        const existingEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-        const password = typeof payload.password === "string" ? payload.password : "";
-        const walletChanged = privateKeyChanged(existingEnv.PRIVATE_KEY, submittedEnv.PRIVATE_KEY);
-        const walletPasswordResetRequired = walletChanged && (loginPasswordRequired(existingEnv) || passwordStartRequired(existingEnv));
-        const passwordSetupPending = passwordSetupRequired(existingEnv) || walletPasswordResetRequired;
-        const pendingPasswordStart = Boolean(password) || passwordPendingStart(existingEnv);
-
-        // A wallet replacement must be paired with a new password, but neither
-        // is sent to privateapi until the user explicitly starts execution.
-        if (walletPasswordResetRequired && !password) {
-          json(res, 400, {
-            ok: false,
-            error: "已启用密码登录且钱包已更换。请为新钱包输入至少 8 位用户密码后再保存。",
-          });
-          return;
-        }
-
         let normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(payload.env));
         normalizedEnv = preserveUnsubmittedEnvValues(normalizedEnv, submittedEnv);
-        validateUserPassword(payload.password);
         normalizedEnv = await enrichEnvWithSuperMtNodePlan(normalizedEnv);
-        // Keep the local gate open during a replacement. It is enabled only
-        // after the next Start confirms the password against privateapi.
-        if (walletPasswordResetRequired) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_CONFIGURED", "false");
-        if (passwordSetupPending || pendingPasswordStart) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_SETUP_REQUIRED", "true");
-        if (password) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PENDING_USER_PASSWORD", password);
-        if (pendingPasswordStart) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_PENDING_START", "true");
         writeFileSync(ENV_FILE, normalizedEnv, "utf8");
         json(res, 200, {
           ok: true,
           file: ".env",
           path: ENV_FILE,
-          passwordPendingStart: pendingPasswordStart,
-          message: pendingPasswordStart ? "密码已暂存到本机 .env，将在点击启动后提交并验证。" : undefined,
         });
       })
       .catch((error: unknown) => {
@@ -407,9 +294,6 @@ function securityRelevantEnvSignature(env: Record<string, string>): string {
 const SECURITY_RELEVANT_KEYS = [
   "PRIVATE_KEY",
   "SUPERMTNODE_APP_TOKEN",
-  "LIQ2_PASSWORD_CONFIGURED",
-  "LIQ2_PASSWORD_SETUP_REQUIRED",
-  "LIQ2_PASSWORD_PENDING_START",
   "CREDENTIAL_AUTH_MODE",
   "SINGLE_TRADE_AUTH_AMOUNT_USDT",
   "STARTUP_DETECTION_MODE",
@@ -475,62 +359,6 @@ function preserveUnsubmittedEnvValues(source: string, submittedEnv: Record<strin
     next = upsertEnvValue(next, key, value);
   }
   return normalizeEnv(next);
-}
-
-function loginPasswordRequired(env: Record<string, string>): boolean {
-  return env.LIQ2_PASSWORD_CONFIGURED?.trim() === "true";
-}
-
-function passwordSetupRequired(env: Record<string, string>): boolean {
-  return env.LIQ2_PASSWORD_SETUP_REQUIRED?.trim() === "true";
-}
-
-function passwordPendingStart(env: Record<string, string>): boolean {
-  return env.LIQ2_PASSWORD_PENDING_START?.trim() === "true";
-}
-
-function pendingUserPassword(env: Record<string, string>): string {
-  return env.LIQ2_PENDING_USER_PASSWORD ?? "";
-}
-
-function passwordStartRequired(env: Record<string, string>): boolean {
-  return passwordSetupRequired(env) || passwordPendingStart(env);
-}
-
-function privateKeyChanged(previous: string | undefined, next: string | undefined): boolean {
-  return normalizePrivateKeyIdentity(previous) !== normalizePrivateKeyIdentity(next);
-}
-
-function normalizePrivateKeyIdentity(value: string | undefined): string {
-  return (value || "").trim().replace(/^0x/i, "").toLowerCase();
-}
-
-function validateUserPassword(value: unknown): void {
-  if (value === undefined || value === null || value === "") return;
-  if (typeof value !== "string") throw new Error("用户密码格式无效。");
-  if (value.length < 8) throw new Error("用户密码至少需要 8 个字符。");
-  if (value.length > 1024 || /[\r\n]/.test(value)) throw new Error("用户密码不能包含换行，且长度不能超过 1024 个字符。");
-}
-
-function validateRequiredUserPassword(value: unknown): asserts value is string {
-  if (typeof value !== "string" || !value) throw new Error("请先在设置中输入新密码并保存，再点击启动。");
-  validateUserPassword(value);
-}
-
-function writePasswordConfiguredMarker(): void {
-  const source = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : "";
-  const enabled = upsertEnvValue(source, "LIQ2_PASSWORD_CONFIGURED", "true");
-  const setupComplete = upsertEnvValue(enabled, "LIQ2_PASSWORD_SETUP_REQUIRED", "false");
-  const pendingComplete = upsertEnvValue(setupComplete, "LIQ2_PASSWORD_PENDING_START", "false");
-  writeFileSync(ENV_FILE, normalizeEnv(upsertEnvValue(pendingComplete, "LIQ2_PENDING_USER_PASSWORD", "")), "utf8");
-}
-
-function markPasswordSetupRequired(): void {
-  const source = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : "";
-  const unlocked = upsertEnvValue(source, "LIQ2_PASSWORD_CONFIGURED", "false");
-  const setupRequired = upsertEnvValue(unlocked, "LIQ2_PASSWORD_SETUP_REQUIRED", "true");
-  const pendingReset = upsertEnvValue(setupRequired, "LIQ2_PASSWORD_PENDING_START", "false");
-  writeFileSync(ENV_FILE, normalizeEnv(upsertEnvValue(pendingReset, "LIQ2_PENDING_USER_PASSWORD", "")), "utf8");
 }
 
 async function fetchSuperMtNodeEndpointsByToken(appToken: string, env: Record<string, string>): Promise<SuperMtNodeEndpoint[]> {

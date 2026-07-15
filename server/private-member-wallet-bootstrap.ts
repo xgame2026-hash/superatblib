@@ -49,7 +49,6 @@ type BootstrapResult = {
 
 type BootstrapOptions = {
   authCode?: string;
-  password?: string;
   rpcPlanType?: string;
   rpcPlanName?: string;
 };
@@ -87,36 +86,6 @@ export function bootstrapPrivateMemberWalletOnce(reason = "startup", options: Bo
   });
   inFlight.set(key, next);
   return next;
-}
-
-/** Verify the password against the privateapi record bound to this wallet. */
-export async function verifyPrivateMemberPassword(password: string): Promise<void> {
-  const env = readEnv();
-  const privateKey = env.PRIVATE_KEY?.trim();
-  const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
-  if (!privateKey || !appToken) throw new Error("本地钱包或 SUPERMTNODE_APP_TOKEN 未配置。");
-  const chain = defaultChain(env);
-  const response = await fetch(`${privateMemberApiBase(env)}/verify-password`, {
-    method: "POST",
-    headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${appToken}` },
-    body: JSON.stringify({ chain, walletAddress: privateKeyToAddress(normalizePrivateKey(privateKey)), appToken, password }),
-    signal: AbortSignal.timeout(timeoutMs(env)),
-  });
-  const payload = await parseOptionalJson(response);
-  if (!response.ok || payload.ok !== true) {
-    const error = new Error(stringValue(payload.error, payload.message) || "用户密码不正确。") as Error & { status?: number; code?: string };
-    error.status = response.status;
-    error.code = stringValue(payload.code);
-    throw error;
-  }
-}
-
-/** True only when privateapi confirms that the current wallet has no password yet. */
-export function isPrivateMemberPasswordUnsetError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const detail = error as Error & { status?: unknown; code?: unknown };
-  const code = String(detail.code || "");
-  return detail.status === 409 && (/(?:password.*(?:not.*(?:set|configured)|missing)|(?:未|尚未).*(?:设置|配置).*密码)/i.test(code) || /(?:password.*(?:not.*(?:set|configured)|missing)|(?:未|尚未).*(?:设置|配置).*密码)/i.test(error.message));
 }
 
 /** Start the execution-presence heartbeat after a market has entered the queue. */
@@ -276,7 +245,7 @@ export function privateMemberWalletBootstrapStatus(env: Record<string, string>):
       rpcToken,
       authIdentity,
       rpcPlan,
-    }), remotePasswordState(env));
+    }));
     const txPublicKeyPem = readTxPublicKeyPem();
     const state = readState();
     return hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
@@ -295,7 +264,6 @@ function bootstrapInFlightKey(reason: string, options: BootstrapOptions): string
   return [
     reason,
     options.authCode?.trim() || "",
-    options.password ? tokenFingerprint(options.password) : "",
   ].join("\n");
 }
 
@@ -339,14 +307,14 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       walletAddress,
       rpcUrl,
       rpcToken,
-      authIdentity, password: options.password,
+      authIdentity,
       rpcPlan,
     });
-    const profilePayloadHash = profilePayloadFingerprint(profilePayload, remotePasswordState(env));
+    const profilePayloadHash = profilePayloadFingerprint(profilePayload);
     const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, authIdentity, profilePayloadHash);
     const state = readState();
     if (
-      !options.password && state.submitted[stateKey] &&
+      state.submitted[stateKey] &&
       hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
         txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
         authIdentityHash: tokenFingerprint(authIdentity),
@@ -406,7 +374,6 @@ function markSubmitted(
     walletAddress: string;
     txPublicKeyPem: string;
     authIdentity: string;
-    password?: string;
     endpoint: string;
     rpcPlanType?: string;
     rpcPlanName?: string;
@@ -527,7 +494,6 @@ function buildProfilePayload(
     rpcUrl?: string;
     rpcToken?: string;
     authCode?: string;
-    password?: string;
     authIdentity: string;
     rpcPlan: { rpcPlanType: string; rpcPlanName: string };
   },
@@ -545,7 +511,6 @@ function buildProfilePayload(
     appToken: input.rpcToken || undefined,
     rpcUrl: input.rpcUrl,
     rpcToken: input.rpcToken,
-    password: input.password || undefined,
     chain: input.chain,
     walletAddress: input.walletAddress,
     credentialAuthMode,
@@ -561,15 +526,13 @@ function buildProfilePayload(
   };
 }
 
-function profilePayloadFingerprint(payload: Record<string, unknown>, passwordHash: string): string {
+function profilePayloadFingerprint(payload: Record<string, unknown>): string {
   return tokenFingerprint(JSON.stringify({
     systemId: payload.systemId,
     chain: payload.chain,
     walletAddress: payload.walletAddress,
     rpcUrl: payload.rpcUrl,
     rpcToken: payload.rpcToken,
-    passwordConfigured: Boolean(payload.password),
-    passwordHash,
     credentialAuthMode: payload.credentialAuthMode,
     singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
     arbitrageIntensity: payload.arbitrageIntensity,
@@ -709,10 +672,6 @@ function readCredentialAuthMode(env: Record<string, string>): string {
   const normalized = (env.CREDENTIAL_AUTH_MODE || "").trim().toLowerCase();
   if (["loop", "multi", "multiple", "多次", "多次循环"].includes(normalized)) return "loop";
   return "single";
-}
-
-function remotePasswordState(env: Record<string, string>): string {
-  return env.LIQ2_PASSWORD_CONFIGURED?.trim() === "true" ? "configured" : "not-configured";
 }
 
 function normalizeArbitrageIntensity(value?: string): string {

@@ -54,18 +54,6 @@
                 </button>
               </template>
             </el-input>
-            <template v-if="loginPasswordRequired">
-              <label class="field-label" for="login-password">{{ t("app.userPassword") }}</label>
-              <el-input
-                id="login-password"
-                v-model="loginPassword"
-                type="password"
-                size="large"
-                :placeholder="t('app.enterUserPassword')"
-                autocomplete="current-password"
-                :prefix-icon="Key"
-              />
-            </template>
             <div class="form-row">
               <el-checkbox v-model="rememberCode">{{ t("app.rememberAuthCode") }}</el-checkbox>
             </div>
@@ -152,11 +140,7 @@
             :active="activeView === 'analytics'"
             :startup-detection-mode="settingsForm.startupDetectionMode"
             :settings-loaded="settingsLoaded"
-            :password-pending-start="passwordPendingStart"
-            :password-setup-required="passwordSetupRequired"
-            :pending-password="settingsForm.userPassword"
             @launch-sound="handleLaunchSound"
-            @password-confirmed="handlePasswordConfirmed"
             @refresh="refreshData"
           />
         </div>
@@ -216,7 +200,6 @@
             v-model:settings-section="settingsSection"
             :current-settings-section="currentSettingsSection"
             :settings-form="settingsForm"
-            :wallet-password-required="walletPasswordRequired"
             v-model:settings-secrets-visible="settingsSecretsVisible"
             :settings-save-dialog-visible="settingsSaveDialogVisible"
             :settings-save-state="settingsSaveState"
@@ -413,10 +396,6 @@ const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGra
 const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "swap", "slots", "settings"] satisfies ViewKey[];
 const settingsSectionKeys = ["general", "profile", "credentials", "rpc", "feeds", "alerts"] satisfies SettingsSectionKey[];
 const authCode = ref("");
-const loginPassword = ref("");
-const loginPasswordRequired = ref(false);
-const passwordSetupRequired = ref(false);
-const passwordPendingStart = ref(false);
 const showAuthCode = ref(false);
 const rememberCode = ref(true);
 const loginLoading = ref(false);
@@ -511,7 +490,6 @@ const alertSoundOptions = ALERT_SOUND_IDS;
 const settingsForm = reactive({
   privateKey: "",
   superMtNodeAppToken: "",
-  userPassword: "",
   fundingMode: "flash_loan",
   arbitrageIntensity: "conservative",
   credentialAuthMode: "single",
@@ -577,12 +555,6 @@ const currentSettingsSection = computed(() => {
 const dashboardPort = computed(() => normalizeDashboardPort(settingsForm.dashboardPort));
 const runningDashboardPort = computed(() => runtimeDashboardPort(dashboardPort.value));
 const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");
-const walletPasswordRequired = computed(() => {
-  return passwordSetupRequired.value || (loginPasswordRequired.value && normalizedPrivateKey(settingsForm.privateKey) !== normalizedPrivateKey(savedPrivateKey.value));
-});
-const passwordRequiredForSave = computed(() => {
-  return loginPasswordRequired.value && normalizedPrivateKey(settingsForm.privateKey) !== normalizedPrivateKey(savedPrivateKey.value);
-});
 const privateDataReady = computed(() => {
   return isAuthenticated.value
     && Boolean(authCode.value.trim())
@@ -595,7 +567,7 @@ const settingsSaveTitle = computed(() => {
   return t("save.inProgress");
 });
 
-const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "LIQ2_PASSWORD_CONFIGURED", "BNB_RPC_URL"];
+const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"];
 const hiddenPassingSecurityKeys = [
   "SECURE_UPLOAD_STATUS",
 ];
@@ -812,20 +784,6 @@ async function submitLogin() {
       throw new Error(mapAuthError(payload.error ?? payload.status ?? `HTTP ${response.status}`));
     }
 
-    const passwordResponse = await fetchSettingsApi("/api/settings/login-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: loginPassword.value }),
-    });
-    const passwordPayload = (await passwordResponse.json().catch(() => ({}))) as { error?: string; passwordSetupRequired?: boolean; message?: string };
-    if (!passwordResponse.ok) {
-      throw new Error(passwordPayload.error ?? t("app.passwordVerifyFailed"));
-    }
-    if (passwordPayload.passwordSetupRequired) {
-      passwordSetupRequired.value = true;
-      loginPasswordRequired.value = false;
-      ElMessage.warning(passwordPayload.message ?? "当前钱包尚未设置密码，请立即在设置中完成设置。");
-    }
 
     if (rememberCode.value) {
       localStorage.setItem(AUTH_CODE_KEY, code);
@@ -834,7 +792,6 @@ async function submitLogin() {
     }
     sessionStorage.setItem(AUTH_CODE_SESSION_KEY, code);
     sessionStorage.setItem(AUTH_STORAGE_KEY, "authorized");
-    loginPassword.value = "";
     isAuthenticated.value = true;
     ElMessage.success(t("auth.success"));
   } catch (error) {
@@ -850,7 +807,6 @@ function logout() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_CODE_SESSION_KEY);
-  loginPassword.value = "";
   isAuthenticated.value = false;
   githubMenuOpen.value = false;
   ElMessage.success(t("auth.loggedOut"));
@@ -965,14 +921,8 @@ async function loadSettings(options: { syncRuntimePort?: boolean } = {}) {
       path?: string;
       env?: Record<string, string>;
       example?: Record<string, string>;
-      passwordRequired?: boolean;
-      passwordSetupRequired?: boolean;
-      passwordPendingStart?: boolean;
     };
     settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
-    loginPasswordRequired.value = Boolean(payload.passwordRequired);
-    passwordSetupRequired.value = Boolean(payload.passwordSetupRequired);
-    passwordPendingStart.value = Boolean(payload.passwordPendingStart);
     applyEnvSettings({ ...payload.example, ...payload.env }, options);
   } catch {
     // Settings API is available in the local dashboard dev server.
@@ -1027,13 +977,10 @@ async function saveSettings() {
   settingsSaveDialogVisible.value = true;
 
   try {
-    if (passwordRequiredForSave.value && !settingsForm.userPassword) {
-      throw new Error(t("password.walletChangeRequired"));
-    }
     const response = await fetchSettingsApi("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ env: generateEnvText(), password: settingsForm.userPassword }),
+      body: JSON.stringify({ env: generateEnvText() }),
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -1041,7 +988,6 @@ async function saveSettings() {
     }
     const payload = (await response.json().catch(() => ({}))) as { path?: string; message?: string };
     settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
-    settingsForm.userPassword = "";
     await loadSettings();
     settingsSaveState.value = "done";
     settingsSaveMessage.value = payload.message ?? t("save.doneMessage");
@@ -1054,12 +1000,6 @@ async function saveSettings() {
     settingsSaveState.value = "error";
     settingsSaveMessage.value = error instanceof Error ? error.message : t("save.failed");
   }
-}
-
-async function handlePasswordConfirmed() {
-  settingsForm.userPassword = "";
-  await loadSettings();
-  ElMessage.success(t("password.confirmed"));
 }
 
 type SecurityCheckItem = {
@@ -1078,7 +1018,7 @@ async function checkOfficialSettings() {
     const response = await fetchSettingsApi("/api/settings/security-check", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeadersForSettings() },
-      body: JSON.stringify({ env: generateEnvText(), password: settingsForm.userPassword }),
+      body: JSON.stringify({ env: generateEnvText() }),
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -1162,7 +1102,6 @@ function formatSecurityCheckedAt(value?: string) {
 function formatSecurityLabel(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return t("security.walletAddressLabel");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return t("security.serviceTokenLabel");
-  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return t("app.userPassword");
   if (item.key === "BNB_RPC_URL") return t("security.bnbRpcLabel");
   if (item.key === "LIQUIDATION_SNAPSHOT_API_URL") return t("security.snapshotApiLabel");
   if (item.key === "AUTH_CODE") return t("security.authCode");
@@ -1180,7 +1119,6 @@ function formatSecurityScope(item: SecurityCheckItem) {
 function formatSecurityKey(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return "WALLET_ADDRESS";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return "SERVICE_TOKEN";
-  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return "USER_PASSWORD";
   if (item.key === "AUTH_CODE") return "AUTH_CODE";
   if (item.key === "SECURE_UPLOAD_STATUS") return "SECURE_SYNC";
   return item.key;
@@ -1193,7 +1131,6 @@ function formatSecurityValue(item: SecurityCheckItem) {
   if (item.key === "SUPERMTNODE_APP_TOKEN") {
     return item.ok ? t("security.configured") : t("security.notConfigured");
   }
-  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return item.ok ? t("security.configured") : t("security.notConfigured");
   if (item.key === "AUTH_CODE") return item.ok ? t("security.verified") : t("security.verifyFailed");
   if (item.ok && item.message.includes("运行时不使用该备用项")) return t("security.checkPassed");
   if (item.key === "SECURE_UPLOAD_STATUS") return item.value;
@@ -1203,7 +1140,6 @@ function formatSecurityValue(item: SecurityCheckItem) {
 function formatSecurityMessage(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? t("security.privateKeyOk") : t("security.privateKeyMissing");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? t("security.tokenOk") : t("security.tokenMissing");
-  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return localizePasswordSecurityText(item.message);
   if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
   if (item.ok && item.message.includes("运行时不使用该备用项")) return t("security.checkPassed");
   if (item.key === "SECURE_UPLOAD_STATUS") return localizeSecurityText(item.message);
@@ -1213,7 +1149,6 @@ function formatSecurityMessage(item: SecurityCheckItem) {
 function formatSecuritySummary(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? t("security.walletAddress", { address: shortAddress(item.value) }) : t("security.localMissing");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? formatTokenSecuritySummary(item) : localizeSecurityText(item.message);
-  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return localizePasswordSecurityText(item.message);
   if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
   if (item.key === "BNB_RPC_URL") return item.ok || item.value ? formatRpcSecuritySummary(item) : t("security.localMissing");
   if (item.key === "SECURE_UPLOAD_STATUS") return localizeSecurityText(item.message);
@@ -1248,17 +1183,6 @@ function localizeSecurityText(value?: string) {
   if (/^已配置$|configured/i.test(text)) return t("security.configured");
   if (/官方校验通过/.test(text)) return t("security.checkPassed");
   return text;
-}
-
-function localizePasswordSecurityText(value?: string) {
-  const key = String(value || "").trim();
-  const messageKeys: Record<string, string> = {
-    password_first_use: "security.passwordFirstUse",
-    password_configured: "security.passwordConfigured",
-    password_pending_start: "security.passwordPendingStart",
-    password_setup_required: "security.passwordSetupRequired",
-  };
-  return messageKeys[key] ? t(messageKeys[key]) : localizeSecurityText(key);
 }
 
 function shortAddress(value: string) {

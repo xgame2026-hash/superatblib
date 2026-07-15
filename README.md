@@ -39,7 +39,7 @@ SuperARB 控制台负责把候选机会、市场状态、运行情况、排行�
 
 SuperARB 是基于 Node.js 的本地 Web 控制台。运行前需要准备：
 
-- Node.js：建议使用 Node.js 20 LTS 或更新版本。
+- Node.js：需要 Node.js 20.19 或更新版本。
 - npm：随 Node.js 一起安装，用于安装依赖和运行脚本。
 - Git：用于从 GitHub 获取代码、更新版本和查看变更。
 - GitHub 访问权限：用于拉取 SuperARB 主线代码。
@@ -95,6 +95,26 @@ git branch --show-current
 git checkout main
 git pull origin main
 ```
+
+## 首次安装快速启动
+
+macOS 用户按以下顺序执行：
+
+```bash
+git clone https://github.com/xgame2026-hash/superatblib.git
+cd superatblib
+cp .env.example .env
+npm install
+npm run dashboard
+```
+
+然后打开终端显示的本地地址，默认是：
+
+```text
+http://127.0.0.1:4311/
+```
+
+首次使用前，请编辑本地 `.env`，至少填写 `PRIVATE_KEY`、`SUPERMTNODE_APP_TOKEN`、`BNB_RPC_URL` 和 `AUTH_CODE`。真实 `.env` 已被 `.gitignore` 排除，不会提交到 GitHub；仓库只提交不含真实凭据的 `.env.example`。当前版本不需要设置或输入用户密码。
 
 查看当前代码状态：
 

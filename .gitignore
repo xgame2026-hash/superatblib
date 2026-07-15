@@ -1,8 +1,56 @@
+# Dependencies
 node_modules/
+
+# Generated build and test output
 dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Local environment files (the safe template is intentionally committed)
 .env
-.DS_Store
+.env.*
+!.env.example
 *.local
+
+# LIQ2 local runtime state
 .superarb/
-efft.md
+
+# Rust build output
 server/state-api-rust/target/
+
+# Logs, caches, and temporary files
+*.log
+logs/
+.cache/
+.tmp/
+tmp/
+*.swp
+*.swo
+*~
+
+# Local databases and state snapshots
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Private keys, certificates, and signing bundles
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+!server/tx-wallet-public.pem
+
+# Editor and operating-system metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# Local-only notes
+efft.md

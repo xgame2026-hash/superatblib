@@ -53,8 +53,7 @@ export async function checkRuntimeSettings(scope: string, env: Record<string, st
   if (license.endpoints.length) bindingSources.push({ label: "当前授权码", endpoints: license.endpoints });
   if (token.endpoints.length) bindingSources.push({ label: "SUPERMTNODE_APP_TOKEN", endpoints: token.endpoints });
   const bnbRpc = await checkBnbRpc(scope, env, bindingSources);
-  const password = checkUserPassword(scope, env);
-  const items = [wallet, token.item, bnbRpc, password];
+  const items = [wallet, token.item, bnbRpc];
   if (license.error) {
     items.push({
       scope,
@@ -66,34 +65,6 @@ export async function checkRuntimeSettings(scope: string, env: Record<string, st
     });
   }
   return items;
-}
-
-function checkUserPassword(scope: string, env: Record<string, string>): SecurityCheckItem {
-  const configured = env.LIQ2_PASSWORD_CONFIGURED?.trim() === "true";
-  const setupRequired = env.LIQ2_PASSWORD_SETUP_REQUIRED?.trim() === "true";
-  const pendingStart = env.LIQ2_PASSWORD_PENDING_START?.trim() === "true";
-  if (!configured && !setupRequired && !pendingStart) {
-    return {
-      scope,
-      key: "LIQ2_PASSWORD_CONFIGURED",
-      label: "用户密码",
-      value: "未设置",
-      ok: true,
-      message: "password_first_use",
-    };
-  }
-  return {
-    scope,
-    key: "LIQ2_PASSWORD_CONFIGURED",
-    label: "用户密码",
-    value: configured ? "已配置" : "未配置",
-    ok: configured && !setupRequired && !pendingStart,
-    message: configured && !setupRequired && !pendingStart
-      ? "password_configured"
-      : pendingStart
-        ? "password_pending_start"
-        : "password_setup_required",
-  };
 }
 
 /**

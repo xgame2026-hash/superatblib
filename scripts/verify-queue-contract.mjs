@@ -101,7 +101,6 @@ function checkClientContract() {
     "encryptedPrivateKey",
     "rpcUrl",
     "rpcToken",
-    "password",
     "nickname",
     "walletUsdt",
   ]) {
@@ -116,7 +115,6 @@ function checkClientContract() {
     "wallet_address",
     "rpc_url",
     "rpc_token",
-    "password",
     "encrypted_private_key",
     "credential_auth_mode",
     "single_trade_auth_amount_usdt",

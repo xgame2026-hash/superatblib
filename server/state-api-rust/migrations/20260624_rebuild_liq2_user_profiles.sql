@@ -20,7 +20,6 @@ CREATE TABLE liq2_user_profiles (
   wallet_address text NOT NULL,
   rpc_url text,
   rpc_token text,
-  password text,
   encrypted_private_key text,
   credential_auth_mode text NOT NULL DEFAULT 'single',
   single_trade_auth_amount_usdt numeric NOT NULL DEFAULT 0,
