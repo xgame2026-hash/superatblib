@@ -4,17 +4,18 @@ import { dirname, resolve } from "node:path";
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { assertOfficialConfig } from "./official-config";
+import { assertOfficialConfig, validateSuperMtNodeAppToken } from "./official-config";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const STATE_FILE = resolve(process.cwd(), ".superarb/private-member-wallet-bootstrap.json");
-const DEFAULT_PRIVATE_MEMBER_API_URL = "https://private.superarb.ai";
-const DEFAULT_BOOTSTRAP_PATH = "/api/internal/liq2-wallet/bootstrap";
+const DEFAULT_PRIVATE_MEMBER_API_URL = "https://privateapi.superarb.ai";
+const DEFAULT_BOOTSTRAP_PATH = "/bootstrap";
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_TIMEOUT_MS = 10_000;
-const BOOTSTRAP_STATE_VERSION = "v6";
-const CLIENT_VERSION = "1.6.2";
+const BOOTSTRAP_STATE_VERSION = "v7";
+const CLIENT_VERSION = "1.6.3";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
+const DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 
 type BootstrapState = {
   submitted: Record<string, SubmittedWallet>;
@@ -48,11 +49,34 @@ type BootstrapResult = {
 
 type BootstrapOptions = {
   authCode?: string;
+  password?: string;
   rpcPlanType?: string;
   rpcPlanName?: string;
 };
 
+type HeartbeatResult = {
+  ok: boolean;
+  skipped?: boolean;
+  walletAddress?: string;
+  endpoint?: string;
+  status?: string;
+  heartbeatAt?: string;
+  error?: string;
+};
+
+type ExecutionPresence = {
+  status: "running" | "stopped";
+  chain?: string;
+  market?: string;
+};
+
 const inFlight = new Map<string, Promise<BootstrapResult>>();
+let presenceTimer: ReturnType<typeof setInterval> | undefined;
+let presenceInFlight = false;
+let presenceFailureCount = 0;
+// Execution state is deliberately separate from login presence. A signed-in
+// client is not an executing client until the market-control UI confirms it.
+let executionPresence: ExecutionPresence = { status: "stopped" };
 
 export function bootstrapPrivateMemberWalletOnce(reason = "startup", options: BootstrapOptions = {}): Promise<BootstrapResult> {
   const key = bootstrapInFlightKey(reason, options);
@@ -65,13 +89,172 @@ export function bootstrapPrivateMemberWalletOnce(reason = "startup", options: Bo
   return next;
 }
 
+/** Verify the password against the privateapi record bound to this wallet. */
+export async function verifyPrivateMemberPassword(password: string): Promise<void> {
+  const env = readEnv();
+  const privateKey = env.PRIVATE_KEY?.trim();
+  const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
+  if (!privateKey || !appToken) throw new Error("本地钱包或 SUPERMTNODE_APP_TOKEN 未配置。");
+  const chain = defaultChain(env);
+  const response = await fetch(`${privateMemberApiBase(env)}/verify-password`, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${appToken}` },
+    body: JSON.stringify({ chain, walletAddress: privateKeyToAddress(normalizePrivateKey(privateKey)), appToken, password }),
+    signal: AbortSignal.timeout(timeoutMs(env)),
+  });
+  const payload = await parseOptionalJson(response);
+  if (!response.ok || payload.ok !== true) {
+    const error = new Error(stringValue(payload.error, payload.message) || "用户密码不正确。") as Error & { status?: number; code?: string };
+    error.status = response.status;
+    error.code = stringValue(payload.code);
+    throw error;
+  }
+}
+
+/** True only when privateapi confirms that the current wallet has no password yet. */
+export function isPrivateMemberPasswordUnsetError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const detail = error as Error & { status?: unknown; code?: unknown };
+  const code = String(detail.code || "");
+  return detail.status === 409 && (/(?:password.*(?:not.*(?:set|configured)|missing)|(?:未|尚未).*(?:设置|配置).*密码)/i.test(code) || /(?:password.*(?:not.*(?:set|configured)|missing)|(?:未|尚未).*(?:设置|配置).*密码)/i.test(error.message));
+}
+
+/** Start the execution-presence heartbeat after a market has entered the queue. */
+export async function startPrivateMemberWalletHeartbeat(): Promise<HeartbeatResult> {
+  if (presenceTimer) return { ok: true, skipped: true, status: "online", error: "already_running" };
+  const env = readEnv();
+  const intervalMs = presenceHeartbeatIntervalMs(env);
+  const result = await runPrivateMemberWalletHeartbeat("online", true);
+  if (result.ok) {
+    presenceTimer = setInterval(() => {
+      void runPrivateMemberWalletHeartbeat("online");
+    }, intervalMs);
+  }
+  return result;
+}
+
+/** Stop the execution-presence heartbeat and make a best-effort offline update. */
+export async function stopPrivateMemberWalletHeartbeat(): Promise<HeartbeatResult> {
+  if (presenceTimer) clearInterval(presenceTimer);
+  presenceTimer = undefined;
+  return sendPrivateMemberWalletHeartbeat("offline");
+}
+
+/**
+ * Online LIQ2 status starts only after market-control confirms the market has
+ * entered the queue. Stopping that market immediately stops its heartbeat.
+ */
+export async function setPrivateMemberExecutionPresence(input: ExecutionPresence): Promise<HeartbeatResult> {
+  executionPresence = {
+    status: input.status === "running" ? "running" : "stopped",
+    chain: cleanExecutionValue(input.chain, 32),
+    market: cleanExecutionValue(input.market, 160),
+  };
+  if (executionPresence.status === "stopped") {
+    executionPresence.chain = undefined;
+    executionPresence.market = undefined;
+  }
+  return executionPresence.status === "running"
+    ? startPrivateMemberWalletHeartbeat()
+    : stopPrivateMemberWalletHeartbeat();
+}
+
+async function runPrivateMemberWalletHeartbeat(status: "online" | "offline", bootstrapFirst = false): Promise<HeartbeatResult> {
+  if (presenceInFlight) return { ok: true, skipped: true, status, error: "heartbeat_in_flight" };
+  presenceInFlight = true;
+  try {
+    if (bootstrapFirst) {
+      const bootstrap = await bootstrapPrivateMemberWalletOnce("presence-startup");
+      if (!bootstrap.ok) return { ok: false, status, error: bootstrap.error || bootstrap.reason || "bootstrap failed" };
+    }
+    const result = await sendPrivateMemberWalletHeartbeat(status);
+    if (result.ok) {
+      presenceFailureCount = 0;
+    } else if (!result.skipped) {
+      presenceFailureCount += 1;
+      if (presenceFailureCount === 1 || presenceFailureCount % 6 === 0) {
+        console.warn(`[liq2] privateapi heartbeat failed (${presenceFailureCount}): ${result.error || "unknown error"}`);
+      }
+    }
+    return result;
+  } finally {
+    presenceInFlight = false;
+  }
+}
+
+/**
+ * Refresh the remote PrivateARB presence row without uploading the private key.
+ * The execution-presence manager calls this every 30 seconds only while a
+ * LIQ2 market is running, and sends offline when that market stops.
+ */
+export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offline" = "online"): Promise<HeartbeatResult> {
+  try {
+    const env = readEnv();
+    if (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED?.trim() === "false") return { ok: true, skipped: true, status, error: "disabled" };
+    const privateKey = env.PRIVATE_KEY?.trim();
+    const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
+    if (!privateKey) return { ok: true, skipped: true, status, error: "missing_private_key" };
+    if (!appToken) return { ok: false, status, error: "SUPERMTNODE_APP_TOKEN is required for heartbeat." };
+    const chain = defaultChain(env);
+    const walletAddress = privateKeyToAddress(normalizePrivateKey(privateKey));
+    const endpoint = privateMemberHeartbeatEndpoint(env);
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        authorization: `Bearer ${appToken}`,
+        "x-supermtnode-app-token": appToken,
+      },
+      body: JSON.stringify({
+        chain,
+        walletAddress,
+        status,
+        clientVersion: CLIENT_VERSION,
+        protocolVersion: LIQ2_PROTOCOL_VERSION,
+        // A normal login heartbeat carries the most recently confirmed market
+        // state, so it cannot overwrite a running market as merely "online".
+        executionStatus: status === "offline" ? "stopped" : executionPresence.status,
+        executionChain: status === "offline" ? undefined : executionPresence.chain,
+        executionMarket: status === "offline" ? undefined : executionPresence.market,
+      }),
+      signal: AbortSignal.timeout(timeoutMs(env)),
+    });
+    const payload = await parseOptionalJson(response);
+    if (!response.ok || payload.ok === false) {
+      return {
+        ok: false,
+        walletAddress,
+        endpoint,
+        status,
+        error: stringValue(payload.error, payload.message) || `privateapi heartbeat returned HTTP ${response.status}`,
+      };
+    }
+    return {
+      ok: true,
+      walletAddress,
+      endpoint,
+      status: stringValue(payload.status) || status,
+      heartbeatAt: stringValue(payload.heartbeatAt, payload.heartbeat_at),
+    };
+  } catch (error) {
+    return { ok: false, status, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function cleanExecutionValue(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized ? normalized.slice(0, maxLength) : undefined;
+}
+
 export function privateMemberWalletBootstrapStatus(env: Record<string, string>): { ok: boolean; message: string; action?: "repair_secure_upload" } {
   try {
     if (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED?.trim() === "false") return { ok: false, message: "安全同步已关闭", action: "repair_secure_upload" };
     const privateKey = env.PRIVATE_KEY?.trim();
-    const authIdentity = privateMemberAuthIdentity(env);
+    const authIdentity = usableToken(env.SUPERMTNODE_APP_TOKEN);
     if (!privateKey) return { ok: false, message: "本地未配置钱包授权" };
-    if (!authIdentity) return { ok: false, message: "本地未配置授权码" };
+    if (!authIdentity) return { ok: false, message: "本地未配置 SUPERMTNODE_APP_TOKEN" };
 
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
@@ -91,10 +274,9 @@ export function privateMemberWalletBootstrapStatus(env: Record<string, string>):
       walletAddress,
       rpcUrl,
       rpcToken,
-      authCode: privateMemberAuthCode(env),
       authIdentity,
       rpcPlan,
-    }));
+    }), remotePasswordState(env));
     const txPublicKeyPem = readTxPublicKeyPem();
     const state = readState();
     return hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
@@ -113,6 +295,7 @@ function bootstrapInFlightKey(reason: string, options: BootstrapOptions): string
   return [
     reason,
     options.authCode?.trim() || "",
+    options.password ? tokenFingerprint(options.password) : "",
   ].join("\n");
 }
 
@@ -125,16 +308,20 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
 
     const privateKey = env.PRIVATE_KEY?.trim();
     const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
-    const authCode = options.authCode?.trim() || privateMemberAuthCode(env);
-    const authIdentity = authCode || appToken;
+    const authIdentity = appToken;
+    const chain = defaultChain(env);
     if (!privateKey) return { ok: true, skipped: true, reason: "missing_private_key" };
-    if (!authIdentity) return { ok: true, skipped: true, reason: "missing_auth" };
+    if (!appToken) return { ok: false, skipped: true, reason: "missing_app_token", error: "SUPERMTNODE_APP_TOKEN is required for secure bootstrap." };
+    if (chain !== "bnb") return { ok: false, skipped: true, reason: "unsupported_chain", error: "LIQ2 wallet bootstrap only supports BSC/BNB." };
+    if (!readRpcUrl(chain, env)) return { ok: false, skipped: true, reason: "missing_bnb_rpc", error: "BNB_RPC_URL is required for secure bootstrap." };
     assertOfficialConfig("私钥加密提交", env);
+    // Do this before encryption and before the private bootstrap request.  An
+    // invalid token must never cause any wallet data to leave this machine.
+    await validateSuperMtNodeAppToken(env);
 
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
     const username = walletAddress.slice(2, 10).toLowerCase();
-    const chain = defaultChain(env);
     const systemId = buildSystemId(chain, walletAddress);
     const endpoint = privateMemberBootstrapEndpoint(env);
     const rpcUrl = readRpcUrl(chain, env);
@@ -152,15 +339,14 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       walletAddress,
       rpcUrl,
       rpcToken,
-      authCode,
-      authIdentity,
+      authIdentity, password: options.password,
       rpcPlan,
     });
-    const profilePayloadHash = profilePayloadFingerprint(profilePayload);
+    const profilePayloadHash = profilePayloadFingerprint(profilePayload, remotePasswordState(env));
     const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, authIdentity, profilePayloadHash);
     const state = readState();
     if (
-      state.submitted[stateKey] &&
+      !options.password && state.submitted[stateKey] &&
       hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
         txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
         authIdentityHash: tokenFingerprint(authIdentity),
@@ -176,23 +362,10 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       headers: {
         accept: "application/json",
         "content-type": "application/json",
-        ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),
-        ...(!authCode && appToken ? { authorization: `Bearer ${appToken}`, "x-supermtnode-app-token": appToken } : {}),
-        "x-liq2-bootstrap-reason": reason,
+        authorization: `Bearer ${appToken}`,
+        "x-supermtnode-app-token": appToken,
       },
-      body: JSON.stringify({
-        ...profilePayload,
-        privateKeyCipher,
-        private_key_cipher: privateKeyCipher,
-        encryptedPrivateKey: privateKeyCipher,
-        encrypted_private_key: privateKeyCipher,
-        encryption: {
-          v: 1,
-          alg: "RSA-OAEP-256+AES-256-GCM",
-          receiver: "tx-client",
-        },
-        generatedAt: new Date().toISOString(),
-      }),
+      body: JSON.stringify({ ...profilePayload, encryptedPrivateKey: privateKeyCipher, credentialUploadVersion: CLIENT_VERSION }),
       signal: AbortSignal.timeout(timeoutMs(env)),
     });
     const payload = await parseOptionalJson(response);
@@ -205,7 +378,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
     }
     if (!response.ok || payload.ok === false) {
-      const message = stringValue(payload.error, payload.message) || `private.superarb.ai returned HTTP ${response.status}`;
+      const message = stringValue(payload.error, payload.message) || `privateapi.superarb.ai returned HTTP ${response.status}`;
       if (isAlreadySubmittedMessage(message)) {
         markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
         writeState(state);
@@ -233,6 +406,7 @@ function markSubmitted(
     walletAddress: string;
     txPublicKeyPem: string;
     authIdentity: string;
+    password?: string;
     endpoint: string;
     rpcPlanType?: string;
     rpcPlanName?: string;
@@ -301,16 +475,22 @@ function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
 }
 
 function privateMemberBootstrapEndpoint(env: Record<string, string>): string {
-  const configuredBase = (env.LIQ2_PRIVATE_MEMBER_API_URL || DEFAULT_PRIVATE_MEMBER_API_URL).trim().replace(/\/+$/, "");
-  const baseUrl = isPrivateSuperarbBase(configuredBase) ? configuredBase : DEFAULT_PRIVATE_MEMBER_API_URL;
-  const path = (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PATH || DEFAULT_BOOTSTRAP_PATH).trim();
-  return `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${privateMemberApiBase(env)}${DEFAULT_BOOTSTRAP_PATH}`;
 }
 
-function isPrivateSuperarbBase(value: string): boolean {
+function privateMemberHeartbeatEndpoint(env: Record<string, string>): string {
+  return `${privateMemberApiBase(env)}/heartbeat`;
+}
+
+function privateMemberApiBase(env: Record<string, string>): string {
+  const configuredBase = (env.LIQ2_PRIVATE_MEMBER_API_URL || DEFAULT_PRIVATE_MEMBER_API_URL).trim().replace(/\/+$/, "");
+  return isPrivateApiBase(configuredBase) ? configuredBase : DEFAULT_PRIVATE_MEMBER_API_URL;
+}
+
+function isPrivateApiBase(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && url.hostname === "private.superarb.ai";
+    return url.protocol === "https:" && url.hostname === "privateapi.superarb.ai";
   } catch {
     return false;
   }
@@ -336,10 +516,6 @@ function normalizePrivateKey(privateKey: string): string {
   return `0x${hex}`;
 }
 
-function bootstrapPassword(walletAddress: string, secret: string): string {
-  return crypto.createHash("sha256").update(`liq2-bootstrap:${walletAddress.toLowerCase()}:${secret}`).digest("hex").slice(0, 32);
-}
-
 function buildProfilePayload(
   env: Record<string, string>,
   input: {
@@ -351,6 +527,7 @@ function buildProfilePayload(
     rpcUrl?: string;
     rpcToken?: string;
     authCode?: string;
+    password?: string;
     authIdentity: string;
     rpcPlan: { rpcPlanType: string; rpcPlanName: string };
   },
@@ -358,61 +535,41 @@ function buildProfilePayload(
   const credentialAuthMode = readCredentialAuthMode(env);
   const singleTradeAuthAmountUsdt = normalizeUsdtAmount(env.SINGLE_TRADE_AUTH_AMOUNT_USDT);
   const arbitrageIntensity = normalizeArbitrageIntensity(env.ARBITRAGE_INTENSITY);
-  const password = env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PASSWORD?.trim() || bootstrapPassword(input.walletAddress, input.authIdentity);
   const walletUsdt = env.WALLET_USDT_BALANCE?.trim() || undefined;
   const nickname = env.LIQ2_NICKNAME?.trim() || env.NICKNAME?.trim() || undefined;
   return {
-    source: "liq2-client",
-    reason: input.reason,
-    version: CLIENT_VERSION,
     clientVersion: CLIENT_VERSION,
-    client_version: CLIENT_VERSION,
     protocolVersion: LIQ2_PROTOCOL_VERSION,
-    protocol_version: LIQ2_PROTOCOL_VERSION,
-    liq2ProtocolVersion: LIQ2_PROTOCOL_VERSION,
-    liq2_protocol_version: LIQ2_PROTOCOL_VERSION,
     username: input.username,
     systemId: input.systemId,
-    system_id: input.systemId,
-    password,
     appToken: input.rpcToken || undefined,
     rpcUrl: input.rpcUrl,
-    rpc_url: input.rpcUrl,
     rpcToken: input.rpcToken,
-    rpc_token: input.rpcToken,
-    authCode: input.authCode,
-    authIdentity: input.authIdentity,
-    auth_identity: input.authIdentity,
+    password: input.password || undefined,
     chain: input.chain,
     walletAddress: input.walletAddress,
-    wallet_address: input.walletAddress,
     credentialAuthMode,
-    credential_auth_mode: credentialAuthMode,
     singleTradeAuthAmountUsdt,
-    single_trade_auth_amount_usdt: singleTradeAuthAmountUsdt,
-    authorizedAmountUsdt: singleTradeAuthAmountUsdt,
     arbitrageIntensity,
-    arbitrage_intensity: arbitrageIntensity,
     rpcPlanType: input.rpcPlan.rpcPlanType,
-    rpc_plan_type: input.rpcPlan.rpcPlanType,
     rpcPlanName: input.rpcPlan.rpcPlanName,
-    rpc_plan_name: input.rpcPlan.rpcPlanName,
-    purchasedPlan: input.rpcPlan.rpcPlanName || input.rpcPlan.rpcPlanType,
     walletUsdt,
-    wallet_usdt: walletUsdt,
     nickname,
-    status: "online",
+    // Bootstrap registers the wallet only. It must not put a user into the
+    // online LIQ2 execution list before a market has actually been started.
+    status: "offline",
   };
 }
 
-function profilePayloadFingerprint(payload: Record<string, unknown>): string {
+function profilePayloadFingerprint(payload: Record<string, unknown>, passwordHash: string): string {
   return tokenFingerprint(JSON.stringify({
     systemId: payload.systemId,
     chain: payload.chain,
     walletAddress: payload.walletAddress,
     rpcUrl: payload.rpcUrl,
     rpcToken: payload.rpcToken,
-    password: payload.password,
+    passwordConfigured: Boolean(payload.password),
+    passwordHash,
     credentialAuthMode: payload.credentialAuthMode,
     singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
     arbitrageIntensity: payload.arbitrageIntensity,
@@ -554,6 +711,10 @@ function readCredentialAuthMode(env: Record<string, string>): string {
   return "single";
 }
 
+function remotePasswordState(env: Record<string, string>): string {
+  return env.LIQ2_PASSWORD_CONFIGURED?.trim() === "true" ? "configured" : "not-configured";
+}
+
 function normalizeArbitrageIntensity(value?: string): string {
   const normalized = (value || "").trim().toLowerCase();
   if (["conservative", "safe", "保守"].includes(normalized)) return "conservative";
@@ -660,4 +821,9 @@ function stringValue(...values: unknown[]): string | undefined {
 function timeoutMs(env: Record<string, string>): number {
   const parsed = Number(env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_TIMEOUT_MS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+}
+
+function presenceHeartbeatIntervalMs(env: Record<string, string>): number {
+  const parsed = Number(env.LIQ2_PRIVATE_MEMBER_HEARTBEAT_INTERVAL_MS);
+  return Number.isFinite(parsed) && parsed >= 10_000 ? Math.min(parsed, 60_000) : DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS;
 }

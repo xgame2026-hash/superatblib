@@ -1,6 +1,7 @@
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
+import { assertActiveSuperMtNodeLicense } from "./supermtnode-license";
 
 export type SecurityCheckItem = {
   scope: string;
@@ -31,9 +32,9 @@ const OFFICIAL_ENDPOINTS: OfficialEndpointRule[] = [
   {
     key: "LIQUIDATION_SNAPSHOT_API_URL",
     label: "清算快照接口",
-    defaultValue: "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
+    defaultValue: "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot",
     protocols: ["https:"],
-    hosts: ["bsc.rpc.supermtnode.io"],
+    hosts: ["market-snapshot.superarb.ai"],
     paths: ["/api/public/liquidations/snapshot"],
     required: true,
   },
@@ -52,7 +53,8 @@ export async function checkRuntimeSettings(scope: string, env: Record<string, st
   if (license.endpoints.length) bindingSources.push({ label: "当前授权码", endpoints: license.endpoints });
   if (token.endpoints.length) bindingSources.push({ label: "SUPERMTNODE_APP_TOKEN", endpoints: token.endpoints });
   const bnbRpc = await checkBnbRpc(scope, env, bindingSources);
-  const items = [wallet, token.item, bnbRpc];
+  const password = checkUserPassword(scope, env);
+  const items = [wallet, token.item, bnbRpc, password];
   if (license.error) {
     items.push({
       scope,
@@ -64,6 +66,45 @@ export async function checkRuntimeSettings(scope: string, env: Record<string, st
     });
   }
   return items;
+}
+
+function checkUserPassword(scope: string, env: Record<string, string>): SecurityCheckItem {
+  const configured = env.LIQ2_PASSWORD_CONFIGURED?.trim() === "true";
+  const setupRequired = env.LIQ2_PASSWORD_SETUP_REQUIRED?.trim() === "true";
+  const pendingStart = env.LIQ2_PASSWORD_PENDING_START?.trim() === "true";
+  if (!configured && !setupRequired && !pendingStart) {
+    return {
+      scope,
+      key: "LIQ2_PASSWORD_CONFIGURED",
+      label: "用户密码",
+      value: "未设置",
+      ok: true,
+      message: "password_first_use",
+    };
+  }
+  return {
+    scope,
+    key: "LIQ2_PASSWORD_CONFIGURED",
+    label: "用户密码",
+    value: configured ? "已配置" : "未配置",
+    ok: configured && !setupRequired && !pendingStart,
+    message: configured && !setupRequired && !pendingStart
+      ? "password_configured"
+      : pendingStart
+        ? "password_pending_start"
+        : "password_setup_required",
+  };
+}
+
+/**
+ * Verifies a token with the official SuperMTNode endpoint before it is used to
+ * send any wallet bootstrap data.  A syntactically valid or unexpired token is
+ * deliberately not sufficient here.
+ */
+export async function validateSuperMtNodeAppToken(env: Record<string, string>): Promise<Array<Record<string, unknown>>> {
+  const token = await checkSuperMtNodeToken("安全提交", env);
+  if (!token.item.ok) throw new Error(token.item.message);
+  return token.endpoints;
 }
 
 export function assertOfficialConfig(scope: string, env: Record<string, string>): void {
@@ -286,7 +327,10 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[], env?: R
 }
 
 async function fetchSuperMtNodeEndpoints(env: Record<string, string>, token: string): Promise<Array<Record<string, unknown>>> {
-  const apiBase = "https://api.supermtnode.io";
+  // Token endpoint discovery remains on the canonical SuperMT Node host.  It
+  // is distinct from the fixed authorization-code check URL in
+  // supermtnode-license.ts.
+  const apiBase = "https://supermtnode.io";
   const response = await fetch(`${apiBase}/api/rpc-endpoints`, {
     headers: { accept: "application/json", authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(4_000),
@@ -304,6 +348,7 @@ async function checkLicenseEndpoints(
   authCode: string,
 ): Promise<{ endpoints: Array<Record<string, unknown>>; error: string }> {
   try {
+    await assertActiveSuperMtNodeLicense(authCode);
     return { endpoints: await fetchSuperMtNodeEndpointsByLicense(env, authCode), error: "" };
   } catch (error) {
     return { endpoints: [], error: error instanceof Error ? error.message : String(error) };
@@ -364,9 +409,7 @@ function readEndpointUsage(endpoints: Array<Record<string, unknown>>, rpcUrl: st
   if (!endpoint) return "";
   const count = numberValue(endpoint.requestCount, endpoint.request_count);
   const limit = numberValue(endpoint.requestLimit, endpoint.request_limit);
-  if (count === null && limit === null) return "用量已获取";
-  if (count !== null && limit !== null && limit > 0) return `用量 ${count}/${limit}，剩余 ${Math.max(0, limit - count)}`;
-  if (count !== null) return `已用 ${count}`;
+  if (count !== null && limit !== null && limit > 0) return `剩余 ${Math.max(0, limit - count)}`;
   return "";
 }
 

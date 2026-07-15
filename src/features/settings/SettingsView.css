@@ -124,6 +124,78 @@
   font-weight: 800;
 }
 
+.settings-form-grid :deep(.el-input__wrapper),
+.settings-form-grid :deep(.el-textarea__inner) {
+  border: 1px solid rgba(139, 92, 246, 0.42);
+  border-radius: 8px;
+  background: rgba(31, 26, 43, 0.95);
+  box-shadow: none;
+  color: #f3eefe;
+}
+
+.settings-form-grid :deep(.el-input__wrapper) {
+  min-height: 42px;
+}
+
+.settings-form-grid :deep(.el-input__wrapper:hover),
+.settings-form-grid :deep(.el-textarea__inner:hover) {
+  border-color: rgba(168, 85, 247, 0.66);
+  background: rgba(38, 30, 55, 0.96);
+}
+
+.settings-form-grid :deep(.el-input__wrapper.is-focus),
+.settings-form-grid :deep(.el-textarea__inner:focus) {
+  border-color: #409eff;
+  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.35);
+}
+
+.settings-form-grid :deep(.el-input__inner),
+.settings-form-grid :deep(.el-textarea__inner) {
+  color: #f3eefe;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.settings-form-grid :deep(.el-input__inner::placeholder),
+.settings-form-grid :deep(.el-textarea__inner::placeholder) {
+  color: #8f86a4;
+}
+
+.settings-form-grid :deep(.el-input__count),
+.settings-form-grid :deep(.el-input__count-inner),
+.settings-form-grid :deep(.el-textarea .el-input__count) {
+  background: transparent;
+  color: #a99fbd;
+}
+
+.settings-form-grid :deep(.el-button) {
+  --el-button-bg-color: rgba(35, 24, 61, 0.86);
+  --el-button-border-color: rgba(139, 92, 246, 0.56);
+  --el-button-text-color: #ddd5f4;
+  --el-button-hover-bg-color: rgba(47, 31, 82, 0.9);
+  --el-button-hover-border-color: rgba(168, 85, 247, 0.62);
+  --el-button-hover-text-color: #f4efff;
+  --el-button-active-bg-color: rgba(55, 35, 96, 0.95);
+  --el-button-active-border-color: rgba(168, 85, 247, 0.68);
+  --el-button-disabled-bg-color: rgba(35, 24, 61, 0.48);
+  --el-button-disabled-border-color: rgba(139, 92, 246, 0.24);
+  --el-button-disabled-text-color: rgba(221, 213, 244, 0.54);
+  min-height: 42px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-form-grid :deep(.el-button--primary) {
+  --el-button-bg-color: rgba(86, 55, 148, 0.92);
+  --el-button-border-color: rgba(168, 85, 247, 0.62);
+  --el-button-hover-bg-color: rgba(98, 63, 166, 0.96);
+  --el-button-hover-border-color: rgba(180, 112, 255, 0.7);
+  --el-button-active-bg-color: rgba(76, 48, 132, 0.96);
+  box-shadow: 0 10px 24px rgba(43, 24, 84, 0.26);
+}
+
 .settings-field-meta {
   display: grid;
   gap: 3px;
@@ -251,6 +323,83 @@
   padding-top: 16px;
 }
 
+.alert-sound-grid {
+  max-width: 640px;
+}
+
+.profile-settings-grid {
+  align-items: end;
+}
+
+.settings-profile-avatar-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-avatar-preview {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(39, 215, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(39, 215, 255, 0.1);
+  color: #bdf3ff;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.settings-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.settings-profile-avatar-actions,
+.settings-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-avatar-file-input {
+  display: none;
+}
+
+.settings-profile-actions {
+  grid-column: 1 / -1;
+  align-items: center;
+}
+
+.alert-sound-field {
+  grid-template-columns: minmax(180px, 1fr) minmax(190px, 260px);
+  align-items: end;
+}
+
+.alert-sound-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.alert-sound-control :deep(.el-select),
+.alert-sound-preview-button {
+  height: 40px;
+}
+
+.alert-sound-control :deep(.el-select__wrapper) {
+  min-height: 40px;
+  height: 40px;
+}
+
+.alert-sound-preview-button {
+  min-width: 92px;
+  min-height: 40px;
+}
+
 .settings-footer {
   display: flex;
   justify-content: space-between;
@@ -270,5 +419,20 @@
 
   .settings-field.is-full {
     grid-column: auto;
+  }
+
+  .alert-sound-field {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .alert-sound-control {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .alert-sound-control {
+    grid-template-columns: 1fr;
   }
 }

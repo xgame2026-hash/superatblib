@@ -9,10 +9,12 @@ const ENV_FILE = resolve(process.cwd(), ".env");
 const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
 const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_SNAPSHOT_API_URL = "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot";
-const LEGACY_SNAPSHOT_API_URL = "https://api.supermtnode.io/api/public/liquidations/snapshot";
-const DEFAULT_PRIVATE_MEMBER_API_URL = "https://private.superarb.ai";
-const DEFAULT_WSS_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liq2/leaderboard";
+const DEFAULT_SNAPSHOT_API_URL = "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot";
+const LEGACY_SNAPSHOT_API_URLS = new Set([
+  "https://api.supermtnode.io/api/public/liquidations/snapshot",
+  "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
+]);
+const DEFAULT_ONLINE_USERS_API_URL = "https://privateapi.superarb.ai/online-users";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -168,6 +170,9 @@ type SnapshotPayload = {
   queues?: unknown;
   queuedWallets?: unknown;
   queued_wallets?: unknown;
+  onlineUsers?: unknown;
+  online_users?: unknown;
+  users?: unknown;
   candidateQueue?: unknown;
   candidate_queue?: unknown;
   strategyCandidates?: unknown;
@@ -262,6 +267,23 @@ const blockAtTimestampCache = new Map<string, BlockCacheEntry>();
 const assetChangeRefreshInFlight = new Set<string>();
 
 export function handleLatestLiquidationsRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  // The execution-page list is deliberately independent from public market
+  // snapshots. It is the LIQ2 private-member online-wallet list only.
+  if (req.url?.startsWith("/api/liq2/online-wallets")) {
+    if (req.method !== "GET") {
+      json(res, 405, { ok: false, error: "Method not allowed." });
+      return true;
+    }
+
+    fetchLiq2OnlineWallets(req)
+      .then((payload) => json(res, 200, payload))
+      .catch((error: unknown) => {
+        json(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+
+    return true;
+  }
+
   if (req.url?.startsWith("/api/market-snapshot")) {
     if (req.method !== "GET") {
       json(res, 405, { ok: false, error: "Method not allowed." });
@@ -296,6 +318,29 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
   return true;
 }
 
+/**
+ * Read the server-maintained LIQ2 online-wallet cache. Do not attach market
+ * snapshot candidates, local mirrors, or client-side RPC balance probes here:
+ * privateapi owns the online filter and its balance worker owns the values.
+ */
+async function fetchLiq2OnlineWallets(req: IncomingMessage) {
+  const env = readEnv();
+  const online = await fetchWssQueuedWallets(env, req);
+  const queuedWallets = sortQueueRowsByRealtimeUsdtDesc(dedupeAndSortStateRows(online.rows));
+  const updatedAt = stringValue(online.status.updatedAt, online.status.updated_at) ?? new Date().toISOString();
+  return {
+    ok: true,
+    source: "privateapi.superarb.ai/online-users",
+    queueTransport: "private-global",
+    queueSource: "privateapi.superarb.ai/online-users (liq2 wallets with valid heartbeat)",
+    queueParticipantCount: queuedWallets.length,
+    queueSubscribers: 0,
+    queueUpdatedAt: updatedAt,
+    updatedAt,
+    queuedWallets,
+  };
+}
+
 async function fetchMarketSnapshot(req: IncomingMessage) {
   const env = readEnv();
   assertOfficialConfig("全部市场快照读取", env);
@@ -325,7 +370,7 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   response.queuedWallets = dedupeAndSortStateRows([...privateProfileRows, ...wssQueue.rows, ...localQueuedWallets]);
   response.queueTransport =
     privateProfileRows.length > 0 ? "private-global" : wssQueue.ok ? "private" : localQueuedWallets.length > 0 ? "private-local-mirror" : "private-local-empty";
-  response.queueSource = privateProfileRows.length > 0 ? "private.superarb.ai/liq2_user_profiles" : wssQueue.ok ? "private.superarb.ai" : "private.superarb.ai/local-liq2";
+  response.queueSource = privateProfileRows.length > 0 ? "privateapi.superarb.ai/online-users" : wssQueue.ok ? "privateapi.superarb.ai/online-users" : "privateapi.superarb.ai/local-liq2";
   response.queueParticipantCount = response.queuedWallets.length;
   response.queueUpdatedAt = new Date().toISOString();
   if (options.queueOnly) {
@@ -398,12 +443,9 @@ function normalizeSnapshotUrl(value: string): string {
   }
 }
 
-async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingMessage): Promise<{ ok: boolean; rows: SnapshotQueueRow[]; status: SnapshotPayload }> {
-  const privateMemberBase = env.LIQ2_PRIVATE_MEMBER_API_URL?.trim()?.replace(/\/+$/, "");
-  const queueUrl =
-    env.LIQUIDATION_QUEUE_WSS_STATUS_URL?.trim() ||
-    env.PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL?.trim() ||
-    (privateMemberBase ? `${privateMemberBase}/api/liq2/leaderboard` : DEFAULT_WSS_QUEUE_STATUS_API_URL);
+async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingMessage, includeAllLiq2 = false): Promise<{ ok: boolean; rows: SnapshotQueueRow[]; status: SnapshotPayload }> {
+  const queueUrl = new URL(env.LIQ2_ONLINE_USERS_API_URL?.trim() || DEFAULT_ONLINE_USERS_API_URL);
+  if (includeAllLiq2) queueUrl.searchParams.set("scope", "all");
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const response = await fetch(queueUrl, {
     headers: privateMemberQueueStatusHeaders(env, authCode),
@@ -414,21 +456,21 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
   const sourcePayload = unwrapPayload(payload);
   return {
     ok: true,
-    rows: readQueue(sourcePayload.queuedWallets ?? sourcePayload.queued_wallets ?? sourcePayload.items ?? sourcePayload.queue ?? sourcePayload.queues ?? sourcePayload.rows),
+    rows: readQueue(sourcePayload.onlineUsers ?? sourcePayload.online_users ?? sourcePayload.users ?? sourcePayload.queuedWallets ?? sourcePayload.queued_wallets ?? sourcePayload.items ?? sourcePayload.queue ?? sourcePayload.queues ?? sourcePayload.rows),
     status: sourcePayload,
   };
 }
 
 async function fetchPrivateProfileQueuedWallets(env: Record<string, string>): Promise<SnapshotQueueRow[]> {
-  const privateMemberBase = (env.LIQ2_PRIVATE_MEMBER_API_URL?.trim() || DEFAULT_PRIVATE_MEMBER_API_URL).replace(/\/+$/, "");
-  const response = await fetch(`${privateMemberBase}/api/liq2/leaderboard`, {
-    headers: { accept: "application/json" },
+  const response = await fetch(env.LIQ2_ONLINE_USERS_API_URL?.trim() || DEFAULT_ONLINE_USERS_API_URL, {
+    headers: privateMemberQueueStatusHeaders(env, ""),
     signal: AbortSignal.timeout(timeoutMs(env)),
   });
-  if (!response.ok) throw new Error(`private liq2 leaderboard request failed (${response.status})`);
+  if (!response.ok) throw new Error(`privateapi online users request failed (${response.status})`);
   const payload = (await response.json()) as SnapshotPayload;
   const sourcePayload = unwrapPayload(payload);
-  return readQueue((sourcePayload as Record<string, unknown>).queuedWallets ?? sourcePayload.queue ?? sourcePayload.rows ?? []);
+  const payloadRecord = sourcePayload as Record<string, unknown>;
+  return readQueue(payloadRecord.onlineUsers ?? payloadRecord.online_users ?? payloadRecord.users ?? payloadRecord.queuedWallets ?? sourcePayload.queue ?? sourcePayload.rows ?? []);
 }
 
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
@@ -1935,7 +1977,7 @@ function readEnv(): Record<string, string> {
     if (separator <= 0) continue;
     parsed[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
   }
-  if (parsed.LIQUIDATION_SNAPSHOT_API_URL?.trim() === LEGACY_SNAPSHOT_API_URL) {
+  if (LEGACY_SNAPSHOT_API_URLS.has(parsed.LIQUIDATION_SNAPSHOT_API_URL?.trim() || "")) {
     parsed.LIQUIDATION_SNAPSHOT_API_URL = DEFAULT_SNAPSHOT_API_URL;
   }
   return parsed;

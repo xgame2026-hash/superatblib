@@ -3,6 +3,7 @@ import vue from "@vitejs/plugin-vue";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { handleAvatarProfileRequest } from "./server/avatar-profile-middleware";
 import { handleGithubVersionRequest } from "./server/github-version-middleware";
 import { handleLatestLiquidationsRequest } from "./server/latest-liquidations-middleware";
 import { handleLiquidationQueueStatusRequest, restoreLocalQueueHeartbeats } from "./server/liquidation-queue-status-middleware";
@@ -10,9 +11,11 @@ import { handleNewsRequest } from "./server/news-middleware";
 import { handlePaidProfitRequest } from "./server/paid-profit-middleware";
 import { handleRpcUsageRequest } from "./server/rpc-usage-middleware";
 import { handleSettingsRequest } from "./server/settings-middleware";
+import { handleSlotsOrdersRequest } from "./server/slots-orders-middleware";
+import { handleSwapRequest } from "./server/swap-middleware";
 import { handleTxGraphRequest } from "./server/tx-graph-middleware";
 import { handleWalletAssetsRequest } from "./server/wallet-assets-middleware";
-import { bootstrapPrivateMemberWalletOnce } from "./server/private-member-wallet-bootstrap";
+import { bootstrapPrivateMemberWalletOnce, stopPrivateMemberWalletHeartbeat } from "./server/private-member-wallet-bootstrap";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -30,6 +33,9 @@ export default defineConfig(({ mode }) => {
       configureServer(server) {
         void bootstrapPrivateMemberWalletOnce("vite-startup");
         restoreLocalQueueHeartbeats();
+        server.httpServer?.once("close", () => {
+          void stopPrivateMemberWalletHeartbeat();
+        });
         server.httpServer?.once("listening", () => {
           const address = server.httpServer?.address();
           const port = typeof address === "object" && address ? address.port : dashboardPort;
@@ -45,6 +51,9 @@ export default defineConfig(({ mode }) => {
             }
           }
           if (
+            !handleAvatarProfileRequest(req, res) &&
+            !handleSlotsOrdersRequest(req, res) &&
+            !handleSwapRequest(req, res) &&
             !handleSettingsRequest(req, res) &&
             !handleLatestLiquidationsRequest(req, res) &&
             !handleLiquidationQueueStatusRequest(req, res) &&
@@ -65,13 +74,6 @@ export default defineConfig(({ mode }) => {
     host: "127.0.0.1",
     port: dashboardPort,
     strictPort: false,
-    proxy: {
-      "/api/license/check": {
-        target: "https://api.supermtnode.io",
-        changeOrigin: true,
-        secure: true,
-      },
-    },
   },
   preview: {
     host: "127.0.0.1",
@@ -128,6 +130,6 @@ function applyLocalApiCors(origin: string | string[] | undefined, res: { setHead
   res.setHeader("Access-Control-Allow-Methods", "GET,PUT,POST,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type,Authorization,X-SuperMtNode-Auth-Code,X-SuperMtNode-App-Token,Accept",
+    "Content-Type,Authorization,X-SuperMtNode-Auth-Code,X-SuperMtNode-App-Token,X-Wallet-Address,X-Superimg-Upload-Token,Accept",
   );
 }

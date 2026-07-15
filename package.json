@@ -1,6 +1,6 @@
 {
   "name": "superatblib",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,10 +21,11 @@
     "cytoscape": "^3.33.3",
     "cytoscape-cola": "^2.5.1",
     "element-plus": "^2.13.5",
+    "ethers": "^6.17.0",
     "three": "^0.178.0",
     "typed.js": "^3.0.0",
     "typescript": "~5.9.3",
-    "vite": "^7.3.1",
+    "vite": "^7.3.6",
     "vue": "^3.5.25",
     "vue-tsc": "^3.1.5",
     "webcola": "^3.4.0",

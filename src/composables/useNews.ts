@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import type { NewsItem } from "../types/news";
-import { t } from "../i18n";
+import { getLocale, t } from "../i18n";
 
 type NewsResponse = {
   success?: boolean;
@@ -16,7 +16,8 @@ export function useNews() {
     newsLoading.value = true;
     newsError.value = "";
     try {
-      const response = await fetch("/api/news?limit=50", { headers: { accept: "application/json" } });
+      const query = new URLSearchParams({ limit: "50", locale: getLocale() });
+      const response = await fetch(`/api/news?${query}`, { headers: { accept: "application/json" } });
       const payload = (await response.json().catch(() => ({}))) as NewsResponse;
       if (!response.ok || payload.success === false || !Array.isArray(payload.data)) {
         throw new Error(t("news.apiUnavailable"));

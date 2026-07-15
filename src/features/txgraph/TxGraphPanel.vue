@@ -10,7 +10,7 @@
             :class="{ active: chain === item.value }"
             type="button"
             :title="item.label"
-            @click="chain = item.value"
+            disabled
           >
             <img :src="item.icon" :alt="item.label" />
           </button>
@@ -145,9 +145,7 @@ import walletIconUrl from "../../img/pers.svg";
 import tokenIconUrl from "../../img/around.svg";
 import exchangeIconUrl from "../../img/Refresh.svg";
 import systemIconUrl from "../../img/mapgreen.svg";
-import arbIcon from "../../img/arb.svg";
 import bnbIcon from "../../img/bnb.svg";
-import ethIcon from "../../img/eth.svg";
 import miniLogoUrl from "../../img/SuperARBmini.png";
 import plusIconUrl from "../../img/plus.svg";
 import searchIconUrl from "../../img/searchicon.svg";
@@ -158,14 +156,11 @@ import zoomBigIconUrl from "../../img/zoombig.svg";
 import type { TxGraphChainKey, TxGraphEdge, TxGraphEdgeKind, TxGraphNode } from "../../types/txGraph";
 
 const props = defineProps<{
-  rpcMap: Record<TxGraphChainKey, string>;
   initialQuery?: { chain: TxGraphChainKey; hash: string; nonce: number } | null;
 }>();
 
 const chains: { value: TxGraphChainKey; label: string; icon: string }[] = [
-  { value: "ethereum", label: "Ethereum", icon: ethIcon },
   { value: "bnb", label: "BNB", icon: bnbIcon },
-  { value: "arbitrum", label: "Arbitrum", icon: arbIcon },
 ];
 
 const filters = computed<Array<{ key: TxGraphEdgeKind; label: string }>>(() => [
@@ -175,7 +170,7 @@ const filters = computed<Array<{ key: TxGraphEdgeKind; label: string }>>(() => [
 ]);
 
 const txHash = ref("");
-const chain = ref<TxGraphChainKey>("ethereum");
+const chain = ref<TxGraphChainKey>("bnb");
 const graphPanel = ref<HTMLElement | null>(null);
 const graphContainer = ref<HTMLElement | null>(null);
 const cy = ref<Core | null>(null);
@@ -190,18 +185,12 @@ const lastAppliedQuery = ref(0);
 
 const { data, loading, error, loadGraph } = useTxGraph();
 
-const rpcMissing = computed(() => chain.value === "bnb" && !props.rpcMap.bnb?.trim());
-const canQuery = computed(() => /^0x[a-fA-F0-9]{64}$/.test(txHash.value.trim()) && !rpcMissing.value && !loading.value);
-const currentChainLabel = computed(() => chains.find((item) => item.value === chain.value)?.label ?? "Ethereum");
+const rpcMissing = computed(() => false);
+const canQuery = computed(() => /^0x[a-fA-F0-9]{64}$/.test(txHash.value.trim()) && !loading.value);
+const currentChainLabel = computed(() => "BNB");
 const explorerTxUrl = computed(() => {
   if (!data.value?.txHash) return "";
-  const base =
-    data.value.chain === "bnb"
-      ? "https://bscscan.com/tx/"
-      : data.value.chain === "arbitrum"
-        ? "https://arbiscan.io/tx/"
-        : "https://etherscan.io/tx/";
-  return `${base}${data.value.txHash}`;
+  return `https://bscscan.com/tx/${data.value.txHash}`;
 });
 
 watch(chain, () => {
@@ -213,7 +202,7 @@ watch(
   (query) => {
     if (!query || query.nonce === lastAppliedQuery.value) return;
     lastAppliedQuery.value = query.nonce;
-    chain.value = query.chain;
+    chain.value = "bnb";
     txHash.value = query.hash;
     void nextTick(() => {
       void submit();
@@ -250,7 +239,7 @@ async function submit() {
     ElMessage.warning(t("tx.invalidHash"));
     return;
   }
-  await loadGraph(chain.value, value);
+  await loadGraph("bnb", value);
 }
 
 async function renderGraph() {

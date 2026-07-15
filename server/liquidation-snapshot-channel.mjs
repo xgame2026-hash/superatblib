@@ -10,7 +10,7 @@ const TIMEOUT_MS = Number(process.env.LIQUIDATION_SNAPSHOT_TIMEOUT_MS || 8_000);
 const STORE_FILE = process.env.LIQUIDATION_SNAPSHOT_STORE_FILE || "/opt/supermt-liquidation-snapshot/data/ingest.json";
 const INGEST_TOKEN = (process.env.LIQUIDATION_SNAPSHOT_INGEST_TOKEN || "").trim();
 const UPSTREAM_SNAPSHOT_URL =
-  process.env.UPSTREAM_LIQUIDATION_SNAPSHOT_URL || "https://api.supermtnode.io/api/public/liquidations/snapshot";
+  process.env.UPSTREAM_LIQUIDATION_SNAPSHOT_URL || "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot";
 
 const markets = [
   market("eth-aave-v3-monitor", "ethereum", "ETH", "Aave V3", "monitor", "ETHEREUM_RPC_URL"),

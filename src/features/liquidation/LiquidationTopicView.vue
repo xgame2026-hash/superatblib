@@ -175,8 +175,8 @@ const sources = ref<SourceRow[]>([]);
 const queue = ref<QueueRow[]>([]);
 const strategies = ref<StrategyRow[]>([]);
 const updatedAt = ref("");
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.2";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.2";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
 const TOPIC_SNAPSHOT_CACHE_KEY = "liq2-liquidation-topic-snapshot-cache";
 let snapshotRequested = false;
 

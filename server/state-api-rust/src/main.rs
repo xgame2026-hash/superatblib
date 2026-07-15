@@ -16,8 +16,9 @@ use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio_postgres::{Client, NoTls, Row};
 use tower_http::cors::CorsLayer;
 
-const VERSION: &str = "1.6.2";
+const VERSION: &str = "1.6.3";
 const REQUIRED_LIQ2_PROTOCOL_VERSION: &str = "liq2-cutover-20260624-v160";
+const DEFAULT_RPC_PLAN_API_URL: &str = "https://supermtnode.io/api/rpc";
 
 #[derive(Clone)]
 struct AppState {
@@ -256,7 +257,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/queue/status", post(queue_status))
         .route("/v1/leaderboard", get(leaderboard))
         .route("/v1/rpc", post(rpc_not_available))
-        .route("/api/internal/liq2-wallet/bootstrap", post(liq2_wallet_bootstrap))
+        .route(
+            "/api/internal/liq2-wallet/bootstrap",
+            post(liq2_wallet_bootstrap),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -696,9 +700,16 @@ async fn queue_status(
         metadata["usdtBalance"] = json!(balance);
     }
     let usdt_balance = usdt_balance.unwrap_or_else(|| "0".to_string());
-    let billing_charge =
-        charge_queue_rpc_credit(&tx, &session.license_id, &chain, &wallet, action, &runtime, &state)
-            .await?;
+    let billing_charge = charge_queue_rpc_credit(
+        &tx,
+        &session.license_id,
+        &chain,
+        &wallet,
+        action,
+        &runtime,
+        &state,
+    )
+    .await?;
     if let Some(charge) = billing_charge.as_ref() {
         metadata["rpcCreditLastChargedAt"] = json!(Utc::now().to_rfc3339());
         metadata["rpcCreditLastChargedUnits"] = json!(charge.units);
@@ -817,12 +828,20 @@ async fn liq2_wallet_bootstrap(
     Json(body): Json<Liq2WalletBootstrapRequest>,
 ) -> ApiResult<Json<Value>> {
     require_cutover_protocol(&body.extra)?;
-    let chain_value = body.chain.clone().or_else(|| string_field(&body.extra, "chain"));
+    let chain_value = body
+        .chain
+        .clone()
+        .or_else(|| string_field(&body.extra, "chain"));
     let chain = normalize_chain(chain_value.as_deref());
     let wallet_value = body
         .wallet_address
         .clone()
-        .or_else(|| body.wallet.as_ref().and_then(Value::as_str).map(str::to_string))
+        .or_else(|| {
+            body.wallet
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .or_else(|| string_field(&body.extra, "walletAddress"))
         .or_else(|| string_field(&body.extra, "wallet_address"));
     let wallet = normalize_wallet(
@@ -836,8 +855,18 @@ async fn liq2_wallet_bootstrap(
         .or_else(|| string_field(&body.extra, "systemId"))
         .or_else(|| string_field(&body.extra, "system_id"))
         .unwrap_or_else(|| build_system_id(&chain, &wallet));
-    let runtime = RuntimeSettings::from_value(&body.extra);
-    let status_value = body.status.clone().or_else(|| string_field(&body.extra, "status"));
+    let mut runtime = RuntimeSettings::from_value(&body.extra);
+    let submitted_rpc_url = rpc_url(&body.extra);
+    let submitted_rpc_token = rpc_token(&body.extra);
+    if let Some(resolved) =
+        resolve_supermtnode_rpc_plan(&state, submitted_rpc_token.as_deref()).await
+    {
+        runtime.apply_resolved_rpc_plan(&resolved);
+    }
+    let status_value = body
+        .status
+        .clone()
+        .or_else(|| string_field(&body.extra, "status"));
     let status = normalize_profile_status(status_value.as_deref());
 
     let mut client = db(&state).await?;
@@ -848,8 +877,8 @@ async fn liq2_wallet_bootstrap(
             system_id: &system_id,
             chain: &chain,
             wallet: &wallet,
-            rpc_url: rpc_url(&body.extra),
-            rpc_token: rpc_token(&body.extra),
+            rpc_url: submitted_rpc_url,
+            rpc_token: submitted_rpc_token,
             password: profile_password(&body.extra),
             runtime: &runtime,
             encrypted_private_key: encrypted_private_key(&body.extra).as_deref(),
@@ -1052,13 +1081,9 @@ async fn charge_queue_rpc_credit(
                 .await
                 .map_err(|err| db_error_at("billing read last billed", err))?;
             let Some(row) = row else {
-                return Ok(Some(debit_rpc_credit(
-                    tx,
-                    license_id,
-                    burn_per_second,
-                    1,
-                )
-                .await?));
+                return Ok(Some(
+                    debit_rpc_credit(tx, license_id, burn_per_second, 1).await?,
+                ));
             };
             let last_billed_at: Option<String> = row.get(0);
             let stored_burn: Option<i32> = row.get(1);
@@ -1068,13 +1093,9 @@ async fn charge_queue_rpc_credit(
                 return Ok(None);
             }
             let Some(last_billed_at) = last_billed_at else {
-                return Ok(Some(debit_rpc_credit(
-                    tx,
-                    license_id,
-                    effective_burn,
-                    1,
-                )
-                .await?));
+                return Ok(Some(
+                    debit_rpc_credit(tx, license_id, effective_burn, 1).await?,
+                ));
             };
             let elapsed = Utc::now()
                 .signed_duration_since(parse_time(&last_billed_at)?)
@@ -1082,15 +1103,19 @@ async fn charge_queue_rpc_credit(
             if elapsed <= 0 {
                 return Ok(None);
             }
-            let cap = i64::from(state.lease_seconds.max(1)).saturating_mul(2).min(300);
+            let cap = i64::from(state.lease_seconds.max(1))
+                .saturating_mul(2)
+                .min(300);
             let billable_seconds = elapsed.min(cap).max(1);
-            return Ok(Some(debit_rpc_credit(
-                tx,
-                license_id,
-                effective_burn.saturating_mul(billable_seconds),
-                billable_seconds,
-            )
-            .await?));
+            return Ok(Some(
+                debit_rpc_credit(
+                    tx,
+                    license_id,
+                    effective_burn.saturating_mul(billable_seconds),
+                    billable_seconds,
+                )
+                .await?,
+            ));
         }
         _ => 0,
     };
@@ -1098,13 +1123,15 @@ async fn charge_queue_rpc_credit(
     if seconds <= 0 {
         return Ok(None);
     }
-    Ok(Some(debit_rpc_credit(
-        tx,
-        license_id,
-        burn_per_second.saturating_mul(seconds),
-        seconds,
-    )
-    .await?))
+    Ok(Some(
+        debit_rpc_credit(
+            tx,
+            license_id,
+            burn_per_second.saturating_mul(seconds),
+            seconds,
+        )
+        .await?,
+    ))
 }
 
 async fn debit_rpc_credit(
@@ -1294,6 +1321,25 @@ async fn upsert_runtime_settings(
     Ok(())
 }
 
+struct ResolvedRpcPlan {
+    rpc_plan_type: String,
+    rpc_plan_name: String,
+    credit_burn_per_second: Option<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcPlanApiResponse {
+    #[serde(default)]
+    resolved: bool,
+    #[serde(default)]
+    rpc_plan_type: Option<String>,
+    #[serde(default)]
+    rpc_plan_name: Option<String>,
+    #[serde(default)]
+    credit_burn_per_second: Option<i32>,
+}
+
 struct RuntimeSettings {
     credential_auth_mode: String,
     single_trade_auth_amount_usdt: String,
@@ -1358,6 +1404,88 @@ impl RuntimeSettings {
             .unwrap_or(0),
         }
     }
+
+    fn apply_resolved_rpc_plan(&mut self, resolved: &ResolvedRpcPlan) {
+        self.rpc_plan_type = resolved.rpc_plan_type.clone();
+        self.rpc_plan_name = resolved.rpc_plan_name.clone();
+        if let Some(value) = resolved.credit_burn_per_second {
+            self.credit_burn_per_second = self.credit_burn_per_second.max(value);
+        }
+    }
+}
+
+async fn resolve_supermtnode_rpc_plan(
+    state: &AppState,
+    rpc_token: Option<&str>,
+) -> Option<ResolvedRpcPlan> {
+    let rpc_token = rpc_token.map(str::trim).filter(|value| !value.is_empty());
+    if rpc_token.is_none() {
+        return None;
+    }
+    let url = env::var("SUPERMTGLOBAL_RPC_PLAN_API_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_RPC_PLAN_API_URL.to_string());
+    let rpc_token = rpc_token?;
+    let body = json!({
+        "SUPERMTNODE_APP_TOKEN": rpc_token,
+    });
+    let request = state
+        .http
+        .post(url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {rpc_token}"))
+        .header("x-supermtnode-app-token", rpc_token)
+        .json(&body);
+    let response = match tokio::time::timeout(Duration::from_secs(8), request.send()).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(err)) => {
+            eprintln!("supermtglobal rpc plan resolve failed: {err}");
+            return None;
+        }
+        Err(_) => {
+            eprintln!("supermtglobal rpc plan resolve timed out");
+            return None;
+        }
+    };
+    if !response.status().is_success() {
+        eprintln!(
+            "supermtglobal rpc plan resolve returned HTTP {}",
+            response.status()
+        );
+        return None;
+    }
+    let payload = match response.json::<RpcPlanApiResponse>().await {
+        Ok(payload) => payload,
+        Err(err) => {
+            eprintln!("supermtglobal rpc plan resolve JSON failed: {err}");
+            return None;
+        }
+    };
+    if !payload.resolved {
+        return None;
+    }
+    let rpc_plan_type = payload.rpc_plan_type?;
+    let rpc_plan_name = payload
+        .rpc_plan_name
+        .unwrap_or_else(|| rpc_plan_label(&rpc_plan_type));
+    Some(ResolvedRpcPlan {
+        rpc_plan_type,
+        rpc_plan_name,
+        credit_burn_per_second: payload.credit_burn_per_second,
+    })
+}
+
+fn rpc_plan_label(plan: &str) -> String {
+    match plan.trim().to_lowercase().as_str() {
+        "build" => "Build / 189",
+        "accelerate" => "Accelerate / 489",
+        "scale" => "Scale / 899",
+        "business" => "Business / 2999",
+        _ => "Unknown",
+    }
+    .to_string()
 }
 
 fn leaderboard_row(row: Row) -> Value {
@@ -1557,9 +1685,7 @@ fn require_cutover_protocol(value: &Value) -> ApiResult<()> {
     Err(ApiError {
         status: StatusCode::UPGRADE_REQUIRED,
         code: "LIQ2_UPGRADE_REQUIRED",
-        message: format!(
-            "请升级 liq2 到 {VERSION} 后重新登录。旧版本已停用。"
-        ),
+        message: format!("请升级 liq2 到 {VERSION} 后重新登录。旧版本已停用。"),
     })
 }
 
@@ -1643,7 +1769,16 @@ fn rpc_token(value: &Value) -> Option<String> {
 }
 
 fn profile_password(value: &Value) -> Option<String> {
-    string_value(value, &["password", "profilePassword", "profile_password", "advancedPassword", "advanced_password"])
+    string_value(
+        value,
+        &[
+            "password",
+            "profilePassword",
+            "profile_password",
+            "advancedPassword",
+            "advanced_password",
+        ],
+    )
 }
 
 fn normalize_credential_auth_mode(value: &str) -> String {
@@ -1680,15 +1815,18 @@ fn spawn_balance_refresh_loop(state: Arc<AppState>) {
 async fn refresh_stale_leaderboard_balances(state: Arc<AppState>) -> ApiResult<()> {
     let client = db(&state).await?;
     let active_cutoff = Utc::now()
-        .checked_sub_signed(chrono::Duration::minutes(i64::from(state.offline_logout_minutes)))
+        .checked_sub_signed(chrono::Duration::minutes(i64::from(
+            state.offline_logout_minutes,
+        )))
         .unwrap_or_else(Utc::now)
         .to_rfc3339();
     let refresh_cutoff = Utc::now()
         .checked_sub_signed(chrono::Duration::seconds(state.balance_refresh_seconds))
         .unwrap_or_else(Utc::now)
         .to_rfc3339();
-    let rows = client.query(
-        r#"
+    let rows = client
+        .query(
+            r#"
         SELECT chain, wallet_address::text
           FROM leaderboard_current
          WHERE online = true
@@ -1700,8 +1838,14 @@ async fn refresh_stale_leaderboard_balances(state: Arc<AppState>) -> ApiResult<(
          ORDER BY last_seen_at DESC
          LIMIT $3
         "#,
-        &[&active_cutoff, &refresh_cutoff, &state.balance_refresh_batch_size],
-    ).await.map_err(|err| db_error_at("leaderboard balance stale rows", err))?;
+            &[
+                &active_cutoff,
+                &refresh_cutoff,
+                &state.balance_refresh_batch_size,
+            ],
+        )
+        .await
+        .map_err(|err| db_error_at("leaderboard balance stale rows", err))?;
 
     for row in rows {
         let chain: String = row.get(0);

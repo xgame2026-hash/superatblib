@@ -73,14 +73,23 @@ import { displayStatus, t } from "../../i18n";
 const props = withDefaults(defineProps<{
   active?: boolean;
   startupDetectionMode?: string;
+  settingsLoaded?: boolean;
+  passwordPendingStart?: boolean;
+  passwordSetupRequired?: boolean;
+  pendingPassword?: string;
 }>(), {
   active: true,
   startupDetectionMode: "manual",
+  settingsLoaded: false,
+  passwordPendingStart: false,
+  passwordSetupRequired: false,
+  pendingPassword: "",
 });
 
 const emit = defineEmits<{
   refresh: [];
   "launch-sound": [state: "launched" | "not-launched"];
+  "password-confirmed": [];
 }>();
 
 type MarketValue = string;
@@ -152,8 +161,8 @@ type SnapshotStrategyRow = {
   updatedAt?: string;
 };
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.2";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.2";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
 const unconfiguredMarket: MarketOption = {
   value: "unconfigured",
   label: t("liquidation.unconfiguredMarket"),
@@ -228,7 +237,7 @@ const QUEUE_REQUEST_TIMEOUT_MS = 20_000;
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 
 onMounted(() => {
-  restoreRecentRunningMarketState();
+  if (props.settingsLoaded) restoreRecentRunningMarketState();
   if (props.active) startVisiblePolling();
   window.addEventListener("offline", handleClientOffline);
   window.addEventListener("online", handleClientOnline);
@@ -249,7 +258,15 @@ watch(
   },
 );
 
+watch(
+  () => props.settingsLoaded,
+  (loaded) => {
+    if (loaded) restoreRecentRunningMarketState();
+  },
+);
+
 onBeforeUnmount(() => {
+  if (marketRunning.value) void reportExecutionPresence("stopped", currentMarket.value, true);
   stopVisiblePolling();
   stopMarketHeartbeat();
   window.removeEventListener("offline", handleClientOffline);
@@ -286,6 +303,7 @@ async function startMarketExecution() {
   appendTerminal(`strategy status: ${displayStatus(currentMarket.value.apiStatus)}`);
   appendTerminal(t("liquidation.enteringQueue"));
   try {
+    await confirmPendingPasswordBeforeStart();
     const payload = await registerMarketQueueStart(currentMarket.value);
     queueState.value = payload.eligible === false ? "waiting" : "queued";
     appendTerminal(t("liquidation.queueSuccess", { id: displayQueueId(payload) }));
@@ -293,6 +311,7 @@ async function startMarketExecution() {
     if (typeof payload.remoteQueueWarning === "string") appendTerminal(payload.remoteQueueWarning);
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
     persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
+    await reportExecutionPresence("running", currentMarket.value);
     startMarketHeartbeat(payload.heartbeatIntervalMs);
     emit("launch-sound", "launched");
     await loadQueueMonitorStatus();
@@ -309,6 +328,25 @@ async function startMarketExecution() {
   }
 }
 
+async function confirmPendingPasswordBeforeStart(): Promise<void> {
+  if (props.passwordSetupRequired && !props.passwordPendingStart) {
+    throw new Error(t("password.unsavedStart"));
+  }
+  if (!props.passwordPendingStart) return;
+  const password = props.pendingPassword.trim();
+  if (!password) throw new Error(t("password.pendingStart"));
+  appendTerminal(t("password.confirming"));
+  const response = await fetch("/api/settings/confirm-password-start", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? `password confirmation returned HTTP ${response.status}`);
+  emit("password-confirmed");
+  appendTerminal(t("password.confirmedTerminal"));
+}
+
 async function pauseMarketExecution() {
   const runningMarket = currentMarket.value;
   queueState.value = "paused";
@@ -318,6 +356,9 @@ async function pauseMarketExecution() {
   emit("launch-sound", "not-launched");
   if (!runningMarket.disabled) {
     try {
+      // The local UI has stopped execution even if the independent queue-stop
+      // request later fails, so do not leave it advertised as executing.
+      await reportExecutionPresence("stopped", runningMarket);
       await unregisterMarketQueue(runningMarket);
       appendTerminal(t("liquidation.queuePaused", { market: runningMarket.label }));
       await loadQueueMonitorStatus();
@@ -361,6 +402,7 @@ async function sendMarketHeartbeat() {
     marketHeartbeatFailureCount = 0;
     queueState.value = payload.eligible === false ? "waiting" : "queued";
     persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
+    await reportExecutionPresence("running", currentMarket.value);
     const nextInterval = normalizeHeartbeatIntervalMs(payload.heartbeatIntervalMs);
     if (nextInterval !== marketHeartbeatIntervalMs) startMarketHeartbeat(nextInterval);
   } catch (error) {
@@ -370,6 +412,7 @@ async function sendMarketHeartbeat() {
     if (isRecoverableHeartbeatError(message) && marketHeartbeatFailureCount < MARKET_HEARTBEAT_MAX_FAILURES) return;
     if (isFatalQueueRuntimeError(message)) {
       sendQueueStopBeacon(currentMarket.value);
+      void reportExecutionPresence("stopped", currentMarket.value);
       marketRunning.value = false;
       queueState.value = "idle";
       stopMarketHeartbeat();
@@ -450,6 +493,11 @@ function queueWalletTail8(value: string): string {
 }
 
 function restoreRunningMarketState() {
+  if (props.passwordPendingStart || props.passwordSetupRequired) {
+    clearRunningMarketState();
+    setTerminalLines(["startup blocked: password change must be confirmed by a new manual start"]);
+    return;
+  }
   const saved = readRunningMarketState();
   if (!saved) return;
   market.value = saved.market;
@@ -458,11 +506,12 @@ function restoreRunningMarketState() {
   marketStartIntentId = createQueueStartIntentId();
   setTerminalLines([`queue reconnecting: ${saved.market}`, "startup detection: full queue sync required"]);
   void registerMarketQueueStart(saved.option, "start")
-    .then((payload) => {
+    .then(async (payload) => {
       queueState.value = payload.eligible === false ? "waiting" : "queued";
       marketRunning.value = true;
       appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
       persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
+      await reportExecutionPresence("running", currentMarket.value);
       startMarketHeartbeat(payload.heartbeatIntervalMs);
       void loadQueueMonitorStatus();
       void refreshMarketSnapshotDisplay();
@@ -528,6 +577,7 @@ function handleClientOffline() {
   if (!marketRunning.value) return;
   queueState.value = "paused";
   stopMarketHeartbeat();
+  void reportExecutionPresence("stopped", currentMarket.value);
   appendTerminal("network offline: queue heartbeat paused");
 }
 
@@ -544,6 +594,17 @@ function handleVisibilityHeartbeat() {
 
 function handleClientUnload() {
   stopMarketHeartbeat();
+  if (marketRunning.value) void reportExecutionPresence("stopped", currentMarket.value, true);
+}
+
+async function reportExecutionPresence(status: "running" | "stopped", item: MarketOption, keepalive = false): Promise<void> {
+  const response = await fetch("/api/settings/execution-presence", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ status, chain: normalizeChainKey(item.chain), market: item.value }),
+    keepalive,
+  });
+  if (!response.ok) throw new Error(`execution presence returned HTTP ${response.status}`);
 }
 
 function sendQueueStopBeacon(item: MarketOption) {

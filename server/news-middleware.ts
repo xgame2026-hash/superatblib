@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-const DEFAULT_NEWS_API_URL = "https://api.supermtnode.io/api/public/news";
+const DEFAULT_NEWS_API_URL = "https://news.superarb.ai/api/public/news";
 
 export function handleNewsRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (!req.url?.startsWith("/api/news")) return false;

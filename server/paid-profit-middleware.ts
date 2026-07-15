@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-const DEFAULT_PRIVATE_MEMBER_API_URL = "https://private.superarb.ai";
+const DEFAULT_PRIVATE_MEMBER_API_URL = "https://privateapi.superarb.ai";
 const DEFAULT_TIMEOUT_MS = 8_000;
 
 type PaidProfitPayload = {
@@ -45,7 +45,7 @@ function requestPathname(url: string | undefined) {
 async function fetchPaidProfit() {
   const env = readEnv();
   const privateMemberBase = (env.LIQ2_PRIVATE_MEMBER_API_URL?.trim() || DEFAULT_PRIVATE_MEMBER_API_URL).replace(/\/+$/, "");
-  const response = await fetch(`${privateMemberBase}/api/liq2/paid-profit`, {
+  const response = await fetch(`${privateMemberBase}/paid-profit`, {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(timeoutMs(env)),
   });
@@ -53,7 +53,7 @@ async function fetchPaidProfit() {
   const payload = (await response.json()) as PaidProfitPayload;
   return {
     ok: true,
-    source: stringValue(payload.source) || "private.superarb.ai/liq2_paid_profit",
+    source: stringValue(payload.source) || "privateARB.public.paid_profit_events",
     totalPaidUsdt: stringValue(payload.totalPaidUsdt, payload.total_paid_usdt) || "0.00000000",
     payoutCount: numberValue(payload.payoutCount, payload.payout_count) ?? 0,
     updatedAt: stringValue(payload.updatedAt, payload.updated_at) || new Date().toISOString(),

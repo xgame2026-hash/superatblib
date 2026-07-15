@@ -1,12 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
+const BSC_PRO_QUERY_RPC_URL = "https://rpc.bscpro.supermtglobal.com";
 const TX_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
-type ChainKey = "ethereum" | "bnb" | "arbitrum";
+type ChainKey = "bnb";
 type TxGraphNodeKind = "wallet" | "contract" | "token" | "system";
 type TxGraphEdgeKind = "transfer" | "call" | "reference";
 
@@ -58,27 +56,9 @@ type RpcCallTrace = {
   calls?: RpcCallTrace[];
 };
 
-const chainEnvKeys: Record<ChainKey, string> = {
-  ethereum: "ETHEREUM_RPC_URL",
-  bnb: "BNB_RPC_URL",
-  arbitrum: "ARBITRUM_RPC_URL",
-};
-
-const chainQueryRpcEnvKeys: Record<ChainKey, string> = {
-  ethereum: "ETHEREUM_FALLBACK_RPC_URL",
-  bnb: "BNB_RPC_URL",
-  arbitrum: "ARBITRUM_FALLBACK_RPC_URL",
-};
-
-const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {};
-
 const chainLabels: Record<ChainKey, string> = {
-  ethereum: "Ethereum",
   bnb: "BNB",
-  arbitrum: "Arbitrum",
 };
-
-const chainOrder: ChainKey[] = ["ethereum", "bnb", "arbitrum"];
 
 export function handleTxGraphRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (!req.url?.startsWith("/api/tx-graph")) return false;
@@ -110,40 +90,9 @@ async function fetchTxGraph(payload: { chain: string | null; txHash: string | nu
     throw new Error("请输入正确的交易哈希。");
   }
 
-  const env = readEnv();
-  const rpcUrl = rpcUrlForChain(chain, env);
-  if (!rpcUrl) {
-    throw new Error(`请先在设置中配置 ${chainQueryRpcEnvKeys[chain]}，否则不能查询 ${chainLabels[chain]}。`);
-  }
-
-  const checkedChains: string[] = [];
-  const selectedResult = await fetchTxGraphForChain(chain, txHash, rpcUrl);
-  checkedChains.push(`${chainLabels[chain]}(${chainQueryRpcEnvKeys[chain]})`);
-  if (selectedResult) return selectedResult;
-
-  for (const fallbackChain of chainOrder) {
-    if (fallbackChain === chain) continue;
-    const fallbackRpcUrl = rpcUrlForChain(fallbackChain, env);
-    if (!fallbackRpcUrl) continue;
-    checkedChains.push(`${chainLabels[fallbackChain]}(${chainQueryRpcEnvKeys[fallbackChain]})`);
-    const fallbackResult = await fetchTxGraphForChain(fallbackChain, txHash, fallbackRpcUrl);
-    if (fallbackResult) return fallbackResult;
-  }
-
-  throw new Error(
-    `${chainLabels[chain]} RPC 未返回这笔交易。已按 .env 检查：${checkedChains.join("、")}。请确认交易哈希是否属于这些链。`,
-  );
-}
-
-function rpcUrlForChain(chain: ChainKey, env: Record<string, string>): string | undefined {
-  if (chain === "ethereum" || chain === "arbitrum") return fallbackRpcUrlForChain(chain, env);
-  return env.BNB_RPC_URL?.trim();
-}
-
-function fallbackRpcUrlForChain(chain: ChainKey, env: Record<string, string>): string | undefined {
-  if (chain === "ethereum") return env.ETHEREUM_FALLBACK_RPC_URL?.trim() || defaultFallbackRpcUrls.ethereum;
-  if (chain === "arbitrum") return env.ARBITRUM_FALLBACK_RPC_URL?.trim() || defaultFallbackRpcUrls.arbitrum;
-  return undefined;
+  const result = await fetchTxGraphForChain(chain, txHash, BSC_PRO_QUERY_RPC_URL);
+  if (result) return result;
+  throw new Error("BNB RPC 未找到这笔交易；请确认交易哈希属于 BSC 主网。");
 }
 
 async function fetchTxGraphForChain(chain: ChainKey, txHash: string, rpcUrl: string) {
@@ -183,8 +132,8 @@ async function fetchTxGraphForChain(chain: ChainKey, txHash: string, rpcUrl: str
       source: from,
       target: to,
       kind: "transfer",
-      label: `${formatEther(nativeValue)} ETH`,
-      tokenSymbol: "ETH",
+      label: `${formatEther(nativeValue)} BNB`,
+      tokenSymbol: "BNB",
       amountDisplay: formatEther(nativeValue),
       step: 1,
     });
@@ -284,8 +233,8 @@ function appendTrace(trace: RpcCallTrace, nodes: Map<string, TxGraphNode>, edges
           source,
           target,
           kind: "transfer",
-          label: `${formatEther(value)} ETH`,
-          tokenSymbol: "ETH",
+          label: `${formatEther(value)} BNB`,
+          tokenSymbol: "BNB",
           amountDisplay: formatEther(value),
           step,
         });
@@ -318,27 +267,9 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[]): Promis
 }
 
 function normalizeChain(value: string | null): ChainKey {
-  const key = (value ?? "ethereum").toLowerCase();
-  if (key === "bnb" || key === "arbitrum" || key === "ethereum") {
-    return key;
-  }
-  throw new Error("目前只支持 Ethereum、BNB、Arbitrum 三条链查询。");
-}
-
-function readEnv(): Record<string, string> {
-  return existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
-}
-
-function parseEnv(source: string): Record<string, string> {
-  const parsed: Record<string, string> = {};
-  for (const rawLine of source.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const separator = line.indexOf("=");
-    if (separator <= 0) continue;
-    parsed[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
-  }
-  return parsed;
+  const key = (value ?? "bnb").toLowerCase();
+  if (key === "bnb" || key === "bsc" || key === "binance") return "bnb";
+  throw new Error("交易查询页仅支持 BNB Chain。");
 }
 
 function ensureNode(nodes: Map<string, TxGraphNode>, id: string, partial: Partial<TxGraphNode>) {

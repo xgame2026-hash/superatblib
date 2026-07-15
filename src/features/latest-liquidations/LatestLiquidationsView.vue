@@ -18,12 +18,7 @@
         <div class="latest-title-side">
           <div class="latest-wss-stat" :class="wssConnected ? 'is-connected' : 'is-empty'" :title="wssStatusTitle">
             <span class="latest-wss-dot" aria-hidden="true"></span>
-            <span>{{ t("latest.onlineSync") }}</span>
             <strong>{{ wssConnectionText }}</strong>
-          </div>
-          <div class="latest-total-stat" :class="totalUsdtPulseClass">
-            <span>{{ t("latest.totalAmount") }}</span>
-            <strong>{{ formattedTotalUsdt }}</strong>
           </div>
           <div class="latest-total-stat latest-paid-profit-stat" :class="paidProfitPulseClass" :title="paidProfitTitle">
             <span>{{ t("latest.paidProfit") }}</span>
@@ -50,7 +45,13 @@
               <td class="latest-queue-id" :title="row.id">{{ formatQueueId(row) }}</td>
               <td>
                 <span class="latest-address-cell latest-wallet-full" :title="rowWallet(row)">
-                  <img class="latest-identicon" :src="ethPixelIcon(rowWallet(row) || row.id)" alt="" aria-hidden="true" />
+                  <img
+                    class="latest-identicon"
+                    :class="{ 'is-generated': !walletAvatarUrl(row) }"
+                    :src="walletAvatarSrc(row)"
+                    alt=""
+                    aria-hidden="true"
+                  />
                   {{ formatFullWallet(row) }}
                   <span v-if="rowGlobalIndex(index) === activeQueueGlobalIndex" class="latest-queue-spinner" aria-hidden="true"></span>
                 </span>
@@ -149,15 +150,23 @@ type QueueBalances = {
   todayContractChange?: string | number;
 };
 
+type WalletAvatarProfile = {
+  walletAddress?: string;
+  wallet_address?: string;
+  avatarUrl?: string;
+  avatar_url?: string;
+};
+
 const loading = ref(false);
 const queueRows = ref<QueueRow[]>([]);
 const queuedWalletSourceRows = ref<QueueRow[]>([]);
+const walletAvatarUrls = ref<Record<string, string>>({});
 const errorMessage = ref("");
 const walletSearchQuery = ref("");
 const currentPage = ref(1);
 const pageSize = 15;
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.2";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.2";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
 let latestRefreshTimer = 0;
 let activeQueueTimer = 0;
 let latestLoadedAt = 0;
@@ -165,6 +174,10 @@ const LATEST_REFRESH_INTERVAL_MS = 10_000;
 const ACTIVE_QUEUE_INTERVAL_MS = 5_000;
 const WSS_STALE_MS = 45_000;
 const PAID_PROFIT_REFRESH_INTERVAL_MS = 10_000;
+const WALLET_AVATAR_API = "https://api.supermtglobal.com/avatar";
+const WALLET_AVATARS_API = "https://api.supermtglobal.com/avatars";
+const loadingAvatarWallets = new Set<string>();
+const missingAvatarWallets = new Set<string>();
 const queuedWalletRows = computed(() => {
   const sourceRows = queuedWalletSourceRows.value;
   const productionRows = sourceRows.filter(isProductionQueueWallet);
@@ -187,8 +200,6 @@ const visiblePages = computed(() => {
   const end = Math.min(totalPages.value, start + maxButtons - 1);
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 });
-const totalUsdt = computed(() => queuedWalletRows.value.reduce((total, row) => total + usdtValue(row), 0));
-const formattedTotalUsdt = computed(() => (loading.value && queuedWalletRows.value.length === 0 ? "--" : `${formatDecimal2(totalUsdt.value)} USDT`));
 const paidProfitUsdt = ref(0);
 const paidProfitPayoutCount = ref(0);
 const paidProfitLoaded = ref(false);
@@ -198,14 +209,8 @@ const paidProfitTitle = computed(() =>
     ? t("latest.profitTitle", { amount: formatDecimal2(paidProfitUsdt.value), count: paidProfitPayoutCount.value.toLocaleString("en-US") })
     : t("latest.profitLoading"),
 );
-const totalUsdtPulse = ref(false);
 const paidProfitPulse = ref(false);
-const totalUsdtPulseTone = ref<"up" | "down">("up");
 const paidProfitPulseTone = ref<"up" | "down">("up");
-const totalUsdtPulseClass = computed(() => ({
-  "is-pulsing": totalUsdtPulse.value,
-  "is-down": totalUsdtPulseTone.value === "down",
-}));
 const paidProfitPulseClass = computed(() => ({
   "is-pulsing": paidProfitPulse.value,
   "is-down": paidProfitPulseTone.value === "down",
@@ -232,15 +237,8 @@ const wssStatusTitle = computed(() => {
     updatedAt,
   });
 });
-let totalUsdtPulseTimer = 0;
 let paidProfitPulseTimer = 0;
 let paidProfitRefreshTimer = 0;
-
-watch(totalUsdt, (value, oldValue) => {
-  if (value === oldValue) return;
-  totalUsdtPulseTone.value = value < oldValue ? "down" : "up";
-  totalUsdtPulseTimer = triggerNumberPulse(totalUsdtPulse, totalUsdtPulseTimer);
-});
 
 watch(paidProfitUsdt, (value, oldValue) => {
   if (value === oldValue) return;
@@ -260,6 +258,14 @@ watch(walletSearchQuery, () => {
   currentPage.value = 1;
   activeQueueGlobalIndex.value = 0;
 });
+
+watch(
+  pagedQueuedWalletRows,
+  (rows) => {
+    void loadWalletAvatars(rows);
+  },
+  { immediate: true },
+);
 
 onMounted(() => {
   if (props.active) startLatestLiquidationsView();
@@ -284,7 +290,6 @@ watch(
 
 onBeforeUnmount(() => {
   stopLatestLiquidationsView();
-  if (totalUsdtPulseTimer) window.clearTimeout(totalUsdtPulseTimer);
   if (paidProfitPulseTimer) window.clearTimeout(paidProfitPulseTimer);
 });
 
@@ -312,7 +317,7 @@ async function loadLatestLiquidations(): Promise<void> {
   loading.value = true;
   errorMessage.value = "";
   try {
-    const response = await fetch(`/api/latest-liquidations?t=${Date.now()}`, {
+    const response = await fetch(`/api/liq2/online-wallets?t=${Date.now()}`, {
       cache: "no-store",
       headers: latestHeaders(),
     });
@@ -526,6 +531,85 @@ function rowWallet(row: QueueRow) {
   return row.wallet || row.walletAddress || row.wallet_address || row.walletShort || "";
 }
 
+function walletAvatarUrl(row: QueueRow) {
+  const wallet = normalizeWalletAddress(rowWallet(row));
+  return wallet ? walletAvatarUrls.value[wallet] || "" : "";
+}
+
+function walletAvatarSrc(row: QueueRow) {
+  return walletAvatarUrl(row) || ethPixelIcon(rowWallet(row) || row.id);
+}
+
+async function loadWalletAvatars(rows: QueueRow[]) {
+  const wallets = [
+    ...new Set(
+      rows
+        .map((row) => normalizeWalletAddress(rowWallet(row)))
+        .filter((wallet): wallet is string => Boolean(wallet)),
+    ),
+  ].filter((wallet) => !walletAvatarUrls.value[wallet] && !missingAvatarWallets.has(wallet) && !loadingAvatarWallets.has(wallet));
+  if (wallets.length === 0) return;
+
+  wallets.forEach((wallet) => loadingAvatarWallets.add(wallet));
+  try {
+    const profiles = await fetchWalletAvatarProfiles(wallets);
+    const nextAvatarUrls = { ...walletAvatarUrls.value };
+    const loadedWallets = new Set<string>();
+
+    for (const profile of profiles) {
+      const wallet = normalizeWalletAddress(profile.walletAddress || profile.wallet_address || "");
+      const avatarUrl = profile.avatarUrl || profile.avatar_url || "";
+      if (!wallet || !avatarUrl) continue;
+      nextAvatarUrls[wallet] = avatarUrl;
+      loadedWallets.add(wallet);
+    }
+
+    walletAvatarUrls.value = nextAvatarUrls;
+    wallets.forEach((wallet) => {
+      if (!loadedWallets.has(wallet)) missingAvatarWallets.add(wallet);
+    });
+  } catch {
+    wallets.forEach((wallet) => missingAvatarWallets.add(wallet));
+  } finally {
+    wallets.forEach((wallet) => loadingAvatarWallets.delete(wallet));
+  }
+}
+
+async function fetchWalletAvatarProfiles(wallets: string[]): Promise<WalletAvatarProfile[]> {
+  try {
+    const response = await fetch(`${WALLET_AVATARS_API}?wallets=${encodeURIComponent(wallets.join(","))}`, {
+      cache: "no-store",
+      headers: { accept: "application/json" },
+    });
+    if (response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { items?: WalletAvatarProfile[] };
+      if (Array.isArray(payload.items)) return payload.items;
+    }
+  } catch {
+    // Fall back to the single-wallet avatar plugin below.
+  }
+
+  return Promise.all(wallets.map(fetchSingleWalletAvatarProfile));
+}
+
+async function fetchSingleWalletAvatarProfile(wallet: string): Promise<WalletAvatarProfile> {
+  const response = await fetch(WALLET_AVATAR_API, {
+    cache: "no-store",
+    headers: {
+      accept: "application/json",
+      "x-wallet-address": wallet,
+    },
+  });
+  if (!response.ok) return { walletAddress: wallet };
+  const payload = (await response.json().catch(() => ({}))) as WalletAvatarProfile;
+  return { ...payload, walletAddress: payload.walletAddress || payload.wallet_address || wallet };
+}
+
+function normalizeWalletAddress(value?: string) {
+  const wallet = value?.trim();
+  return wallet && /^0x[a-fA-F0-9]{40}$/.test(wallet) ? wallet.toLowerCase() : "";
+}
+
 function shortWallet(value?: string) {
   if (!value) return "";
   if (value.length <= 13) return value;
@@ -585,7 +669,7 @@ function formatDecimal2(value: number) {
   return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
-function triggerNumberPulse(target: typeof totalUsdtPulse, timer: number) {
+function triggerNumberPulse(target: typeof paidProfitPulse, timer: number) {
   if (timer) window.clearTimeout(timer);
   target.value = false;
   window.requestAnimationFrame(() => {

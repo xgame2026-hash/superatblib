@@ -2,11 +2,11 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
-const privateUrl = process.env.VERIFY_STATE_URL || "https://private.superarb.ai";
+const privateUrl = process.env.VERIFY_STATE_URL || "https://privateapi.superarb.ai";
 const shouldCheckRemote = process.env.VERIFY_PRIVATE_REMOTE === "1" || Boolean(process.env.VERIFY_STATE_URL);
 const forbiddenUiTerms = ["数据库"];
 const sourceDirs = ["src", "server"];
-const requiredVersion = "1.6.2";
+const requiredVersion = "1.6.3";
 const requiredProtocol = "liq2-cutover-20260624-v160";
 
 function fail(message) {
@@ -30,7 +30,7 @@ function walk(dir) {
 
 async function checkPrivateService() {
   if (!shouldCheckRemote) return;
-  const healthResponse = await fetch(`${privateUrl}/api/health`, { signal: AbortSignal.timeout(8_000) });
+  const healthResponse = await fetch(`${privateUrl}/health`, { signal: AbortSignal.timeout(8_000) });
   if (!healthResponse.ok) {
     fail(`private health HTTP ${healthResponse.status}`);
     return;
@@ -50,6 +50,7 @@ function checkClientContract() {
   const queueMiddleware = read("server/liquidation-queue-status-middleware.ts");
   const latestMiddleware = read("server/latest-liquidations-middleware.ts");
   const privateBootstrap = read("server/private-member-wallet-bootstrap.ts");
+  const settingsMiddleware = read("server/settings-middleware.ts");
   const stateApi = read("server/state-api-rust/src/main.rs");
   const profileMigration = read("server/state-api-rust/migrations/20260624_rebuild_liq2_user_profiles.sql");
   const packageJson = JSON.parse(read("package.json"));
@@ -87,8 +88,11 @@ function checkClientContract() {
   if (localStopIndex < 0 || localMissingIndex < 0) {
     fail("old heartbeat guards must run before any remote private write");
   }
-  if (!privateBootstrap.includes('"/api/internal/liq2-wallet/bootstrap"')) {
-    fail("private bootstrap must write through private.superarb.ai bootstrap endpoint");
+  if (!privateBootstrap.includes('"https://privateapi.superarb.ai"') || !privateBootstrap.includes('const DEFAULT_BOOTSTRAP_PATH = "/bootstrap"')) {
+    fail("private bootstrap must write through privateapi.superarb.ai /bootstrap endpoint");
+  }
+  if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/heartbeat") || !settingsMiddleware.includes("/api/settings/presence/start")) {
+    fail("liq2 client presence must refresh privateapi.superarb.ai /heartbeat");
   }
   for (const term of [
     "buildProfilePayload",
@@ -103,8 +107,8 @@ function checkClientContract() {
   ]) {
     if (!privateBootstrap.includes(term)) fail(`private bootstrap payload is missing ${term}`);
   }
-  if (!stateApi.includes('"/api/internal/liq2-wallet/bootstrap"') || !stateApi.includes("async fn liq2_wallet_bootstrap")) {
-    fail("private API must expose liq2 wallet bootstrap");
+  if (!stateApi.includes("async fn liq2_wallet_bootstrap")) {
+    fail("liq2 state API bootstrap handler is missing");
   }
   for (const field of [
     "system_id",

@@ -54,6 +54,18 @@
                 </button>
               </template>
             </el-input>
+            <template v-if="loginPasswordRequired">
+              <label class="field-label" for="login-password">{{ t("app.userPassword") }}</label>
+              <el-input
+                id="login-password"
+                v-model="loginPassword"
+                type="password"
+                size="large"
+                :placeholder="t('app.enterUserPassword')"
+                autocomplete="current-password"
+                :prefix-icon="Key"
+              />
+            </template>
             <div class="form-row">
               <el-checkbox v-model="rememberCode">{{ t("app.rememberAuthCode") }}</el-checkbox>
             </div>
@@ -139,7 +151,12 @@
             ref="liquidationViewRef"
             :active="activeView === 'analytics'"
             :startup-detection-mode="settingsForm.startupDetectionMode"
+            :settings-loaded="settingsLoaded"
+            :password-pending-start="passwordPendingStart"
+            :password-setup-required="passwordSetupRequired"
+            :pending-password="settingsForm.userPassword"
             @launch-sound="handleLaunchSound"
+            @password-confirmed="handlePasswordConfirmed"
             @refresh="refreshData"
           />
         </div>
@@ -181,7 +198,15 @@
         </template>
 
         <template v-else-if="activeView === 'txgraph'">
-          <TxGraphPanel :rpc-map="settingsForm.rpc" :initial-query="txGraphInitialQuery" />
+          <TxGraphPanel :initial-query="txGraphInitialQuery" />
+        </template>
+
+        <template v-else-if="activeView === 'swap'">
+          <SwapView />
+        </template>
+
+        <template v-else-if="activeView === 'slots'">
+          <SlotsView />
         </template>
 
         <template v-else-if="activeView === 'settings'">
@@ -190,6 +215,7 @@
             v-model:settings-section="settingsSection"
             :current-settings-section="currentSettingsSection"
             :settings-form="settingsForm"
+            :wallet-password-required="walletPasswordRequired"
             v-model:settings-secrets-visible="settingsSecretsVisible"
             :settings-save-dialog-visible="settingsSaveDialogVisible"
             :settings-save-state="settingsSaveState"
@@ -199,6 +225,8 @@
             :locale-options="localeOptions"
             :rpc-fields="rpcFields"
             :feed-fields="feedFields"
+            :alert-sound-fields="alertSoundFields"
+            :alert-sound-options="alertSoundOptions"
             @security-check="checkOfficialSettings"
             @save="saveSettings"
             @logout="logout"
@@ -215,6 +243,8 @@
         </span>
         <span>{{ t("app.local") }}: http://127.0.0.1:{{ runningDashboardPort }}</span>
       </footer>
+
+      <AlertSoundMonitor v-if="settingsLoaded" :alert-sounds="settingsForm.alertSounds" />
     </section>
 
     <el-dialog
@@ -307,7 +337,8 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, r
 import { ElMessage } from "element-plus";
 import { Hide, Key, View } from "@element-plus/icons-vue";
 import { useNews } from "./composables/useNews";
-import { getLocale, localeOptions, normalizeLocale, setLocale, t } from "./i18n";
+import { ALERT_SOUND_IDS, normalizeAlertSoundId, playAlertSound, type AlertSoundKey } from "./audio/alert-sounds";
+import { currentLocale, getLocale, localeOptions, normalizeLocale, setLocale, t } from "./i18n";
 import DashboardView from "./features/dashboard/DashboardView.vue";
 import LatestLiquidationsView from "./features/latest-liquidations/LatestLiquidationsView.vue";
 import LiquidationView from "./features/liquidation/LiquidationView.vue";
@@ -316,12 +347,16 @@ import LiquidEther from "./components/LiquidEther.vue";
 import NewsPanel from "./features/news/NewsPanel.vue";
 import SettingsView from "./features/settings/SettingsView.vue";
 import SidebarNav from "./features/sidebar/SidebarNav.vue";
+import SlotsView from "./features/slots/SlotsView.vue";
+import AlertSoundMonitor from "./features/alerts/AlertSoundMonitor.vue";
+import SwapView from "./features/swap/SwapView.vue";
 import miniLogoUrl from "./img/SuperARBmini.png";
 import aaveIcon from "./img/aave-token-round.svg";
 import arbIcon from "./img/arb.svg";
 import baseIcon from "./img/base.svg";
 import bnbIcon from "./img/bnb.svg";
 import controlIconUrl from "./img/control.svg";
+import compontIconUrl from "./img/compont.svg";
 import ethIcon from "./img/eth.svg";
 import infoIconUrl from "./img/info2.svg";
 import infoNewIconUrl from "./img/infonew.svg";
@@ -333,6 +368,7 @@ import polygonIcon from "./img/Polygon.svg";
 import queryIconUrl from "./img/sarchhash.svg";
 import saveIconUrl from "./img/save.svg";
 import arrowIconUrl from "./img/arrow.svg";
+import swapIconUrl from "./img/swap-line.svg";
 import footerLogoUrl from "./img/SuperARB_logo.png";
 import githubIconUrl from "./img/github.svg";
 import homeIconUrl from "./img/home.svg";
@@ -343,8 +379,8 @@ import notLaunchedAudioUrl from "./music/Notlaunched.mp3";
 type AuthMessageType = "success" | "warning" | "info" | "error";
 type SettingsSaveState = "saving" | "done" | "error";
 type GithubVersionState = "checking" | "latest" | "update" | "unconfigured" | "error";
-type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "settings";
-type SettingsSectionKey = "general" | "credentials" | "rpc" | "feeds";
+type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "swap" | "slots" | "settings";
+type SettingsSectionKey = "general" | "profile" | "credentials" | "rpc" | "feeds" | "alerts";
 type RpcKey = "ethereum" | "bnb" | "arbitrum" | "base" | "polygon";
 type FeedKey =
   | "snapshotApiUrl"
@@ -357,21 +393,29 @@ type QueueKey =
   | "heartbeatIntervalMs"
   | "txEventsUrl";
 
-const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.2";
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.2";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.2";
+const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.3";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
+// Fixed by protocol: authorization-code verification must use this endpoint.
+const LICENSE_CHECK_URL = "https://api.supermtnode.io/license/check";
 const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
+const GITHUB_UPDATE_PENDING_KEY = "liq2-github-update-pending";
+const GITHUB_VERSION_REFRESH_MS = 5 * 60 * 1000;
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.6.2";
+const appVersion = "1.6.3";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
 const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
-const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "settings"] satisfies ViewKey[];
-const settingsSectionKeys = ["general", "credentials", "rpc", "feeds"] satisfies SettingsSectionKey[];
+const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "swap", "slots", "settings"] satisfies ViewKey[];
+const settingsSectionKeys = ["general", "profile", "credentials", "rpc", "feeds", "alerts"] satisfies SettingsSectionKey[];
 const authCode = ref("");
+const loginPassword = ref("");
+const loginPasswordRequired = ref(false);
+const passwordSetupRequired = ref(false);
+const passwordPendingStart = ref(false);
 const showAuthCode = ref(false);
 const rememberCode = ref(true);
 const loginLoading = ref(false);
@@ -385,6 +429,8 @@ const settingsEnvPath = ref(".env");
 const settingsSaveDialogVisible = ref(false);
 const settingsSaveState = ref<SettingsSaveState>("saving");
 const settingsSaveMessage = ref(t("save.savingLong"));
+const settingsLoaded = ref(false);
+const savedPrivateKey = ref("");
 const settingsSecurityChecking = ref(false);
 const settingsSecurityRepairing = ref(false);
 const settingsSecurityDialogVisible = ref(false);
@@ -408,14 +454,18 @@ const navItems = computed(() => [
   { key: "liquidationTopic" as const, label: t("nav.liquidationTopic"), iconUrl: liqItemIconUrl },
   { key: "news" as const, label: t("nav.news"), iconUrl: infoIconUrl },
   { key: "txgraph" as const, label: t("nav.txgraph"), iconUrl: queryIconUrl },
+  { key: "swap" as const, label: t("nav.swap"), iconUrl: swapIconUrl },
+  { key: "slots" as const, label: t("nav.slots"), iconUrl: compontIconUrl },
   { key: "settings" as const, label: t("nav.settings"), iconUrl: setupIconUrl },
 ]);
 
 const settingsSections = computed(() => [
   { key: "general" as const, label: t("settings.general"), hint: t("settings.generalHint"), eyebrow: "General" },
+  { key: "profile" as const, label: t("settings.profile"), hint: t("settings.profileHint"), eyebrow: "Profile" },
   { key: "credentials" as const, label: t("settings.credentials"), hint: t("settings.credentialsHint"), eyebrow: "Credentials" },
   { key: "rpc" as const, label: t("settings.rpc"), hint: t("settings.rpcHint"), eyebrow: "Network" },
   { key: "feeds" as const, label: t("settings.feeds"), hint: t("settings.feedsHint"), eyebrow: "Feeds" },
+  { key: "alerts" as const, label: t("settings.alertSounds"), hint: t("settings.alertSoundsHint"), eyebrow: "Sounds" },
 ]);
 
 const rpcFields = [
@@ -431,7 +481,7 @@ const feedFields = [
     key: "snapshotApiUrl" as const,
     labelKey: "settings.snapshotApi",
     env: "LIQUIDATION_SNAPSHOT_API_URL",
-    placeholder: "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
+    placeholder: "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot",
   },
   {
     key: "snapshotToken" as const,
@@ -448,9 +498,19 @@ const feedFields = [
   },
 ];
 
+const alertSoundFields = [
+  { key: "rewardReceived" as const, labelKey: "settings.rewardReceivedSound", env: "REWARD_RECEIVED_SOUND" },
+  { key: "upgradeRequired" as const, labelKey: "settings.upgradeRequiredSound", env: "UPGRADE_REQUIRED_SOUND" },
+  { key: "upgradeCompleted" as const, labelKey: "settings.upgradeCompletedSound", env: "UPGRADE_COMPLETED_SOUND" },
+  { key: "slotAnchored" as const, labelKey: "settings.slotAnchoredSound", env: "SLOT_ANCHORED_SOUND" },
+];
+
+const alertSoundOptions = ALERT_SOUND_IDS;
+
 const settingsForm = reactive({
   privateKey: "",
   superMtNodeAppToken: "",
+  userPassword: "",
   fundingMode: "flash_loan",
   arbitrageIntensity: "conservative",
   credentialAuthMode: "single",
@@ -468,14 +528,25 @@ const settingsForm = reactive({
     polygon: "",
   } as Record<RpcKey, string>,
   feeds: {
-    snapshotApiUrl: "https://bsc.rpc.supermtnode.io/api/public/liquidations/snapshot",
+    snapshotApiUrl: "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot",
     snapshotToken: "",
     snapshotTimeoutMs: "8000",
   } as Record<FeedKey, string>,
+  alertSounds: {
+    rewardReceived: "sound_1",
+    upgradeRequired: "sound_2",
+    upgradeCompleted: "sound_3",
+    slotAnchored: "sound_4",
+  } as Record<AlertSoundKey, string>,
+  profile: {
+    nickname: "",
+    avatarUrl: "",
+    bio: "",
+  },
   queue: {
     wssUrl: "wss://private.superarb.ai/ws/liquidation-queue-v2",
     wssToken: "",
-    statusUrl: "https://private.superarb.ai/api/liq2/leaderboard",
+    statusUrl: "https://privateapi.superarb.ai/online-users",
     heartbeatIntervalMs: "1000",
     txEventsUrl: "",
   } as Record<QueueKey, string>,
@@ -489,6 +560,8 @@ const pageEyebrow = computed(() => {
   if (activeView.value === "settings") return t("hero.settings");
   if (activeView.value === "news") return t("hero.news");
   if (activeView.value === "txgraph") return t("hero.txgraph");
+  if (activeView.value === "swap") return t("hero.swap");
+  if (activeView.value === "slots") return t("hero.slots");
   if (activeView.value === "execution") return t("hero.execution");
   if (activeView.value === "analytics") return t("hero.analytics");
   if (activeView.value === "liquidationTopic") return t("hero.liquidationTopic");
@@ -503,13 +576,16 @@ const currentSettingsSection = computed(() => {
 const dashboardPort = computed(() => normalizeDashboardPort(settingsForm.dashboardPort));
 const runningDashboardPort = computed(() => runtimeDashboardPort(dashboardPort.value));
 const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");
+const walletPasswordRequired = computed(() => {
+  return passwordSetupRequired.value || (loginPasswordRequired.value && normalizedPrivateKey(settingsForm.privateKey) !== normalizedPrivateKey(savedPrivateKey.value));
+});
 const settingsSaveTitle = computed(() => {
   if (settingsSaveState.value === "done") return t("save.doneTitle");
   if (settingsSaveState.value === "error") return t("save.errorTitle");
   return t("save.inProgress");
 });
 
-const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"];
+const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "LIQ2_PASSWORD_CONFIGURED", "BNB_RPC_URL"];
 const hiddenPassingSecurityKeys = [
   "SECURE_UPLOAD_STATUS",
 ];
@@ -555,6 +631,7 @@ const metrics = ref([
 ]);
 
 let notLaunchedReminderTimer = 0;
+let githubVersionRefreshTimer = 0;
 
 onMounted(() => {
   clearLegacyAuthCache();
@@ -562,10 +639,15 @@ onMounted(() => {
   isAuthenticated.value = sessionStorage.getItem(AUTH_STORAGE_KEY) === "authorized";
   applyViewFromUrl();
   syncViewHash(activeView.value);
-  loadSettings({ syncRuntimePort: true });
-  void loadGithubVersion();
+  void loadSettings({ syncRuntimePort: true }).finally(() => {
+    settingsLoaded.value = true;
+    void loadGithubVersion();
+  });
+  githubVersionRefreshTimer = window.setInterval(() => void loadGithubVersion(), GITHUB_VERSION_REFRESH_MS);
   document.addEventListener("pointerdown", closeGithubMenuOnOutside);
   window.addEventListener("hashchange", applyViewFromUrl);
+  window.addEventListener("pagehide", handlePresencePageExit);
+  window.addEventListener("beforeunload", handlePresencePageExit);
   if (isAuthenticated.value) {
     void loadNews();
   }
@@ -573,8 +655,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopNotLaunchedReminder();
+  if (githubVersionRefreshTimer) window.clearInterval(githubVersionRefreshTimer);
   document.removeEventListener("pointerdown", closeGithubMenuOnOutside);
   window.removeEventListener("hashchange", applyViewFromUrl);
+  window.removeEventListener("pagehide", handlePresencePageExit);
+  window.removeEventListener("beforeunload", handlePresencePageExit);
 });
 
 watch(launchSoundEnabled, (enabled) => {
@@ -586,6 +671,10 @@ watch(isAuthenticated, async (authorized) => {
   if (authorized) {
     void loadNews();
   }
+});
+
+watch(currentLocale, () => {
+  if (isAuthenticated.value) void loadNews();
 });
 
 watch(activeView, (view) => {
@@ -629,6 +718,8 @@ function normalizeViewAlias(value: string | null): string {
   const normalized = (value || "").trim().toLowerCase();
   if (["leaderboard", "ranking", "rank", "latest", "liquidations", "latest-liquidations"].includes(normalized)) return "execution";
   if (["control", "dashboard", "analytics"].includes(normalized)) return "analytics";
+  if (["exchange", "swap", "兑换"].includes(normalized)) return "swap";
+  if (["slots", "slot", "orders", "order", "卡槽", "订单"].includes(normalized)) return "slots";
   return normalized;
 }
 
@@ -694,7 +785,7 @@ async function submitLogin() {
 
   loginLoading.value = true;
   try {
-    const response = await fetch("/api/license/check", {
+    const response = await fetch(LICENSE_CHECK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
@@ -710,6 +801,21 @@ async function submitLogin() {
       throw new Error(mapAuthError(payload.error ?? payload.status ?? `HTTP ${response.status}`));
     }
 
+    const passwordResponse = await fetchSettingsApi("/api/settings/login-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: loginPassword.value }),
+    });
+    const passwordPayload = (await passwordResponse.json().catch(() => ({}))) as { error?: string; passwordSetupRequired?: boolean; message?: string };
+    if (!passwordResponse.ok) {
+      throw new Error(passwordPayload.error ?? t("app.passwordVerifyFailed"));
+    }
+    if (passwordPayload.passwordSetupRequired) {
+      passwordSetupRequired.value = true;
+      loginPasswordRequired.value = false;
+      ElMessage.warning(passwordPayload.message ?? "当前钱包尚未设置密码，请立即在设置中完成设置。");
+    }
+
     if (rememberCode.value) {
       localStorage.setItem(AUTH_CODE_KEY, code);
     } else {
@@ -717,6 +823,7 @@ async function submitLogin() {
     }
     sessionStorage.setItem(AUTH_CODE_SESSION_KEY, code);
     sessionStorage.setItem(AUTH_STORAGE_KEY, "authorized");
+    loginPassword.value = "";
     isAuthenticated.value = true;
     ElMessage.success(t("auth.success"));
   } catch (error) {
@@ -728,16 +835,46 @@ async function submitLogin() {
 }
 
 function logout() {
+  void stopPresenceHeartbeat();
   localStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_CODE_SESSION_KEY);
+  loginPassword.value = "";
   isAuthenticated.value = false;
   githubMenuOpen.value = false;
   ElMessage.success(t("auth.loggedOut"));
 }
 
+async function startPresenceHeartbeat() {
+  try {
+    const response = await fetchSettingsApi("/api/settings/presence/start", { method: "POST" });
+    if (!response.ok) console.warn("[liq2] privateapi presence heartbeat did not start", response.status);
+  } catch (error) {
+    console.warn("[liq2] privateapi presence heartbeat unavailable", error);
+  }
+}
+
+async function stopPresenceHeartbeat() {
+  try {
+    await fetchSettingsApi("/api/settings/presence/stop", { method: "POST", keepalive: true });
+  } catch {
+    // The server-side 90-second timeout is the fallback when logout cannot reach the local API.
+  }
+}
+
+function handlePresencePageExit() {
+  if (isAuthenticated.value) void stopPresenceHeartbeat();
+}
+
 function mapAuthError(error: string) {
   const normalized = error.toLowerCase();
+  if (
+    normalized.includes("license_service_unavailable") ||
+    normalized.includes("bad gateway") ||
+    /\bhttp\s+(?:5\d\d)\b/.test(normalized)
+  ) {
+    return t("auth.serviceUnavailable");
+  }
   if (normalized.includes("expired") || normalized.includes("inactive") || normalized.includes("revoked")) {
     return t("auth.expired");
   }
@@ -817,8 +954,14 @@ async function loadSettings(options: { syncRuntimePort?: boolean } = {}) {
       path?: string;
       env?: Record<string, string>;
       example?: Record<string, string>;
+      passwordRequired?: boolean;
+      passwordSetupRequired?: boolean;
+      passwordPendingStart?: boolean;
     };
     settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
+    loginPasswordRequired.value = Boolean(payload.passwordRequired);
+    passwordSetupRequired.value = Boolean(payload.passwordSetupRequired);
+    passwordPendingStart.value = Boolean(payload.passwordPendingStart);
     applyEnvSettings({ ...payload.example, ...payload.env }, options);
   } catch {
     // Settings API is available in the local dashboard dev server.
@@ -826,6 +969,7 @@ async function loadSettings(options: { syncRuntimePort?: boolean } = {}) {
 }
 
 async function loadGithubVersion() {
+  const previousGithubVersionState = githubVersionState.value;
   githubVersionState.value = "checking";
   githubVersionMessage.value = t("github.checking");
   try {
@@ -843,8 +987,16 @@ async function loadGithubVersion() {
     githubLatestVersion.value = payload.latestVersion || appVersion;
     githubLatestCommit.value = payload.latestCommit || "";
     const isLatest = payload.isLatest ?? githubIsLatestBuild.value;
-    githubVersionState.value = payload.configured === false ? "unconfigured" : isLatest ? "latest" : "update";
+    const nextState: GithubVersionState = payload.configured === false ? "unconfigured" : isLatest ? "latest" : "update";
+    const updateWasPending = localStorage.getItem(GITHUB_UPDATE_PENDING_KEY) === "true";
+    const updateJustFound = nextState === "update" && previousGithubVersionState !== "update";
+    const updateJustCompleted = nextState === "latest" && updateWasPending;
+    githubVersionState.value = nextState;
     githubVersionMessage.value = payload.message ?? "";
+    if (nextState === "update") localStorage.setItem(GITHUB_UPDATE_PENDING_KEY, "true");
+    if (nextState === "latest") localStorage.removeItem(GITHUB_UPDATE_PENDING_KEY);
+    if (updateJustFound) playConfiguredAlertSound("upgradeRequired");
+    if (updateJustCompleted) playConfiguredAlertSound("upgradeCompleted");
   } catch (error) {
     githubLatestVersion.value = appVersion;
     githubLatestCommit.value = "";
@@ -853,26 +1005,33 @@ async function loadGithubVersion() {
   }
 }
 
+function playConfiguredAlertSound(key: AlertSoundKey) {
+  playAlertSound(key, settingsForm.alertSounds[key]);
+}
+
 async function saveSettings() {
   settingsSaveState.value = "saving";
   settingsSaveMessage.value = t("save.saving");
   settingsSaveDialogVisible.value = true;
 
   try {
+    if (walletPasswordRequired.value && !settingsForm.userPassword) {
+      throw new Error(t("password.walletChangeRequired"));
+    }
     const response = await fetchSettingsApi("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ env: generateEnvText() }),
+      body: JSON.stringify({ env: generateEnvText(), password: settingsForm.userPassword }),
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(payload.error ?? t("save.failed"));
     }
-    const payload = (await response.json().catch(() => ({}))) as { path?: string };
+    const payload = (await response.json().catch(() => ({}))) as { path?: string; message?: string };
     settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
     await loadSettings();
     settingsSaveState.value = "done";
-    settingsSaveMessage.value = t("save.doneMessage");
+    settingsSaveMessage.value = payload.message ?? t("save.doneMessage");
     window.setTimeout(() => {
       if (settingsSaveState.value === "done") {
         settingsSaveDialogVisible.value = false;
@@ -882,6 +1041,12 @@ async function saveSettings() {
     settingsSaveState.value = "error";
     settingsSaveMessage.value = error instanceof Error ? error.message : t("save.failed");
   }
+}
+
+async function handlePasswordConfirmed() {
+  settingsForm.userPassword = "";
+  await loadSettings();
+  ElMessage.success(t("password.confirmed"));
 }
 
 type SecurityCheckItem = {
@@ -900,7 +1065,7 @@ async function checkOfficialSettings() {
     const response = await fetchSettingsApi("/api/settings/security-check", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeadersForSettings() },
-      body: JSON.stringify({ env: generateEnvText() }),
+      body: JSON.stringify({ env: generateEnvText(), password: settingsForm.userPassword }),
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -984,6 +1149,7 @@ function formatSecurityCheckedAt(value?: string) {
 function formatSecurityLabel(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return t("security.walletAddressLabel");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return t("security.serviceTokenLabel");
+  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return t("app.userPassword");
   if (item.key === "BNB_RPC_URL") return t("security.bnbRpcLabel");
   if (item.key === "LIQUIDATION_SNAPSHOT_API_URL") return t("security.snapshotApiLabel");
   if (item.key === "AUTH_CODE") return t("security.authCode");
@@ -1001,6 +1167,7 @@ function formatSecurityScope(item: SecurityCheckItem) {
 function formatSecurityKey(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return "WALLET_ADDRESS";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return "SERVICE_TOKEN";
+  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return "USER_PASSWORD";
   if (item.key === "AUTH_CODE") return "AUTH_CODE";
   if (item.key === "SECURE_UPLOAD_STATUS") return "SECURE_SYNC";
   return item.key;
@@ -1013,6 +1180,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
   if (item.key === "SUPERMTNODE_APP_TOKEN") {
     return item.ok ? t("security.configured") : t("security.notConfigured");
   }
+  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return item.ok ? t("security.configured") : t("security.notConfigured");
   if (item.key === "AUTH_CODE") return item.ok ? t("security.verified") : t("security.verifyFailed");
   if (item.ok && item.message.includes("运行时不使用该备用项")) return t("security.checkPassed");
   if (item.key === "SECURE_UPLOAD_STATUS") return item.value;
@@ -1022,6 +1190,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
 function formatSecurityMessage(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? t("security.privateKeyOk") : t("security.privateKeyMissing");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? t("security.tokenOk") : t("security.tokenMissing");
+  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return localizePasswordSecurityText(item.message);
   if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
   if (item.ok && item.message.includes("运行时不使用该备用项")) return t("security.checkPassed");
   if (item.key === "SECURE_UPLOAD_STATUS") return localizeSecurityText(item.message);
@@ -1031,6 +1200,7 @@ function formatSecurityMessage(item: SecurityCheckItem) {
 function formatSecuritySummary(item: SecurityCheckItem) {
   if (item.key === "PRIVATE_KEY") return item.ok ? t("security.walletAddress", { address: shortAddress(item.value) }) : t("security.localMissing");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? formatTokenSecuritySummary(item) : localizeSecurityText(item.message);
+  if (item.key === "LIQ2_PASSWORD_CONFIGURED") return localizePasswordSecurityText(item.message);
   if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
   if (item.key === "BNB_RPC_URL") return item.ok || item.value ? formatRpcSecuritySummary(item) : t("security.localMissing");
   if (item.key === "SECURE_UPLOAD_STATUS") return localizeSecurityText(item.message);
@@ -1049,9 +1219,9 @@ function formatTokenSecuritySummary(item: SecurityCheckItem) {
 
 function formatRpcSecuritySummary(item: SecurityCheckItem) {
   const message = item.message || item.value || "";
-  const usage = message.match(/用量\s*(\d+)\s*\/\s*(\d+).*剩余\s*(\d+)/);
-  if (usage) {
-    return t("security.rpcHealthyUsage", { used: usage[1], total: usage[2], remaining: usage[3] });
+  const remaining = message.match(/剩余\s*(\d+)/);
+  if (remaining) {
+    return t("security.rpcHealthyUsage", { remaining: remaining[1] });
   }
   if (/RPC 连接正常|RPC.*normal|connected/i.test(message)) return t("security.rpcHealthy");
   return localizeSecurityText(message);
@@ -1067,6 +1237,17 @@ function localizeSecurityText(value?: string) {
   return text;
 }
 
+function localizePasswordSecurityText(value?: string) {
+  const key = String(value || "").trim();
+  const messageKeys: Record<string, string> = {
+    password_first_use: "security.passwordFirstUse",
+    password_configured: "security.passwordConfigured",
+    password_pending_start: "security.passwordPendingStart",
+    password_setup_required: "security.passwordSetupRequired",
+  };
+  return messageKeys[key] ? t(messageKeys[key]) : localizeSecurityText(key);
+}
+
 function shortAddress(value: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(value) ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
 }
@@ -1074,7 +1255,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.6.2 internal settings.",
+    "# Generated from SuperARB 1.6.3 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",
@@ -1099,6 +1280,13 @@ function generateEnvText() {
     `DASHBOARD_PORT=${normalizeDashboardPort(settingsForm.dashboardPort)}`,
     `LAUNCH_SOUND_ENABLED=${settingsForm.launchSoundMode}`,
     `DASHBOARD_LANGUAGE=${settingsForm.language}`,
+    `REWARD_RECEIVED_SOUND=${settingsForm.alertSounds.rewardReceived}`,
+    `UPGRADE_REQUIRED_SOUND=${settingsForm.alertSounds.upgradeRequired}`,
+    `UPGRADE_COMPLETED_SOUND=${settingsForm.alertSounds.upgradeCompleted}`,
+    `SLOT_ANCHORED_SOUND=${settingsForm.alertSounds.slotAnchored}`,
+    `LIQ2_NICKNAME=${singleLineEnvValue(settingsForm.profile.nickname)}`,
+    `LIQ2_AVATAR_URL=${singleLineEnvValue(settingsForm.profile.avatarUrl)}`,
+    `LIQ2_BIO=${singleLineEnvValue(settingsForm.profile.bio)}`,
     "",
     "# -----------------------------------------------------------------------------",
     "# 4. RPC Endpoints",
@@ -1119,10 +1307,19 @@ function generateEnvText() {
   return `${lines.join("\n")}\n`;
 }
 
+function singleLineEnvValue(value: unknown) {
+  return String(value ?? "").replace(/[\r\n]+/g, " ").trim();
+}
+
+function normalizedPrivateKey(value: string) {
+  return value.trim().replace(/^0x/i, "").toLowerCase();
+}
+
 function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePort?: boolean } = {}) {
   const envAuthCode = (env.AUTH_CODE || env.SUPERARB_AUTH_CODE || env.LICENSE_CODE || "").trim().toUpperCase();
   if (!authCode.value.trim() && envAuthCode) authCode.value = envAuthCode;
   settingsForm.privateKey = env.PRIVATE_KEY ?? settingsForm.privateKey;
+  if (env.PRIVATE_KEY !== undefined) savedPrivateKey.value = env.PRIVATE_KEY;
   settingsForm.language = normalizeLocale(env.DASHBOARD_LANGUAGE ?? settingsForm.language);
   settingsForm.fundingMode = env.FUNDING_MODE ?? settingsForm.fundingMode;
   settingsForm.arbitrageIntensity = env.ARBITRAGE_INTENSITY ?? settingsForm.arbitrageIntensity;
@@ -1141,6 +1338,13 @@ function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePor
   settingsForm.feeds.snapshotApiUrl = env.LIQUIDATION_SNAPSHOT_API_URL ?? settingsForm.feeds.snapshotApiUrl;
   settingsForm.feeds.snapshotToken = env.LIQUIDATION_SNAPSHOT_TOKEN ?? settingsForm.feeds.snapshotToken;
   settingsForm.feeds.snapshotTimeoutMs = env.LIQUIDATION_SNAPSHOT_TIMEOUT_MS ?? settingsForm.feeds.snapshotTimeoutMs;
+  settingsForm.alertSounds.rewardReceived = normalizeAlertSoundId(env.REWARD_RECEIVED_SOUND ?? settingsForm.alertSounds.rewardReceived);
+  settingsForm.alertSounds.upgradeRequired = normalizeAlertSoundId(env.UPGRADE_REQUIRED_SOUND ?? settingsForm.alertSounds.upgradeRequired);
+  settingsForm.alertSounds.upgradeCompleted = normalizeAlertSoundId(env.UPGRADE_COMPLETED_SOUND ?? settingsForm.alertSounds.upgradeCompleted);
+  settingsForm.alertSounds.slotAnchored = normalizeAlertSoundId(env.SLOT_ANCHORED_SOUND ?? settingsForm.alertSounds.slotAnchored);
+  settingsForm.profile.nickname = env.LIQ2_NICKNAME ?? env.NICKNAME ?? settingsForm.profile.nickname;
+  settingsForm.profile.avatarUrl = env.LIQ2_AVATAR_URL ?? env.AVATAR_URL ?? settingsForm.profile.avatarUrl;
+  settingsForm.profile.bio = env.LIQ2_BIO ?? env.BIO ?? settingsForm.profile.bio;
   settingsForm.superMtNodeAppToken = env.SUPERMTNODE_APP_TOKEN ?? settingsForm.superMtNodeAppToken;
 }
 

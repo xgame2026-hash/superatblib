@@ -17,13 +17,13 @@ const CLIENT_INSTANCE_FILE = resolve(process.cwd(), ".superarb/client-instance-i
 const TX_CREDENTIAL_SYNC_STATE_FILE = resolve(process.cwd(), ".superarb/tx-credential-sync.json");
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
-const DEFAULT_QUEUE_STATUS_API_URL = "https://private.superarb.ai/api/liq2/leaderboard";
-const DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL = "https://private.superarb.ai/api/internal/liq2-wallet/bootstrap";
+const DEFAULT_QUEUE_STATUS_API_URL = "https://privateapi.superarb.ai/online-users";
+const DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL = "https://privateapi.superarb.ai/bootstrap";
 const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.6.2";
+const CLIENT_VERSION = "1.6.3";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
@@ -51,6 +51,9 @@ type QueueStatusPayload = {
   queues?: unknown;
   queuedWallets?: unknown;
   queued_wallets?: unknown;
+  onlineUsers?: unknown;
+  online_users?: unknown;
+  users?: unknown;
   rotation?: unknown;
   rotationPolicy?: unknown;
   rotation_policy?: unknown;
@@ -456,7 +459,6 @@ async function registerQueueStatus(req: IncomingMessage) {
     rpc_url: meteredRpcUrl,
     rpcToken: env.SUPERMTNODE_APP_TOKEN?.trim() || undefined,
     rpc_token: env.SUPERMTNODE_APP_TOKEN?.trim() || undefined,
-    password: env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_PASSWORD?.trim() || undefined,
     walletUsdt: env.WALLET_USDT_BALANCE?.trim() || undefined,
     wallet_usdt: env.WALLET_USDT_BALANCE?.trim() || undefined,
     nickname: env.LIQ2_NICKNAME?.trim() || env.NICKNAME?.trim() || undefined,
@@ -827,12 +829,14 @@ async function fetchStatusPayload(statusUrl: string, env: Record<string, string>
   if (endpointId && !url.searchParams.has("endpointId")) url.searchParams.set("endpointId", endpointId);
 
   const authCode = requestAuthCode(req, env);
+  const appToken = firstUsableToken(env.SUPERMTNODE_APP_TOKEN, env.LIQUIDATION_QUEUE_PUBLIC_TOKEN, env.LIQUIDATION_SNAPSHOT_TOKEN);
   const headers: Record<string, string> = { accept: "application/json" };
   if (authCode) {
     headers["x-supermtnode-auth-code"] = authCode;
-  } else {
-    const token = env.LIQUIDATION_QUEUE_PUBLIC_TOKEN?.trim() || env.LIQUIDATION_SNAPSHOT_TOKEN?.trim();
-    if (token) headers.authorization = `Bearer ${token}`;
+  }
+  if (appToken) {
+    headers.authorization = `Bearer ${appToken}`;
+    headers["x-supermtnode-app-token"] = appToken;
   }
 
   const response = await fetch(url, {
@@ -867,7 +871,7 @@ function buildQueueStatusResponse(payload: QueueStatusPayload) {
 
   return {
     ok: true,
-    source: stringValue(sourcePayload.source) ?? "private.superarb.ai/liq2_user_profiles",
+    source: stringValue(sourcePayload.source) ?? "privateapi.superarb.ai/online-users",
     queueTransport: stringValue(sourcePayload.queueTransport, sourcePayload.queue_transport) ?? "private-global",
     queueEnabled: rows.some((row) => row.inQueue || row.participantCount > 0),
     rotationPolicy: stringValue(sourcePayload.rotationPolicy, sourcePayload.rotation_policy, sourcePayload.rotation) ?? "round_robin",
@@ -914,7 +918,7 @@ function readQueueStatusRows(payload: QueueStatusPayload, updatedAt: string): Qu
 }
 
 function readPrivateLeaderboardQueueStatusRows(payload: QueueStatusPayload, updatedAt: string): QueueStatusRow[] {
-  const queuedWallets = payload.queuedWallets ?? payload.queued_wallets;
+  const queuedWallets = payload.onlineUsers ?? payload.online_users ?? payload.users ?? payload.queuedWallets ?? payload.queued_wallets;
   if (!Array.isArray(queuedWallets)) return [];
 
   const counts = new Map<ChainKey, number>();
@@ -1764,12 +1768,7 @@ async function fetchRemoteQueueRows(env: Record<string, string>, req: IncomingMe
 }
 
 function remoteQueueStatusUrl(env: Record<string, string>): string {
-  const privateMemberBase = env.LIQ2_PRIVATE_MEMBER_API_URL?.trim()?.replace(/\/+$/, "");
-  return (
-    env.LIQUIDATION_QUEUE_WSS_STATUS_URL?.trim() ||
-    env.PRIVATE_MEMBER_LIQUIDATION_QUEUE_STATUS_URL?.trim() ||
-    (privateMemberBase ? `${privateMemberBase}/api/liq2/leaderboard` : "https://private.superarb.ai/api/liq2/leaderboard")
-  );
+  return env.LIQ2_ONLINE_USERS_API_URL?.trim() || DEFAULT_QUEUE_STATUS_API_URL;
 }
 
 function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
@@ -1797,7 +1796,7 @@ function unwrapRemoteQueuePayload(payload: unknown): Record<string, unknown> {
 }
 
 function readRemoteQueueRows(payload: Record<string, unknown>): Record<string, unknown>[] {
-  const source = payload.queuedWallets ?? payload.queued_wallets ?? payload.items ?? payload.queue ?? payload.queues ?? payload.rows;
+  const source = payload.onlineUsers ?? payload.online_users ?? payload.users ?? payload.queuedWallets ?? payload.queued_wallets ?? payload.items ?? payload.queue ?? payload.queues ?? payload.rows;
   if (Array.isArray(source)) return source.filter(isRecord);
   if (isRecord(source)) return Object.values(source).flatMap((value) => (Array.isArray(value) ? value.filter(isRecord) : isRecord(value) ? [value] : []));
   const nested = [payload.chainQueues, payload.chain_queues, payload.markets, payload.data].filter(isRecord);
@@ -1807,7 +1806,7 @@ function readRemoteQueueRows(payload: Record<string, unknown>): Record<string, u
 function readRemoteQueueRowsFromUnknown(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) return value.flatMap(readRemoteQueueRowsFromUnknown);
   if (!isRecord(value)) return [];
-  const direct = value.queuedWallets ?? value.queued_wallets ?? value.items ?? value.queue ?? value.queues ?? value.rows ?? value.members;
+  const direct = value.onlineUsers ?? value.online_users ?? value.users ?? value.queuedWallets ?? value.queued_wallets ?? value.items ?? value.queue ?? value.queues ?? value.rows ?? value.members;
   if (Array.isArray(direct)) return direct.filter(isRecord);
   if (isRecord(direct)) return Object.values(direct).flatMap(readRemoteQueueRowsFromUnknown);
   if (remoteQueueWallet(value) || stringValue(value.participantId, value.participant_id, value.queueMemberKey, value.queue_member_key, value.dedupeKey, value.dedupe_key, value.id)) return [value];
