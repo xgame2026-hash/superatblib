@@ -168,6 +168,17 @@
   font-weight: 560;
 }
 
+.latest-service-notice {
+  margin: 12px 0 16px;
+  border: 1px solid rgba(245, 165, 36, 0.38);
+  border-radius: 8px;
+  background: rgba(120, 73, 7, 0.16);
+  color: #fde68a;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 560;
+}
+
 .latest-table-shell {
   overflow: hidden;
   border: 1px solid rgba(126, 73, 190, 0.22);

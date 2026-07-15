@@ -164,6 +164,7 @@
         <div v-show="activeView === 'execution'" :hidden="activeView !== 'execution'">
           <LatestLiquidationsView
             :active="activeView === 'execution'"
+            :configured="privateDataReady"
             @open-tx-graph="openTxGraphFromLiquidation"
           />
         </div>
@@ -206,7 +207,7 @@
         </template>
 
         <template v-else-if="activeView === 'slots'">
-          <SlotsView />
+          <SlotsView :configured="privateDataReady" />
         </template>
 
         <template v-else-if="activeView === 'settings'">
@@ -244,7 +245,7 @@
         <span>{{ t("app.local") }}: http://127.0.0.1:{{ runningDashboardPort }}</span>
       </footer>
 
-      <AlertSoundMonitor v-if="settingsLoaded" :alert-sounds="settingsForm.alertSounds" />
+      <AlertSoundMonitor v-if="privateDataReady" :alert-sounds="settingsForm.alertSounds" />
     </section>
 
     <el-dialog
@@ -578,6 +579,12 @@ const runningDashboardPort = computed(() => runtimeDashboardPort(dashboardPort.v
 const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disabled");
 const walletPasswordRequired = computed(() => {
   return passwordSetupRequired.value || (loginPasswordRequired.value && normalizedPrivateKey(settingsForm.privateKey) !== normalizedPrivateKey(savedPrivateKey.value));
+});
+const privateDataReady = computed(() => {
+  return isAuthenticated.value
+    && Boolean(authCode.value.trim())
+    && /^(?:0x)?[a-fA-F0-9]{64}$/.test(settingsForm.privateKey.trim())
+    && Boolean(settingsForm.superMtNodeAppToken.trim());
 });
 const settingsSaveTitle = computed(() => {
   if (settingsSaveState.value === "done") return t("save.doneTitle");

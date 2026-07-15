@@ -27,7 +27,8 @@
         </div>
       </div>
 
-      <div v-if="errorMessage" class="latest-service-error">{{ errorMessage }}</div>
+      <div v-if="!configured" class="latest-service-notice">{{ t("app.privateDataSetupRequired") }}</div>
+      <div v-else-if="errorMessage" class="latest-service-error">{{ errorMessage }}</div>
 
       <div class="latest-table-shell">
         <table class="latest-table">
@@ -94,8 +95,9 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { t } from "../../i18n";
 
-const props = withDefaults(defineProps<{ active?: boolean }>(), {
+const props = withDefaults(defineProps<{ active?: boolean; configured?: boolean }>(), {
   active: true,
+  configured: true,
 });
 
 type QueueRow = {
@@ -278,9 +280,9 @@ onActivated(() => {
 onDeactivated(() => stopLatestLiquidationsView());
 
 watch(
-  () => props.active,
-  (active) => {
-    if (active) {
+  () => [props.active, props.configured],
+  ([active, configured]) => {
+    if (active && configured) {
       startLatestLiquidationsView();
       return;
     }
@@ -294,6 +296,10 @@ onBeforeUnmount(() => {
 });
 
 function startLatestLiquidationsView(): void {
+  if (!props.configured) {
+    stopLatestLiquidationsView();
+    return;
+  }
   if (!latestRefreshTimer) latestRefreshTimer = window.setInterval(loadLatestLiquidations, LATEST_REFRESH_INTERVAL_MS);
   if (!activeQueueTimer) activeQueueTimer = window.setInterval(advanceActiveQueueRow, ACTIVE_QUEUE_INTERVAL_MS);
   if (!paidProfitRefreshTimer) paidProfitRefreshTimer = window.setInterval(loadPaidProfitSummary, PAID_PROFIT_REFRESH_INTERVAL_MS);
@@ -313,6 +319,7 @@ function stopLatestLiquidationsView(): void {
 }
 
 async function loadLatestLiquidations(): Promise<void> {
+  if (!props.configured) return;
   if (loading.value) return;
   loading.value = true;
   errorMessage.value = "";
@@ -358,6 +365,7 @@ async function loadLatestLiquidations(): Promise<void> {
 }
 
 async function loadPaidProfitSummary(): Promise<void> {
+  if (!props.configured) return;
   try {
     const response = await fetch(`/api/liq2/paid-profit?t=${Date.now()}`, {
       cache: "no-store",

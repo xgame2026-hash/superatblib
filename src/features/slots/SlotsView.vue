@@ -63,7 +63,11 @@
     </div>
     -->
 
-    <div v-if="errorMessage" class="slots-error">
+    <div v-if="!configured" class="slots-error slots-setup-notice">
+      <strong>{{ t("app.privateDataSetupRequired") }}</strong>
+    </div>
+
+    <div v-else-if="errorMessage" class="slots-error">
       <strong>{{ t("slots.loadFailed") }}</strong>
       <span>{{ errorMessage }}</span>
       <button type="button" @click="loadOrders(false)">{{ t("slots.retry") }}</button>
@@ -264,6 +268,10 @@ type SlotsPayload = {
   error?: string;
 };
 
+const props = withDefaults(defineProps<{ configured?: boolean }>(), {
+  configured: true,
+});
+
 const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
 const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
 const PAGE_SIZE = 9;
@@ -315,16 +323,38 @@ watch(totalPages, (pages) => {
 });
 
 onMounted(() => {
-  void loadOrders(false);
-  refreshTimer = window.setInterval(() => void loadOrders(true), REFRESH_INTERVAL_MS);
+  startOrdersPolling();
 });
 
 onBeforeUnmount(() => {
-  if (refreshTimer) window.clearInterval(refreshTimer);
-  loadController?.abort();
+  stopOrdersPolling();
 });
 
+watch(
+  () => props.configured,
+  (configured) => {
+    if (configured) {
+      startOrdersPolling();
+      return;
+    }
+    stopOrdersPolling();
+  },
+);
+
+function startOrdersPolling() {
+  if (!props.configured) return;
+  if (!refreshTimer) refreshTimer = window.setInterval(() => void loadOrders(true), REFRESH_INTERVAL_MS);
+  void loadOrders(false);
+}
+
+function stopOrdersPolling() {
+  if (refreshTimer) window.clearInterval(refreshTimer);
+  refreshTimer = 0;
+  loadController?.abort();
+}
+
 async function loadOrders(silent: boolean) {
+  if (!props.configured) return;
   if (requestInFlight && silent) return;
   const sequence = ++loadSequence;
   loadController?.abort();

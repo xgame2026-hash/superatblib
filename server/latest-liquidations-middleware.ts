@@ -325,6 +325,21 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
  */
 async function fetchLiq2OnlineWallets(req: IncomingMessage) {
   const env = readEnv();
+  if (!privateMemberQueueStatusToken(env)) {
+    const updatedAt = new Date().toISOString();
+    return {
+      ok: true,
+      configurationRequired: true,
+      source: "privateapi.superarb.ai/online-users",
+      queueTransport: "unconfigured",
+      queueSource: "local configuration required",
+      queueParticipantCount: 0,
+      queueSubscribers: 0,
+      queueUpdatedAt: updatedAt,
+      updatedAt,
+      queuedWallets: [],
+    };
+  }
   const online = await fetchWssQueuedWallets(env, req);
   const queuedWallets = sortQueueRowsByRealtimeUsdtDesc(dedupeAndSortStateRows(online.rows));
   const updatedAt = stringValue(online.status.updatedAt, online.status.updated_at) ?? new Date().toISOString();
@@ -475,18 +490,22 @@ async function fetchPrivateProfileQueuedWallets(env: Record<string, string>): Pr
 
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
   const queueToken = firstUsableToken(queueWssToken(env));
-  const token = firstUsableToken(
-    env.SUPERMTNODE_APP_TOKEN,
-    queueToken,
-    env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
-    env.LIQUIDATION_SNAPSHOT_TOKEN,
-  );
+  const token = privateMemberQueueStatusToken(env);
   return {
     accept: "application/json",
     ...(authCode ? { "x-supermtnode-auth-code": authCode, "x-license-code": authCode } : {}),
     ...(token ? { authorization: `Bearer ${token}`, "x-supermtnode-token": token, "x-supermtnode-app-token": token } : {}),
     ...(queueToken ? { "x-queue-token": queueToken, "x-liquidation-queue-token": queueToken } : {}),
   };
+}
+
+function privateMemberQueueStatusToken(env: Record<string, string>): string {
+  return firstUsableToken(
+    env.SUPERMTNODE_APP_TOKEN,
+    queueWssToken(env),
+    env.LIQUIDATION_QUEUE_PUBLIC_TOKEN,
+    env.LIQUIDATION_SNAPSHOT_TOKEN,
+  );
 }
 
 function emptyWssQueueSnapshot() {

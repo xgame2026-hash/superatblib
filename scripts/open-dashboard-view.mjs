@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const view = process.argv[2] || "execution";
+const view = process.argv[2] || "overview";
 const aliases = new Map([
   ["leaderboard", "execution"],
   ["ranking", "execution"],
