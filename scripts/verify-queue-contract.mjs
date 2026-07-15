@@ -53,7 +53,6 @@ function checkClientContract() {
   const settingsMiddleware = read("server/settings-middleware.ts");
   const stateApi = read("server/state-api-rust/src/main.rs");
   const profileMigration = read("server/state-api-rust/migrations/20260624_rebuild_liq2_user_profiles.sql");
-  const fullIdentityMigration = read("server/state-api-rust/migrations/20260716_use_full_wallet_identity.sql");
   const packageJson = JSON.parse(read("package.json"));
   const cargoToml = read("server/state-api-rust/Cargo.toml");
 
@@ -114,8 +113,8 @@ function checkClientContract() {
   if (presenceStart.includes("bootstrapPrivateMemberWalletOnce")) {
     fail("execution presence must only start heartbeat after queue-start bootstrap");
   }
-  if (privateBootstrap.includes("slice(2, 10)") || privateBootstrap.includes("slice(-8)")) {
-    fail("liq2 identity must never truncate the wallet address");
+  if (privateBootstrap.includes("slice(2, 10)")) {
+    fail("liq2 private writes must not derive a username from the wallet address");
   }
   for (const term of [
     "buildProfilePayload",
@@ -155,9 +154,6 @@ function checkClientContract() {
   }
   if (!profileMigration.includes("uq_liq2_user_profiles_chain_wallet") || !stateApi.includes("ON CONFLICT (chain, wallet_address) DO UPDATE")) {
     fail("liq2 profile writes must upsert by chain plus full wallet address");
-  }
-  if (!fullIdentityMigration.includes("lower(chain) || ':' || lower(wallet_address)")) {
-    fail("existing liq2 profiles must migrate to full-wallet system ids");
   }
   if (!allMarketSnapshot.includes("/api/market-snapshot")) {
     fail("all market snapshot must use the independent market snapshot endpoint");

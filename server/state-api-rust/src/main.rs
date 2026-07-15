@@ -1574,8 +1574,15 @@ fn queue_wallet_tail(value: &str) -> String {
 fn build_system_id(chain: &str, wallet: &str) -> String {
     let normalized_wallet = wallet
         .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X")
         .to_lowercase();
-    format!("{}:{}", normalize_chain(Some(chain)), normalized_wallet)
+    let tail: String = normalized_wallet.chars().rev().take(8).collect();
+    format!(
+        "{}:{}",
+        normalize_chain(Some(chain)),
+        tail.chars().rev().collect::<String>()
+    )
 }
 
 fn normalize_chain(value: Option<&str>) -> String {

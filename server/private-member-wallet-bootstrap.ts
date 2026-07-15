@@ -426,7 +426,7 @@ function readRpcUrl(chain: string, env: Record<string, string>): string | undefi
 }
 
 function buildSystemId(chain: string, walletAddress: string): string {
-  return `${chain}:${walletAddress.toLowerCase()}`;
+  return `${chain}:${walletAddress.toLowerCase().replace(/^0x/i, "").slice(-8)}`;
 }
 
 function readLocalRpcPlanInfo(env: Record<string, string>): { rpcPlanType: string; rpcPlanName: string } {

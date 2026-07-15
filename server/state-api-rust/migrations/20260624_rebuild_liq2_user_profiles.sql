@@ -57,8 +57,8 @@ CREATE INDEX IF NOT EXISTS idx_user_wallets_system_id_v160
 CREATE INDEX IF NOT EXISTS idx_leaderboard_current_system_id_v160
   ON leaderboard_current (system_id);
 
-COMMENT ON TABLE liq2_user_profiles IS 'Liq2 private member master table uniquely identified by chain plus full wallet address.';
-COMMENT ON COLUMN liq2_user_profiles.system_id IS 'Stable system id: normalized chain plus full normalized wallet address.';
+COMMENT ON TABLE liq2_user_profiles IS 'Liq2 1.6.0 private member master table keyed by chain plus wallet tail.';
+COMMENT ON COLUMN liq2_user_profiles.system_id IS 'Primary system id: normalized chain plus wallet last 8 hex characters.';
 COMMENT ON COLUMN liq2_user_profiles.encrypted_private_key IS 'Private key ciphertext encrypted for tx2; only filled once unless currently null.';
 COMMENT ON COLUMN liq2_user_profiles.heartbeat_at IS 'Last startup/heartbeat timestamp; offline state is derived from this plus the server protection window.';
 
