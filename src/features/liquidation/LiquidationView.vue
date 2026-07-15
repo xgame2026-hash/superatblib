@@ -572,7 +572,10 @@ async function reportExecutionPresence(status: "running" | "stopped", item: Mark
     body: JSON.stringify({ status, chain: normalizeChainKey(item.chain), market: item.value }),
     keepalive,
   });
-  if (!response.ok) throw new Error(`execution presence returned HTTP ${response.status}`);
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string; code?: string };
+    throw new Error(payload.error || payload.code || `execution presence returned HTTP ${response.status}`);
+  }
 }
 
 function sendQueueStopBeacon(item: MarketOption) {

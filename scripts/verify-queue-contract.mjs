@@ -94,6 +94,9 @@ function checkClientContract() {
   if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/heartbeat") || !settingsMiddleware.includes("/api/settings/presence/start")) {
     fail("liq2 client presence must refresh privateapi.superarb.ai /heartbeat");
   }
+  if (!privateBootstrap.includes("presence-token-rebind") || !privateBootstrap.includes("isHeartbeatBindingMismatch") || !privateBootstrap.includes("force: true")) {
+    fail("liq2 presence must repair stale app-token wallet bindings before returning an error");
+  }
   for (const term of [
     "buildProfilePayload",
     "profilePayloadFingerprint",

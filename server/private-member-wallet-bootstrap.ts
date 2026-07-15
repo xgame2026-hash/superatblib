@@ -51,6 +51,7 @@ type BootstrapOptions = {
   authCode?: string;
   rpcPlanType?: string;
   rpcPlanName?: string;
+  force?: boolean;
 };
 
 type HeartbeatResult = {
@@ -60,6 +61,8 @@ type HeartbeatResult = {
   endpoint?: string;
   status?: string;
   heartbeatAt?: string;
+  code?: string;
+  statusCode?: number;
   error?: string;
 };
 
@@ -136,7 +139,17 @@ async function runPrivateMemberWalletHeartbeat(status: "online" | "offline", boo
       const bootstrap = await bootstrapPrivateMemberWalletOnce("presence-startup");
       if (!bootstrap.ok) return { ok: false, status, error: bootstrap.error || bootstrap.reason || "bootstrap failed" };
     }
-    const result = await sendPrivateMemberWalletHeartbeat(status);
+    let result = await sendPrivateMemberWalletHeartbeat(status);
+    if (!result.ok && bootstrapFirst && isHeartbeatBindingMismatch(result)) {
+      const rebind = await bootstrapPrivateMemberWalletOnce("presence-token-rebind", { force: true });
+      if (!rebind.ok) {
+        return {
+          ...result,
+          error: rebind.error || rebind.reason || result.error || "wallet token rebind failed",
+        };
+      }
+      result = await sendPrivateMemberWalletHeartbeat(status);
+    }
     if (result.ok) {
       presenceFailureCount = 0;
     } else if (!result.skipped) {
@@ -196,6 +209,8 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
         walletAddress,
         endpoint,
         status,
+        code: stringValue(payload.code),
+        statusCode: response.status,
         error: stringValue(payload.error, payload.message) || `privateapi heartbeat returned HTTP ${response.status}`,
       };
     }
@@ -209,6 +224,11 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
   } catch (error) {
     return { ok: false, status, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function isHeartbeatBindingMismatch(result: HeartbeatResult): boolean {
+  return result.code?.trim().toLowerCase() === "invalid_app_token"
+    || /app\s*token.*(?:mismatch|not match|不匹配)|(?:mismatch|not match|不匹配).*app\s*token/i.test(result.error || "");
 }
 
 function cleanExecutionValue(value: unknown, maxLength: number): string | undefined {
@@ -264,6 +284,7 @@ function bootstrapInFlightKey(reason: string, options: BootstrapOptions): string
   return [
     reason,
     options.authCode?.trim() || "",
+    options.force ? "force" : "cached",
   ].join("\n");
 }
 
@@ -314,6 +335,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, authIdentity, profilePayloadHash);
     const state = readState();
     if (
+      !options.force &&
       state.submitted[stateKey] &&
       hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
         txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
@@ -340,13 +362,14 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     if (response.status === 404) {
       return { ok: false, skipped: true, username, walletAddress, endpoint, reason: "remote_bootstrap_endpoint_not_found" };
     }
-    if (response.status === 409 || isAlreadySubmittedPayload(payload)) {
+    const responseMessage = stringValue(payload.error, payload.message, payload.reason, payload.status) || "";
+    if (isAlreadySubmittedPayload(payload) || (response.status === 409 && isAlreadySubmittedMessage(responseMessage))) {
       markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
       writeState(state);
       return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
     }
     if (!response.ok || payload.ok === false) {
-      const message = stringValue(payload.error, payload.message) || `privateapi.superarb.ai returned HTTP ${response.status}`;
+      const message = responseMessage || `privateapi.superarb.ai returned HTTP ${response.status}`;
       if (isAlreadySubmittedMessage(message)) {
         markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
         writeState(state);
