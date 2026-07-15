@@ -125,10 +125,9 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
     return true;
   }
 
-  // Password changes take effect only when the user starts execution. This
-  // keeps the remote wallet record and the local login gate in one atomic
-  // transition: bootstrap with the supplied password, verify it remotely,
-  // then enable password login in .env.
+  // Password changes take effect only when the user starts execution. The
+  // pending value is kept locally in .env so changing Settings sections (or
+  // reloading the local dashboard) does not discard it before that point.
   if (req.url.startsWith("/api/settings/confirm-password-start")) {
     if (req.method !== "POST") {
       json(res, 405, { ok: false, error: "Method not allowed." });
@@ -146,7 +145,8 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           json(res, 200, { ok: true, skipped: true });
           return;
         }
-        const password = typeof payload.password === "string" ? payload.password : "";
+        const submittedPassword = typeof payload.password === "string" ? payload.password : "";
+        const password = submittedPassword || pendingUserPassword(env);
         validateRequiredUserPassword(password);
         const bootstrap = await bootstrapPrivateMemberWalletOnce("password-start", {
           authCode: requestAuthCode(req, env),
@@ -311,11 +311,11 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const walletChanged = privateKeyChanged(existingEnv.PRIVATE_KEY, submittedEnv.PRIVATE_KEY);
         const walletPasswordResetRequired = walletChanged && (loginPasswordRequired(existingEnv) || passwordStartRequired(existingEnv));
         const passwordSetupPending = passwordSetupRequired(existingEnv) || walletPasswordResetRequired;
-        const passwordPendingStart = Boolean(password);
+        const pendingPasswordStart = Boolean(password) || passwordPendingStart(existingEnv);
 
         // A wallet replacement must be paired with a new password, but neither
         // is sent to privateapi until the user explicitly starts execution.
-        if (passwordSetupPending && !password) {
+        if (walletPasswordResetRequired && !password) {
           json(res, 400, {
             ok: false,
             error: "已启用密码登录且钱包已更换。请为新钱包输入至少 8 位用户密码后再保存。",
@@ -330,15 +330,16 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         // Keep the local gate open during a replacement. It is enabled only
         // after the next Start confirms the password against privateapi.
         if (walletPasswordResetRequired) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_CONFIGURED", "false");
-        if (passwordSetupPending || passwordPendingStart) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_SETUP_REQUIRED", "true");
-        if (passwordPendingStart) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_PENDING_START", "true");
+        if (passwordSetupPending || pendingPasswordStart) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_SETUP_REQUIRED", "true");
+        if (password) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PENDING_USER_PASSWORD", password);
+        if (pendingPasswordStart) normalizedEnv = upsertEnvValue(normalizedEnv, "LIQ2_PASSWORD_PENDING_START", "true");
         writeFileSync(ENV_FILE, normalizedEnv, "utf8");
         json(res, 200, {
           ok: true,
           file: ".env",
           path: ENV_FILE,
-          passwordPendingStart,
-          message: passwordPendingStart ? "密码将在点击启动后提交并验证。" : undefined,
+          passwordPendingStart: pendingPasswordStart,
+          message: pendingPasswordStart ? "密码已暂存到本机 .env，将在点击启动后提交并验证。" : undefined,
         });
       })
       .catch((error: unknown) => {
@@ -488,6 +489,10 @@ function passwordPendingStart(env: Record<string, string>): boolean {
   return env.LIQ2_PASSWORD_PENDING_START?.trim() === "true";
 }
 
+function pendingUserPassword(env: Record<string, string>): string {
+  return env.LIQ2_PENDING_USER_PASSWORD ?? "";
+}
+
 function passwordStartRequired(env: Record<string, string>): boolean {
   return passwordSetupRequired(env) || passwordPendingStart(env);
 }
@@ -516,14 +521,16 @@ function writePasswordConfiguredMarker(): void {
   const source = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : "";
   const enabled = upsertEnvValue(source, "LIQ2_PASSWORD_CONFIGURED", "true");
   const setupComplete = upsertEnvValue(enabled, "LIQ2_PASSWORD_SETUP_REQUIRED", "false");
-  writeFileSync(ENV_FILE, normalizeEnv(upsertEnvValue(setupComplete, "LIQ2_PASSWORD_PENDING_START", "false")), "utf8");
+  const pendingComplete = upsertEnvValue(setupComplete, "LIQ2_PASSWORD_PENDING_START", "false");
+  writeFileSync(ENV_FILE, normalizeEnv(upsertEnvValue(pendingComplete, "LIQ2_PENDING_USER_PASSWORD", "")), "utf8");
 }
 
 function markPasswordSetupRequired(): void {
   const source = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : "";
   const unlocked = upsertEnvValue(source, "LIQ2_PASSWORD_CONFIGURED", "false");
   const setupRequired = upsertEnvValue(unlocked, "LIQ2_PASSWORD_SETUP_REQUIRED", "true");
-  writeFileSync(ENV_FILE, normalizeEnv(upsertEnvValue(setupRequired, "LIQ2_PASSWORD_PENDING_START", "false")), "utf8");
+  const pendingReset = upsertEnvValue(setupRequired, "LIQ2_PASSWORD_PENDING_START", "false");
+  writeFileSync(ENV_FILE, normalizeEnv(upsertEnvValue(pendingReset, "LIQ2_PENDING_USER_PASSWORD", "")), "utf8");
 }
 
 async function fetchSuperMtNodeEndpointsByToken(appToken: string, env: Record<string, string>): Promise<SuperMtNodeEndpoint[]> {

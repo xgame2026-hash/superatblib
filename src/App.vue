@@ -580,6 +580,9 @@ const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disa
 const walletPasswordRequired = computed(() => {
   return passwordSetupRequired.value || (loginPasswordRequired.value && normalizedPrivateKey(settingsForm.privateKey) !== normalizedPrivateKey(savedPrivateKey.value));
 });
+const passwordRequiredForSave = computed(() => {
+  return loginPasswordRequired.value && normalizedPrivateKey(settingsForm.privateKey) !== normalizedPrivateKey(savedPrivateKey.value);
+});
 const privateDataReady = computed(() => {
   return isAuthenticated.value
     && Boolean(authCode.value.trim())
@@ -639,6 +642,7 @@ const metrics = ref([
 
 let notLaunchedReminderTimer = 0;
 let githubVersionRefreshTimer = 0;
+let githubVersionInitialized = false;
 
 onMounted(() => {
   clearLegacyAuthCache();
@@ -996,12 +1000,13 @@ async function loadGithubVersion() {
     const isLatest = payload.isLatest ?? githubIsLatestBuild.value;
     const nextState: GithubVersionState = payload.configured === false ? "unconfigured" : isLatest ? "latest" : "update";
     const updateWasPending = localStorage.getItem(GITHUB_UPDATE_PENDING_KEY) === "true";
-    const updateJustFound = nextState === "update" && previousGithubVersionState !== "update";
-    const updateJustCompleted = nextState === "latest" && updateWasPending;
+    const updateJustFound = githubVersionInitialized && nextState === "update" && previousGithubVersionState !== "update";
+    const updateJustCompleted = githubVersionInitialized && nextState === "latest" && updateWasPending;
     githubVersionState.value = nextState;
     githubVersionMessage.value = payload.message ?? "";
     if (nextState === "update") localStorage.setItem(GITHUB_UPDATE_PENDING_KEY, "true");
     if (nextState === "latest") localStorage.removeItem(GITHUB_UPDATE_PENDING_KEY);
+    githubVersionInitialized = true;
     if (updateJustFound) playConfiguredAlertSound("upgradeRequired");
     if (updateJustCompleted) playConfiguredAlertSound("upgradeCompleted");
   } catch (error) {
@@ -1022,7 +1027,7 @@ async function saveSettings() {
   settingsSaveDialogVisible.value = true;
 
   try {
-    if (walletPasswordRequired.value && !settingsForm.userPassword) {
+    if (passwordRequiredForSave.value && !settingsForm.userPassword) {
       throw new Error(t("password.walletChangeRequired"));
     }
     const response = await fetchSettingsApi("/api/settings", {
@@ -1036,6 +1041,7 @@ async function saveSettings() {
     }
     const payload = (await response.json().catch(() => ({}))) as { path?: string; message?: string };
     settingsEnvPath.value = payload.path ?? settingsEnvPath.value;
+    settingsForm.userPassword = "";
     await loadSettings();
     settingsSaveState.value = "done";
     settingsSaveMessage.value = payload.message ?? t("save.doneMessage");

@@ -334,12 +334,11 @@ async function confirmPendingPasswordBeforeStart(): Promise<void> {
   }
   if (!props.passwordPendingStart) return;
   const password = props.pendingPassword.trim();
-  if (!password) throw new Error(t("password.pendingStart"));
   appendTerminal(t("password.confirming"));
   const response = await fetch("/api/settings/confirm-password-start", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify(password ? { password } : {}),
   });
   const payload = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) throw new Error(payload.error ?? `password confirmation returned HTTP ${response.status}`);
