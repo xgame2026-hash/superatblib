@@ -1238,9 +1238,8 @@ async fn upsert_liq2_user_profile(
           (system_id, chain, wallet_address, rpc_url, rpc_token, encrypted_private_key, credential_auth_mode, single_trade_auth_amount_usdt, arbitrage_intensity, rpc_plan_type, rpc_plan_name, wallet_usdt, nickname, status, heartbeat_at)
         VALUES
           ($1, $2, $3, $4, $5, $6, $7, $8::text::numeric, $9, $10, $11, $12::text::numeric, $13, $14, now())
-        ON CONFLICT (system_id) DO UPDATE
-          SET chain = EXCLUDED.chain,
-              wallet_address = EXCLUDED.wallet_address,
+        ON CONFLICT (chain, wallet_address) DO UPDATE
+          SET system_id = EXCLUDED.system_id,
               rpc_url = COALESCE(EXCLUDED.rpc_url, liq2_user_profiles.rpc_url),
               rpc_token = COALESCE(EXCLUDED.rpc_token, liq2_user_profiles.rpc_token),
               encrypted_private_key = COALESCE(liq2_user_profiles.encrypted_private_key, EXCLUDED.encrypted_private_key),
@@ -1575,15 +1574,8 @@ fn queue_wallet_tail(value: &str) -> String {
 fn build_system_id(chain: &str, wallet: &str) -> String {
     let normalized_wallet = wallet
         .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X")
         .to_lowercase();
-    let tail: String = normalized_wallet.chars().rev().take(8).collect();
-    format!(
-        "{}:{}",
-        normalize_chain(Some(chain)),
-        tail.chars().rev().collect::<String>()
-    )
+    format!("{}:{}", normalize_chain(Some(chain)), normalized_wallet)
 }
 
 fn normalize_chain(value: Option<&str>) -> String {

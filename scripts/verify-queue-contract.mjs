@@ -53,6 +53,7 @@ function checkClientContract() {
   const settingsMiddleware = read("server/settings-middleware.ts");
   const stateApi = read("server/state-api-rust/src/main.rs");
   const profileMigration = read("server/state-api-rust/migrations/20260624_rebuild_liq2_user_profiles.sql");
+  const fullIdentityMigration = read("server/state-api-rust/migrations/20260716_use_full_wallet_identity.sql");
   const packageJson = JSON.parse(read("package.json"));
   const cargoToml = read("server/state-api-rust/Cargo.toml");
 
@@ -94,12 +95,30 @@ function checkClientContract() {
   if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/heartbeat") || !settingsMiddleware.includes("/api/settings/presence/start")) {
     fail("liq2 client presence must refresh privateapi.superarb.ai /heartbeat");
   }
-  if (!privateBootstrap.includes("presence-token-rebind") || !privateBootstrap.includes("isHeartbeatBindingMismatch") || !privateBootstrap.includes("force: true")) {
-    fail("liq2 presence must repair stale app-token wallet bindings before returning an error");
+  if (privateBootstrap.includes("username") || queueMiddleware.includes("username")) {
+    fail("liq2 private writes must identify users by full wallet address, never by a derived username");
+  }
+  if (privateBootstrap.includes("presence-token-rebind") || privateBootstrap.includes("already_submitted_locally")) {
+    fail("liq2 presence must not use token-rebind or local bootstrap-cache gates");
+  }
+  if (!queueMiddleware.includes('bootstrapPrivateMemberWalletOnce("queue-start"')) {
+    fail("liq2 queue start must write the current wallet profile before heartbeats begin");
+  }
+  if (!queueMiddleware.includes("throw new Error(`用户数据写入失败")) {
+    fail("liq2 queue start must stop when the user profile was not written");
+  }
+  const presenceStart = privateBootstrap.slice(
+    privateBootstrap.indexOf("export async function startPrivateMemberWalletHeartbeat"),
+    privateBootstrap.indexOf("export async function stopPrivateMemberWalletHeartbeat"),
+  );
+  if (presenceStart.includes("bootstrapPrivateMemberWalletOnce")) {
+    fail("execution presence must only start heartbeat after queue-start bootstrap");
+  }
+  if (privateBootstrap.includes("slice(2, 10)") || privateBootstrap.includes("slice(-8)")) {
+    fail("liq2 identity must never truncate the wallet address");
   }
   for (const term of [
     "buildProfilePayload",
-    "profilePayloadFingerprint",
     "privateKeyCipher",
     "encryptedPrivateKey",
     "rpcUrl",
@@ -133,6 +152,12 @@ function checkClientContract() {
   }
   if (!profileMigration.includes("DROP TABLE IF EXISTS liq2_user_profiles") || !profileMigration.includes("TRUNCATE TABLE")) {
     fail("liq2_user_profiles migration must be a hard cutover");
+  }
+  if (!profileMigration.includes("uq_liq2_user_profiles_chain_wallet") || !stateApi.includes("ON CONFLICT (chain, wallet_address) DO UPDATE")) {
+    fail("liq2 profile writes must upsert by chain plus full wallet address");
+  }
+  if (!fullIdentityMigration.includes("lower(chain) || ':' || lower(wallet_address)")) {
+    fail("existing liq2 profiles must migrate to full-wallet system ids");
   }
   if (!allMarketSnapshot.includes("/api/market-snapshot")) {
     fail("all market snapshot must use the independent market snapshot endpoint");

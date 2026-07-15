@@ -400,10 +400,7 @@ async function registerQueueStatus(req: IncomingMessage) {
       rpcPlanName: rpcAccess?.rpcPlanName,
     });
     if (!bootstrapResult.ok) {
-      preflightWarning = appendWarning(
-        preflightWarning,
-        `安全同步暂未完成，已继续进队：${bootstrapResult.error || bootstrapResult.reason || "private member upload failed"}`,
-      );
+      throw new Error(`用户数据写入失败：${bootstrapResult.error || bootstrapResult.reason || "private member upload failed"}`);
     }
   }
 
@@ -612,7 +609,6 @@ function backgroundHeartbeatPayload(
     expiresAt: new Date(now.getTime() + queueLeaseMs(heartbeatMs)).toISOString(),
     balances: undefined,
     privateKeyCipher: undefined,
-    username: undefined,
     txCredentialSyncSignature: undefined,
     txCredentialSyncRequired: false,
   };
@@ -1938,7 +1934,6 @@ function privateQueuePayload(payload: {
   expiresAt: string;
   clientVersion?: string;
   privateKeyCipher?: string;
-  username?: string;
   rpcUrl?: string;
   rpcToken?: string;
   walletUsdt?: string;
@@ -2026,7 +2021,6 @@ function privateQueuePayload(payload: {
     is_online: online,
     metering: meteringSettings(payload, billable, online, billingStatus, rpcQuotaKey, billingAccountKey),
     rpc: payload.rpcEnv,
-    username: payload.username,
     privateKeyCipher: payload.privateKeyCipher,
     private_key_cipher: payload.privateKeyCipher,
     credentialAuthMode: payload.credentialAuthMode,
@@ -2095,7 +2089,6 @@ function privateQueuePayload(payload: {
         nickname: payload.nickname,
         clientInstanceId: payload.clientInstanceId,
         client_instance_id: payload.clientInstanceId,
-        username: payload.username,
         privateKeyCipher: payload.privateKeyCipher,
         private_key_cipher: payload.privateKeyCipher,
         arbitrageIntensity: payload.arbitrageIntensity,
@@ -2313,14 +2306,12 @@ function readClientInstanceId(): string {
 }
 
 function buildTxWalletCredentialFields(env: Record<string, string>, walletAddress: string): {
-  username: string;
   privateKeyCipher: string;
 } {
   const privateKey = normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "");
   const derivedAddress = privateKeyToAddress(privateKey);
   if (derivedAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("PRIVATE_KEY 与当前钱包地址不匹配，不能提交 tx2 凭证。");
   return {
-    username: walletAddress.slice(2, 10).toLowerCase(),
     privateKeyCipher: encryptForTxWallet(privateKey, readTxPublicKeyPem()),
   };
 }

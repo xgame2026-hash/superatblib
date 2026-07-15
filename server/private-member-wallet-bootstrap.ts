@@ -1,46 +1,23 @@
 import crypto from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { assertOfficialConfig, validateSuperMtNodeAppToken } from "./official-config";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
-const STATE_FILE = resolve(process.cwd(), ".superarb/private-member-wallet-bootstrap.json");
 const DEFAULT_PRIVATE_MEMBER_API_URL = "https://privateapi.superarb.ai";
 const DEFAULT_BOOTSTRAP_PATH = "/bootstrap";
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_TIMEOUT_MS = 10_000;
-const BOOTSTRAP_STATE_VERSION = "v7";
 const CLIENT_VERSION = "1.6.3";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 const DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 
-type BootstrapState = {
-  submitted: Record<string, SubmittedWallet>;
-};
-
-type SubmittedWallet = {
-  username: string;
-  systemId: string;
-  walletAddress: string;
-  txPublicKeyFingerprint?: string;
-  authIdentityHash?: string;
-  arbitrageIntensity?: string;
-  credentialAuthMode?: string;
-  singleTradeAuthAmountUsdt?: string;
-  rpcPlanType?: string;
-  rpcPlanName?: string;
-  profilePayloadHash?: string;
-  endpoint: string;
-  submittedAt: string;
-};
-
 type BootstrapResult = {
   ok: boolean;
   skipped: boolean;
-  username?: string;
   walletAddress?: string;
   endpoint?: string;
   reason?: string;
@@ -51,7 +28,6 @@ type BootstrapOptions = {
   authCode?: string;
   rpcPlanType?: string;
   rpcPlanName?: string;
-  force?: boolean;
 };
 
 type HeartbeatResult = {
@@ -96,7 +72,7 @@ export async function startPrivateMemberWalletHeartbeat(): Promise<HeartbeatResu
   if (presenceTimer) return { ok: true, skipped: true, status: "online", error: "already_running" };
   const env = readEnv();
   const intervalMs = presenceHeartbeatIntervalMs(env);
-  const result = await runPrivateMemberWalletHeartbeat("online", true);
+  const result = await runPrivateMemberWalletHeartbeat("online");
   if (result.ok) {
     presenceTimer = setInterval(() => {
       void runPrivateMemberWalletHeartbeat("online");
@@ -131,25 +107,11 @@ export async function setPrivateMemberExecutionPresence(input: ExecutionPresence
     : stopPrivateMemberWalletHeartbeat();
 }
 
-async function runPrivateMemberWalletHeartbeat(status: "online" | "offline", bootstrapFirst = false): Promise<HeartbeatResult> {
+async function runPrivateMemberWalletHeartbeat(status: "online" | "offline"): Promise<HeartbeatResult> {
   if (presenceInFlight) return { ok: true, skipped: true, status, error: "heartbeat_in_flight" };
   presenceInFlight = true;
   try {
-    if (bootstrapFirst) {
-      const bootstrap = await bootstrapPrivateMemberWalletOnce("presence-startup");
-      if (!bootstrap.ok) return { ok: false, status, error: bootstrap.error || bootstrap.reason || "bootstrap failed" };
-    }
-    let result = await sendPrivateMemberWalletHeartbeat(status);
-    if (!result.ok && bootstrapFirst && isHeartbeatBindingMismatch(result)) {
-      const rebind = await bootstrapPrivateMemberWalletOnce("presence-token-rebind", { force: true });
-      if (!rebind.ok) {
-        return {
-          ...result,
-          error: rebind.error || rebind.reason || result.error || "wallet token rebind failed",
-        };
-      }
-      result = await sendPrivateMemberWalletHeartbeat(status);
-    }
+    const result = await sendPrivateMemberWalletHeartbeat(status);
     if (result.ok) {
       presenceFailureCount = 0;
     } else if (!result.skipped) {
@@ -226,11 +188,6 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
   }
 }
 
-function isHeartbeatBindingMismatch(result: HeartbeatResult): boolean {
-  return result.code?.trim().toLowerCase() === "invalid_app_token"
-    || /app\s*token.*(?:mismatch|not match|不匹配)|(?:mismatch|not match|不匹配).*app\s*token/i.test(result.error || "");
-}
-
 function cleanExecutionValue(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
@@ -246,35 +203,12 @@ export function privateMemberWalletBootstrapStatus(env: Record<string, string>):
     if (!authIdentity) return { ok: false, message: "本地未配置 SUPERMTNODE_APP_TOKEN" };
 
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
-    const walletAddress = privateKeyToAddress(normalizedPrivateKey);
-    const username = walletAddress.slice(2, 10).toLowerCase();
+    privateKeyToAddress(normalizedPrivateKey);
     const chain = defaultChain(env);
-    const systemId = buildSystemId(chain, walletAddress);
-    const endpoint = privateMemberBootstrapEndpoint(env);
-    const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
-    const rpcUrl = readRpcUrl(chain, env);
-    const rpcToken = appToken || undefined;
-    const rpcPlan = readLocalRpcPlanInfo(env);
-    const profilePayloadHash = profilePayloadFingerprint(buildProfilePayload(env, {
-      reason: "status-check",
-      username,
-      systemId,
-      chain,
-      walletAddress,
-      rpcUrl,
-      rpcToken,
-      authIdentity,
-      rpcPlan,
-    }));
-    const txPublicKeyPem = readTxPublicKeyPem();
-    const state = readState();
-    return hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
-      txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
-      authIdentityHash: tokenFingerprint(authIdentity),
-      profilePayloadHash,
-    })
-      ? { ok: true, message: "安全同步已完成" }
-      : { ok: false, message: "安全同步未完成", action: "repair_secure_upload" };
+    if (chain !== "bnb") return { ok: false, message: "LIQ2 仅支持 BSC/BNB", action: "repair_secure_upload" };
+    if (!readRpcUrl(chain, env)) return { ok: false, message: "本地未配置 BNB_RPC_URL", action: "repair_secure_upload" };
+    readTxPublicKeyPem();
+    return { ok: true, message: "用户数据将在启动时同步" };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error), action: "repair_secure_upload" };
   }
@@ -284,7 +218,6 @@ function bootstrapInFlightKey(reason: string, options: BootstrapOptions): string
   return [
     reason,
     options.authCode?.trim() || "",
-    options.force ? "force" : "cached",
   ].join("\n");
 }
 
@@ -292,14 +225,13 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
   try {
     const env = readEnv();
     if (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED?.trim() === "false") {
-      return { ok: true, skipped: true, reason: "disabled" };
+      return { ok: false, skipped: true, reason: "disabled", error: "用户数据写入已关闭。" };
     }
 
     const privateKey = env.PRIVATE_KEY?.trim();
     const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
-    const authIdentity = appToken;
     const chain = defaultChain(env);
-    if (!privateKey) return { ok: true, skipped: true, reason: "missing_private_key" };
+    if (!privateKey) return { ok: false, skipped: true, reason: "missing_private_key", error: "PRIVATE_KEY is required for user data bootstrap." };
     if (!appToken) return { ok: false, skipped: true, reason: "missing_app_token", error: "SUPERMTNODE_APP_TOKEN is required for secure bootstrap." };
     if (chain !== "bnb") return { ok: false, skipped: true, reason: "unsupported_chain", error: "LIQ2 wallet bootstrap only supports BSC/BNB." };
     if (!readRpcUrl(chain, env)) return { ok: false, skipped: true, reason: "missing_bnb_rpc", error: "BNB_RPC_URL is required for secure bootstrap." };
@@ -310,7 +242,6 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
 
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
-    const username = walletAddress.slice(2, 10).toLowerCase();
     const systemId = buildSystemId(chain, walletAddress);
     const endpoint = privateMemberBootstrapEndpoint(env);
     const rpcUrl = readRpcUrl(chain, env);
@@ -322,30 +253,13 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
         : readLocalRpcPlanInfo(env);
     const profilePayload = buildProfilePayload(env, {
       reason,
-      username,
       systemId,
       chain,
       walletAddress,
       rpcUrl,
       rpcToken,
-      authIdentity,
       rpcPlan,
     });
-    const profilePayloadHash = profilePayloadFingerprint(profilePayload);
-    const stateKey = submittedStateKey(endpoint, walletAddress, txPublicKeyPem, authIdentity, profilePayloadHash);
-    const state = readState();
-    if (
-      !options.force &&
-      state.submitted[stateKey] &&
-      hasLatestSubmittedWalletSettings(state, endpoint, walletAddress, {
-        txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
-        authIdentityHash: tokenFingerprint(authIdentity),
-        profilePayloadHash,
-      })
-    ) {
-      return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_locally" };
-    }
-
     const privateKeyCipher = encryptForTxWallet(normalizedPrivateKey, txPublicKeyPem);
     const response = await fetch(endpoint, {
       method: "POST",
@@ -360,84 +274,20 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     });
     const payload = await parseOptionalJson(response);
     if (response.status === 404) {
-      return { ok: false, skipped: true, username, walletAddress, endpoint, reason: "remote_bootstrap_endpoint_not_found" };
+      return { ok: false, skipped: true, walletAddress, endpoint, reason: "remote_bootstrap_endpoint_not_found" };
     }
     const responseMessage = stringValue(payload.error, payload.message, payload.reason, payload.status) || "";
-    if (isAlreadySubmittedPayload(payload) || (response.status === 409 && isAlreadySubmittedMessage(responseMessage))) {
-      markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
-      writeState(state);
-      return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
-    }
     if (!response.ok || payload.ok === false) {
       const message = responseMessage || `privateapi.superarb.ai returned HTTP ${response.status}`;
-      if (isAlreadySubmittedMessage(message)) {
-        markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
-        writeState(state);
-        return { ok: true, skipped: true, username, walletAddress, endpoint, reason: "already_submitted_remote" };
-      }
       throw new Error(message);
     }
 
-    markSubmitted(state, stateKey, { username, systemId, walletAddress, txPublicKeyPem, authIdentity, endpoint, profilePayloadHash, ...rpcPlan });
-    writeState(state);
-    return { ok: true, skipped: Boolean(payload.skipped), username, walletAddress, endpoint };
+    return { ok: true, skipped: Boolean(payload.skipped), walletAddress, endpoint };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[liq2] private member wallet bootstrap skipped: ${message}`);
     return { ok: false, skipped: true, error: message };
   }
-}
-
-function markSubmitted(
-  state: BootstrapState,
-  stateKey: string,
-  payload: {
-    username: string;
-    systemId?: string;
-    walletAddress: string;
-    txPublicKeyPem: string;
-    authIdentity: string;
-    endpoint: string;
-    rpcPlanType?: string;
-    rpcPlanName?: string;
-    profilePayloadHash?: string;
-  },
-): void {
-  const { txPublicKeyPem, authIdentity, ...publicPayload } = payload;
-  state.submitted[stateKey] = {
-    ...publicPayload,
-    systemId: publicPayload.systemId || buildSystemId(defaultChain(readEnv()), publicPayload.walletAddress),
-    txPublicKeyFingerprint: tokenFingerprint(txPublicKeyPem),
-    authIdentityHash: tokenFingerprint(authIdentity),
-    profilePayloadHash: payload.profilePayloadHash,
-    submittedAt: new Date().toISOString(),
-  };
-}
-
-function isAlreadySubmittedPayload(payload: Record<string, unknown>): boolean {
-  return Boolean(payload.skipped) && isAlreadySubmittedMessage(stringValue(payload.reason, payload.status, payload.error, payload.message) ?? "");
-}
-
-function hasLatestSubmittedWalletSettings(
-  state: BootstrapState,
-  endpoint: string,
-  walletAddress: string,
-  identity?: { txPublicKeyFingerprint?: string; authIdentityHash?: string; profilePayloadHash?: string },
-): boolean {
-  const normalizedEndpoint = endpoint.replace(/\/+$/, "");
-  const normalizedWallet = walletAddress.toLowerCase();
-  const latestSubmitted = Object.values(state.submitted)
-    .filter((submitted) => submitted.endpoint.replace(/\/+$/, "") === normalizedEndpoint && submitted.walletAddress.toLowerCase() === normalizedWallet)
-    .sort((left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime())[0];
-  return (
-    (!identity?.txPublicKeyFingerprint || latestSubmitted?.txPublicKeyFingerprint === identity.txPublicKeyFingerprint) &&
-    (!identity?.authIdentityHash || latestSubmitted?.authIdentityHash === identity.authIdentityHash) &&
-    (!identity?.profilePayloadHash || latestSubmitted?.profilePayloadHash === identity.profilePayloadHash)
-  );
-}
-
-function isAlreadySubmittedMessage(message: string): boolean {
-  return /already|exists|exist|duplicate|registered|submitted|已存在|重复|已经|已提交|已注册/i.test(message);
 }
 
 function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
@@ -510,14 +360,12 @@ function buildProfilePayload(
   env: Record<string, string>,
   input: {
     reason: string;
-    username: string;
     systemId: string;
     chain: string;
     walletAddress: string;
     rpcUrl?: string;
     rpcToken?: string;
     authCode?: string;
-    authIdentity: string;
     rpcPlan: { rpcPlanType: string; rpcPlanName: string };
   },
 ): Record<string, unknown> {
@@ -529,7 +377,6 @@ function buildProfilePayload(
   return {
     clientVersion: CLIENT_VERSION,
     protocolVersion: LIQ2_PROTOCOL_VERSION,
-    username: input.username,
     systemId: input.systemId,
     appToken: input.rpcToken || undefined,
     rpcUrl: input.rpcUrl,
@@ -547,50 +394,6 @@ function buildProfilePayload(
     // online LIQ2 execution list before a market has actually been started.
     status: "offline",
   };
-}
-
-function profilePayloadFingerprint(payload: Record<string, unknown>): string {
-  return tokenFingerprint(JSON.stringify({
-    systemId: payload.systemId,
-    chain: payload.chain,
-    walletAddress: payload.walletAddress,
-    rpcUrl: payload.rpcUrl,
-    rpcToken: payload.rpcToken,
-    credentialAuthMode: payload.credentialAuthMode,
-    singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
-    arbitrageIntensity: payload.arbitrageIntensity,
-    rpcPlanType: payload.rpcPlanType,
-    rpcPlanName: payload.rpcPlanName,
-    walletUsdt: payload.walletUsdt,
-    nickname: payload.nickname,
-    status: payload.status,
-  }));
-}
-
-function tokenFingerprint(value?: string): string {
-  const token = value?.trim() ?? "";
-  if (!token) return "no-token";
-  return crypto.createHash("sha256").update(token).digest("hex").slice(0, 32);
-}
-
-function submittedStateKey(
-  endpoint: string,
-  walletAddress: string,
-  publicKeyPem: string,
-  authIdentity: string,
-  profilePayloadHash: string,
-): string {
-  return crypto
-    .createHash("sha256")
-    .update([
-      BOOTSTRAP_STATE_VERSION,
-      endpoint,
-      walletAddress.toLowerCase(),
-      publicKeyPem,
-      authIdentity,
-      profilePayloadHash,
-    ].join("\n"))
-    .digest("hex");
 }
 
 function privateMemberAuthCode(env: Record<string, string>): string {
@@ -623,7 +426,7 @@ function readRpcUrl(chain: string, env: Record<string, string>): string | undefi
 }
 
 function buildSystemId(chain: string, walletAddress: string): string {
-  return `${chain}:${walletAddress.toLowerCase().replace(/^0x/i, "").slice(-8)}`;
+  return `${chain}:${walletAddress.toLowerCase()}`;
 }
 
 function readLocalRpcPlanInfo(env: Record<string, string>): { rpcPlanType: string; rpcPlanName: string } {
@@ -709,21 +512,6 @@ function normalizeUsdtAmount(value?: string): string {
   const numeric = Number(String(value || "").replace(/,/g, "").trim());
   if (!Number.isFinite(numeric) || numeric <= 0) return "100";
   return numeric.toString();
-}
-
-function readState(): BootstrapState {
-  if (!existsSync(STATE_FILE)) return { submitted: {} };
-  try {
-    const parsed = JSON.parse(readFileSync(STATE_FILE, "utf8")) as Partial<BootstrapState>;
-    return parsed && typeof parsed.submitted === "object" && parsed.submitted ? { submitted: parsed.submitted } : { submitted: {} };
-  } catch {
-    return { submitted: {} };
-  }
-}
-
-function writeState(state: BootstrapState): void {
-  mkdirSync(dirname(STATE_FILE), { recursive: true });
-  writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
 function readEnv(): Record<string, string> {
