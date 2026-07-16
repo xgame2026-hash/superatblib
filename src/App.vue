@@ -322,6 +322,13 @@ import { ElMessage } from "element-plus";
 import { Hide, Key, View } from "@element-plus/icons-vue";
 import { useNews } from "./composables/useNews";
 import { ALERT_SOUND_IDS, normalizeAlertSoundId, playAlertSound, type AlertSoundKey } from "./audio/alert-sounds";
+import {
+  commitsMatch,
+  compareVersionLabels,
+  isBuildCurrentOrNewer,
+  normalizeCommit,
+  normalizeVersionLabel,
+} from "./github-version";
 import { currentLocale, getLocale, localeOptions, normalizeLocale, setLocale, t } from "./i18n";
 import DashboardView from "./features/dashboard/DashboardView.vue";
 import LatestLiquidationsView from "./features/latest-liquidations/LatestLiquidationsView.vue";
@@ -363,6 +370,7 @@ import notLaunchedAudioUrl from "./music/Notlaunched.mp3";
 type AuthMessageType = "success" | "warning" | "info" | "error";
 type SettingsSaveState = "saving" | "done" | "error";
 type GithubVersionState = "checking" | "latest" | "update" | "unconfigured" | "error";
+type GithubUpdateTarget = { version: string; commit: string };
 type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "swap" | "slots" | "settings";
 type SettingsSectionKey = "general" | "profile" | "credentials" | "rpc" | "feeds" | "alerts";
 type RpcKey = "ethereum" | "bnb" | "arbitrum" | "base" | "polygon";
@@ -386,6 +394,7 @@ const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
 const GITHUB_UPDATE_PENDING_KEY = "liq2-github-update-pending";
+const GITHUB_UPDATE_ANNOUNCED_KEY = "liq2-github-update-announced";
 const GITHUB_VERSION_REFRESH_MS = 5 * 60 * 1000;
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
 const appVersion = "1.6.3";
@@ -598,13 +607,6 @@ const githubVersionTitle = computed(() => {
 const githubLatestDisplayVersion = computed(() => {
   return versionWithCommit(githubLatestVersion.value, githubLatestCommit.value);
 });
-const githubIsLatestBuild = computed(() => {
-  const latestVersion = normalizeVersionLabel(githubLatestVersion.value);
-  if (compareVersionLabels(appVersion, latestVersion) !== 0) return compareVersionLabels(appVersion, latestVersion) > 0;
-  if (appGitCommit && githubLatestCommit.value) return appGitCommit === githubLatestCommit.value.slice(0, 7);
-  return true;
-});
-
 const metrics = ref([
   { label: t("metrics.candidateAccounts"), value: "0", trend: 0 },
   { label: t("metrics.executableOpportunities"), value: "0", trend: 0 },
@@ -614,7 +616,6 @@ const metrics = ref([
 
 let notLaunchedReminderTimer = 0;
 let githubVersionRefreshTimer = 0;
-let githubVersionInitialized = false;
 
 onMounted(() => {
   clearLegacyAuthCache();
@@ -706,34 +707,10 @@ function normalizeViewAlias(value: string | null): string {
   return normalized;
 }
 
-function normalizeVersionLabel(source: string): string {
-  return source.trim().replace(/^v/i, "").split("+")[0] || source;
-}
-
 function versionWithCommit(version: string, commit: string): string {
   const normalizedVersion = normalizeVersionLabel(version);
-  const normalizedCommit = commit.trim().slice(0, 7);
+  const normalizedCommit = normalizeCommit(commit).slice(0, 7);
   return normalizedCommit ? `${normalizedVersion}+${normalizedCommit}` : normalizedVersion;
-}
-
-function compareVersionLabels(left: string, right: string): number {
-  const leftParts = versionParts(left);
-  const rightParts = versionParts(right);
-  const length = Math.max(leftParts.length, rightParts.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftPart = leftParts[index] ?? 0;
-    const rightPart = rightParts[index] ?? 0;
-    if (leftPart > rightPart) return 1;
-    if (leftPart < rightPart) return -1;
-  }
-  return 0;
-}
-
-function versionParts(source: string): number[] {
-  return normalizeVersionLabel(source)
-    .split(/[.+-]/)
-    .map((part) => Number.parseInt(part, 10))
-    .filter((part) => Number.isFinite(part));
 }
 
 function syncViewHash(view: ViewKey): void {
@@ -930,7 +907,6 @@ async function loadSettings(options: { syncRuntimePort?: boolean } = {}) {
 }
 
 async function loadGithubVersion() {
-  const previousGithubVersionState = githubVersionState.value;
   githubVersionState.value = "checking";
   githubVersionMessage.value = t("github.checking");
   try {
@@ -942,21 +918,38 @@ async function loadGithubVersion() {
       latestVersion?: string;
       currentCommit?: string;
       latestCommit?: string;
-      isLatest?: boolean;
       message?: string;
     };
     githubLatestVersion.value = payload.latestVersion || appVersion;
     githubLatestCommit.value = payload.latestCommit || "";
-    const isLatest = payload.isLatest ?? githubIsLatestBuild.value;
+    // The browser verifies the build identity too, so a stale or buggy server
+    // response can never turn equal displayed builds into an update warning.
+    const currentCommit = appGitCommit || payload.currentCommit || "";
+    const isLatest = isBuildCurrentOrNewer(
+      appVersion,
+      githubLatestVersion.value,
+      currentCommit,
+      githubLatestCommit.value,
+    );
     const nextState: GithubVersionState = payload.configured === false ? "unconfigured" : isLatest ? "latest" : "update";
-    const updateWasPending = localStorage.getItem(GITHUB_UPDATE_PENDING_KEY) === "true";
-    const updateJustFound = githubVersionInitialized && nextState === "update" && previousGithubVersionState !== "update";
-    const updateJustCompleted = githubVersionInitialized && nextState === "latest" && updateWasPending;
+    const latestTarget = githubUpdateTarget(githubLatestVersion.value, githubLatestCommit.value);
+    const serializedTarget = JSON.stringify(latestTarget);
+    const pendingTarget = readPendingGithubUpdate();
+    const updateJustFound = nextState === "update"
+      && localStorage.getItem(GITHUB_UPDATE_ANNOUNCED_KEY) !== serializedTarget;
+    const updateJustCompleted = nextState === "latest"
+      && pendingTarget !== null
+      && buildMatchesTarget(appVersion, currentCommit, pendingTarget);
     githubVersionState.value = nextState;
     githubVersionMessage.value = payload.message ?? "";
-    if (nextState === "update") localStorage.setItem(GITHUB_UPDATE_PENDING_KEY, "true");
-    if (nextState === "latest") localStorage.removeItem(GITHUB_UPDATE_PENDING_KEY);
-    githubVersionInitialized = true;
+    if (nextState === "update") {
+      localStorage.setItem(GITHUB_UPDATE_PENDING_KEY, serializedTarget);
+      if (updateJustFound) localStorage.setItem(GITHUB_UPDATE_ANNOUNCED_KEY, serializedTarget);
+    }
+    if (nextState === "latest") {
+      localStorage.removeItem(GITHUB_UPDATE_PENDING_KEY);
+      if (updateJustCompleted) localStorage.removeItem(GITHUB_UPDATE_ANNOUNCED_KEY);
+    }
     if (updateJustFound) playConfiguredAlertSound("upgradeRequired");
     if (updateJustCompleted) playConfiguredAlertSound("upgradeCompleted");
   } catch (error) {
@@ -965,6 +958,33 @@ async function loadGithubVersion() {
     githubVersionState.value = "error";
     githubVersionMessage.value = error instanceof Error ? error.message : t("github.checkFailed");
   }
+}
+
+function githubUpdateTarget(version: string, commit: string): GithubUpdateTarget {
+  return {
+    version: normalizeVersionLabel(version),
+    commit: normalizeCommit(commit).slice(0, 7),
+  };
+}
+
+function readPendingGithubUpdate(): GithubUpdateTarget | null {
+  const raw = localStorage.getItem(GITHUB_UPDATE_PENDING_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<GithubUpdateTarget>;
+    if (typeof parsed.version !== "string" || !parsed.version.trim()) throw new Error("Invalid update target");
+    return githubUpdateTarget(parsed.version, typeof parsed.commit === "string" ? parsed.commit : "");
+  } catch {
+    // Old releases stored the boolean string "true" here. It may represent a
+    // false positive, so it must never trigger an "upgrade completed" voice.
+    localStorage.removeItem(GITHUB_UPDATE_PENDING_KEY);
+    return null;
+  }
+}
+
+function buildMatchesTarget(currentVersion: string, currentCommit: string, target: GithubUpdateTarget): boolean {
+  if (compareVersionLabels(currentVersion, target.version) !== 0) return false;
+  return !target.commit || commitsMatch(currentCommit, target.commit);
 }
 
 function playConfiguredAlertSound(key: AlertSoundKey) {

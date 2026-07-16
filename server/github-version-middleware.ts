@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isBuildCurrentOrNewer, normalizeVersionLabel as normalizeVersion } from "../src/github-version";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const PACKAGE_FILE = resolve(process.cwd(), "package.json");
@@ -61,7 +62,7 @@ async function fetchGithubVersion(): Promise<GithubVersionPayload> {
       currentVersion,
       latestVersion,
       currentCommit,
-      isLatest: compareVersions(currentVersion, latestVersion) >= 0,
+      isLatest: isBuildCurrentOrNewer(currentVersion, latestVersion, currentCommit, ""),
       source: "GITHUB_LATEST_VERSION",
     };
   }
@@ -158,35 +159,8 @@ function normalizeRepository(source: string): string {
   return source.replace(/^https?:\/\/github\.com\//, "").replace(/^git@github\.com:/, "").replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
 }
 
-function normalizeVersion(source: string): string {
-  return source.trim().replace(/^release[-_/]/i, "").replace(/^v/i, "");
-}
-
-function compareVersions(left: string, right: string): number {
-  const leftParts = versionParts(left);
-  const rightParts = versionParts(right);
-  const length = Math.max(leftParts.length, rightParts.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftPart = leftParts[index] ?? 0;
-    const rightPart = rightParts[index] ?? 0;
-    if (leftPart > rightPart) return 1;
-    if (leftPart < rightPart) return -1;
-  }
-  return 0;
-}
-
 function isLatestBuild(currentVersion: string, latestVersion: string, currentCommit: string, latestCommit: string): boolean {
-  const versionCompare = compareVersions(currentVersion, latestVersion);
-  if (versionCompare !== 0) return versionCompare > 0;
-  if (currentCommit && latestCommit) return currentCommit === latestCommit;
-  return true;
-}
-
-function versionParts(source: string): number[] {
-  return normalizeVersion(source)
-    .split(/[.+-]/)
-    .map((part) => Number.parseInt(part, 10))
-    .filter((part) => Number.isFinite(part));
+  return isBuildCurrentOrNewer(currentVersion, latestVersion, currentCommit, latestCommit);
 }
 
 function readPackageVersion(): string {
