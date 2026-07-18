@@ -363,12 +363,15 @@ async function registerQueueStatus(req: IncomingMessage) {
     preflightWarning = `官方配置检测暂未通过，已按本地 RPC/token 继续启动：${error instanceof Error ? error.message : String(error)}`;
   }
   const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
-  const stopTombstoneKey = localQueueStopKey(chain, walletAddress, authIdentity);
-  if (!stopping && !heartbeat) clearLocalQueueStop(stopTombstoneKey);
   const meteredRpcUrl = env[chainEnvKeys[chain]]?.trim();
   const rpcUrls = balanceRpcUrls(chain, env);
   if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
   if (!rpcUrls.length) throw new Error(`${chainEnvKeys[chain]} 未配置，不能读取钱包余额。`);
+  // A pause belongs to a wallet + RPC + app-token identity. The wallet alone
+  // is deliberately not a lock: separate LIQ2 users may use the same private
+  // key when their own RPC/app-token pair is usable.
+  const stopTombstoneKey = localQueueStopKey(chain, walletAddress, authIdentity, meteredRpcUrl);
+  if (!stopping && !heartbeat) clearLocalQueueStop(stopTombstoneKey);
   if (heartbeat && isLocalQueueStopped(stopTombstoneKey)) {
     throw new Error("本地队列已暂停，拒绝旧心跳；请重新点击启动。");
   }
@@ -748,8 +751,9 @@ function writeLocalQueueState(state: LocalQueueState): void {
   writeFileSync(LOCAL_QUEUE_STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
-function localQueueStopKey(chain: ChainKey, walletAddress: string, authCode?: string): string {
-  return [chain, walletAddress.toLowerCase(), licenseCodeFingerprint(authCode)].join(":");
+function localQueueStopKey(chain: ChainKey, walletAddress: string, authCode?: string, rpcUrl?: string): string {
+  const credentialHash = rpcUrl && authCode ? localRpcTokenFingerprint(rpcUrl, authCode) : licenseCodeFingerprint(authCode);
+  return [chain, walletAddress.toLowerCase(), credentialHash].join(":");
 }
 
 function rememberLocalQueueStop(key: string): void {
@@ -1050,17 +1054,42 @@ function queueWssUrl(env: Record<string, string>): string {
 async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string, string>, _authCode?: string): Promise<RpcAccessInfo> {
   const rpcUrl = env[chainEnvKeys[chain]]?.trim();
   if (!rpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动。`);
+  try {
+    const parsedRpcUrl = new URL(rpcUrl);
+    if (!["http:", "https:"].includes(parsedRpcUrl.protocol) || !parsedRpcUrl.hostname) throw new Error("unsupported RPC URL");
+  } catch {
+    throw new Error(`${chainEnvKeys[chain]} 格式不正确，不能启动。`);
+  }
   const token = env.SUPERMTNODE_APP_TOKEN?.trim();
+  if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
   const tokenExpiry = token ? jwtExpiry(token) : null;
   if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
-    console.warn(`[queue] SUPERMTNODE_APP_TOKEN expired at ${tokenExpiry.toISOString()}, falling back to auth-code/local metering identity.`);
+    throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，不能启动。`);
+  }
+
+  // Keep startup permissive: do not lock by wallet and do not require a second
+  // member-service lookup. A successful call to the user's configured endpoint
+  // proves that the RPC credential path is currently usable. Public fallbacks
+  // are intentionally excluded from this one check.
+  const expectedChainId: Record<ChainKey, string> = { ethereum: "0x1", bnb: "0x38", arbitrum: "0xa4b1" };
+  try {
+    const chainId = (await rpc<string>(rpcUrl, "eth_chainId", [], env)).toLowerCase();
+    if (chainId !== expectedChainId[chain]) {
+      throw new Error(`${chainLabel(chain)} RPC 链 ID 异常：${chainId}，不能启动。`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/链 ID 异常|HTTP 400|HTTP 401|HTTP 403|unauthorized|forbidden|invalid (api[ _-]?)?(key|token)|expired|过期|失效|无效/i.test(message)) {
+      throw error;
+    }
+    console.warn(`[queue] configured RPC preflight was inconclusive; allowing startup: ${message}`);
   }
   const rpcPlanType = env.RPC_PLAN_TYPE?.trim() || "local-token";
   return {
     rpcPlanType,
     rpcPlanName: env.RPC_PLAN_NAME?.trim() || rpcPlanLabel(rpcPlanType),
     creditBurnPerSecond: numberValue(env.CREDIT_BURN_PER_SECOND) ?? 1,
-    rpcAccessTokenHash: localRpcTokenFingerprint(rpcUrl, token && (!tokenExpiry || tokenExpiry.getTime() > Date.now()) ? token : (_authCode || "auth-code")),
+    rpcAccessTokenHash: localRpcTokenFingerprint(rpcUrl, token),
   };
 }
 
@@ -1763,8 +1792,8 @@ async function fetchRemoteQueueRows(env: Record<string, string>, req: IncomingMe
   return readRemoteQueueRows(unwrapRemoteQueuePayload(payload));
 }
 
-function remoteQueueStatusUrl(env: Record<string, string>): string {
-  return env.LIQ2_ONLINE_USERS_API_URL?.trim() || DEFAULT_QUEUE_STATUS_API_URL;
+function remoteQueueStatusUrl(_env: Record<string, string>): string {
+  return DEFAULT_QUEUE_STATUS_API_URL;
 }
 
 function remoteQueueStatusHeaders(env: Record<string, string>, req: IncomingMessage): Record<string, string> {
@@ -2274,7 +2303,7 @@ function protocolLabelFromMarket(market: string): string {
 }
 
 function buildQueueMemberKey(chain: ChainKey, walletAddress: string, _licenseHash: string, tokenHash: string): string {
-  return ["license-token-wallet", chain, tokenHash, walletTail(walletAddress)].join(":");
+  return ["license-token-wallet", chain, tokenHash, normalizedWalletIdentity(walletAddress)].join(":");
 }
 
 function buildRpcQuotaKey(chain: ChainKey, licenseHash: string, tokenHash: string): string {
@@ -2282,12 +2311,11 @@ function buildRpcQuotaKey(chain: ChainKey, licenseHash: string, tokenHash: strin
 }
 
 function buildBillingAccountKey(chain: ChainKey, walletAddress: string, licenseHash: string, tokenHash: string): string {
-  return ["license-token-wallet-billing", chain, licenseHash, tokenHash, walletTail(walletAddress)].join(":");
+  return ["license-token-wallet-billing", chain, licenseHash, tokenHash, normalizedWalletIdentity(walletAddress)].join(":");
 }
 
-function walletTail(walletAddress: string): string {
-  const normalized = walletAddress.toLowerCase().replace(/^0x/i, "");
-  return normalized.slice(-4) || "unknown";
+function normalizedWalletIdentity(walletAddress: string): string {
+  return walletAddress.toLowerCase().replace(/^0x/i, "") || "unknown";
 }
 
 function readClientInstanceId(): string {

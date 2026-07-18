@@ -51,6 +51,7 @@ type ExecutionPresence = {
 const inFlight = new Map<string, Promise<BootstrapResult>>();
 let presenceTimer: ReturnType<typeof setInterval> | undefined;
 let presenceInFlight = false;
+let presenceRequest: Promise<HeartbeatResult> | undefined;
 let presenceFailureCount = 0;
 // Execution state is deliberately separate from login presence. A signed-in
 // client is not an executing client until the market-control UI confirms it.
@@ -72,19 +73,24 @@ export async function startPrivateMemberWalletHeartbeat(): Promise<HeartbeatResu
   if (presenceTimer) return { ok: true, skipped: true, status: "online", error: "already_running" };
   const env = readEnv();
   const intervalMs = presenceHeartbeatIntervalMs(env);
+  // The retry loop belongs to the local service, not to the browser window.
+  // Install it before the initial request so a transient failure still retries
+  // after the page has closed.
+  presenceTimer = setInterval(() => {
+    void runPrivateMemberWalletHeartbeat("online");
+  }, intervalMs);
   const result = await runPrivateMemberWalletHeartbeat("online");
-  if (result.ok) {
-    presenceTimer = setInterval(() => {
-      void runPrivateMemberWalletHeartbeat("online");
-    }, intervalMs);
-  }
-  return result;
+  return result.ok
+    ? result
+    : { ...result, ok: true, skipped: true, error: `background retry scheduled: ${result.error || "initial heartbeat failed"}` };
 }
 
 /** Stop the execution-presence heartbeat and make a best-effort offline update. */
 export async function stopPrivateMemberWalletHeartbeat(): Promise<HeartbeatResult> {
   if (presenceTimer) clearInterval(presenceTimer);
   presenceTimer = undefined;
+  // An explicit stop must be ordered after any older online request.
+  await presenceRequest?.catch(() => undefined);
   return sendPrivateMemberWalletHeartbeat("offline");
 }
 
@@ -111,7 +117,8 @@ async function runPrivateMemberWalletHeartbeat(status: "online" | "offline"): Pr
   if (presenceInFlight) return { ok: true, skipped: true, status, error: "heartbeat_in_flight" };
   presenceInFlight = true;
   try {
-    const result = await sendPrivateMemberWalletHeartbeat(status);
+    presenceRequest = sendPrivateMemberWalletHeartbeat(status);
+    const result = await presenceRequest;
     if (result.ok) {
       presenceFailureCount = 0;
     } else if (!result.skipped) {
@@ -122,6 +129,7 @@ async function runPrivateMemberWalletHeartbeat(status: "online" | "offline"): Pr
     }
     return result;
   } finally {
+    presenceRequest = undefined;
     presenceInFlight = false;
   }
 }
@@ -153,6 +161,8 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
       body: JSON.stringify({
         chain,
         walletAddress,
+        systemId: buildSystemId(chain, walletAddress, readRpcUrl(chain, env), appToken),
+        rpcUrl: readRpcUrl(chain, env),
         status,
         clientVersion: CLIENT_VERSION,
         protocolVersion: LIQ2_PROTOCOL_VERSION,
@@ -238,9 +248,9 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     assertOfficialConfig("私钥加密提交", env);
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
-    const systemId = buildSystemId(chain, walletAddress);
-    const endpoint = privateMemberBootstrapEndpoint(env);
     const rpcUrl = readRpcUrl(chain, env);
+    const systemId = buildSystemId(chain, walletAddress, rpcUrl, appToken);
+    const endpoint = privateMemberBootstrapEndpoint(env);
     const rpcToken = appToken || undefined;
     const txPublicKeyPem = readTxPublicKeyPem();
     const rpcPlan =
@@ -273,6 +283,9 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       return { ok: false, skipped: true, walletAddress, endpoint, reason: "remote_bootstrap_endpoint_not_found" };
     }
     const responseMessage = stringValue(payload.error, payload.message, payload.reason, payload.status) || "";
+    if (response.status === 409 && /already|exists|duplicate|重复|已存在/i.test(responseMessage)) {
+      return { ok: true, skipped: true, walletAddress, endpoint, reason: "already_registered" };
+    }
     if (!response.ok || payload.ok === false) {
       const message = responseMessage || `privateapi.superarb.ai returned HTTP ${response.status}`;
       throw new Error(message);
@@ -318,18 +331,8 @@ function privateMemberHeartbeatEndpoint(env: Record<string, string>): string {
   return `${privateMemberApiBase(env)}/heartbeat`;
 }
 
-function privateMemberApiBase(env: Record<string, string>): string {
-  const configuredBase = (env.LIQ2_PRIVATE_MEMBER_API_URL || DEFAULT_PRIVATE_MEMBER_API_URL).trim().replace(/\/+$/, "");
-  return isPrivateApiBase(configuredBase) ? configuredBase : DEFAULT_PRIVATE_MEMBER_API_URL;
-}
-
-function isPrivateApiBase(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname === "privateapi.superarb.ai";
-  } catch {
-    return false;
-  }
+function privateMemberApiBase(_env: Record<string, string>): string {
+  return DEFAULT_PRIVATE_MEMBER_API_URL;
 }
 
 function readTxPublicKeyPem(): string {
@@ -421,8 +424,17 @@ function readRpcUrl(chain: string, env: Record<string, string>): string | undefi
   return keys.map((key) => env[key]?.trim()).find(Boolean);
 }
 
-function buildSystemId(chain: string, walletAddress: string): string {
-  return `${chain}:${walletAddress.toLowerCase().replace(/^0x/i, "").slice(-8)}`;
+function buildSystemId(chain: string, walletAddress: string, rpcUrl?: string, appToken?: string): string {
+  const credential = crypto
+    .createHash("sha256")
+    .update(`${normalizeComparableUrl(rpcUrl)}\n${appToken?.trim() || "no-token"}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `${chain}:${walletAddress.toLowerCase()}:${credential}`;
+}
+
+function normalizeComparableUrl(value?: string): string {
+  return (value ?? "").trim().replace(/\/+$/, "").toLowerCase();
 }
 
 function readLocalRpcPlanInfo(env: Record<string, string>): { rpcPlanType: string; rpcPlanName: string } {

@@ -73,6 +73,14 @@ function checkClientContract() {
   if (!liquidationView.includes("function resumeMarketHeartbeat()")) {
     fail("client must restart heartbeat after a short network interruption");
   }
+  if (!liquidationView.includes("marketHeartbeatGeneration") || !liquidationView.includes("heartbeatGeneration !== marketHeartbeatGeneration")) {
+    fail("heartbeats from an older client run must not mutate a restarted queue");
+  }
+  const pauseStartWait = liquidationView.indexOf("await pendingStart?.catch(() => undefined)");
+  const pauseStopRequest = liquidationView.indexOf("await unregisterMarketQueue(runningMarket)", pauseStartWait);
+  if (pauseStartWait < 0 || pauseStopRequest < pauseStartWait) {
+    fail("pause must settle an overlapping start before sending the queue stop request");
+  }
   if (app.includes("handlePresencePageExit") || liquidationView.includes("handleClientUnload")) {
     fail("closing the dashboard must not stop server-owned execution presence");
   }
@@ -82,14 +90,23 @@ function checkClientContract() {
   if (!queueMiddleware.includes("validQueueStartIntentId")) {
     fail("queue start must require a fresh start intent");
   }
+  if (!queueMiddleware.includes("async function assertQueueCredentialAvailable") || !queueMiddleware.includes("return;\n}")) {
+    fail("same-wallet LIQ2 users must not be rejected by a wallet ownership lock");
+  }
+  if (!queueMiddleware.includes('rpc<string>(rpcUrl, "eth_chainId"') || !queueMiddleware.includes("localRpcTokenFingerprint(rpcUrl, token)")) {
+    fail("LIQ2 startup must validate and identify the configured RPC/app-token pair");
+  }
   if (!queueMiddleware.includes("本地队列已暂停")) {
     fail("old heartbeats must be rejected after pause");
   }
   if (!liquidationView.includes("本地队列已暂停|本地队列已停止")) {
-    fail("client must permanently stop stale heartbeats after a local queue pause");
+    fail("a locally stopped heartbeat must terminate the client heartbeat timer");
+  }
+  if (!liquidationView.includes("if (!isLocalQueueStoppedError(message)) sendQueueStopBeacon")) {
+    fail("an acknowledged local stop must not enqueue another stop that can race with restart");
   }
   if (queueMiddleware.includes("/列队已暂停/") || !queueMiddleware.includes("/队列已暂停|队列已停止/")) {
-    fail("background heartbeat must stop after the local queue is paused or stopped");
+    fail("a locally stopped queue must terminate the background heartbeat timer");
   }
   const registerStart = queueMiddleware.indexOf("async function registerQueueStatus");
   const registerEnd = queueMiddleware.indexOf("async function fetchQueueStatus", registerStart);
@@ -105,8 +122,17 @@ function checkClientContract() {
   if (!privateBootstrap.includes('"https://privateapi.superarb.ai"') || !privateBootstrap.includes('const DEFAULT_BOOTSTRAP_PATH = "/bootstrap"')) {
     fail("private bootstrap must write through privateapi.superarb.ai /bootstrap endpoint");
   }
+  if (!privateBootstrap.includes("return DEFAULT_PRIVATE_MEMBER_API_URL") || privateBootstrap.includes("env.LIQ2_PRIVATE_MEMBER_API_URL")) {
+    fail("LIQ2 bootstrap must not be redirected to a legacy/custom submission endpoint");
+  }
+  if (!privateBootstrap.includes("response.status === 409") || !privateBootstrap.includes('reason: "already_registered"')) {
+    fail("repeating the same valid private-key/RPC/app-token bootstrap must be idempotent");
+  }
   if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/heartbeat") || !settingsMiddleware.includes("/api/settings/presence/start")) {
     fail("liq2 client presence must refresh privateapi.superarb.ai /heartbeat");
+  }
+  if (!privateBootstrap.includes("background retry scheduled") || !privateBootstrap.includes("await presenceRequest?.catch")) {
+    fail("privateapi heartbeat must be non-blocking at startup and ordered on explicit stop");
   }
   if (privateBootstrap.includes("username") || queueMiddleware.includes("username")) {
     fail("liq2 private writes must identify users by full wallet address, never by a derived username");
@@ -135,6 +161,9 @@ function checkClientContract() {
   );
   if (presenceStart.includes("bootstrapPrivateMemberWalletOnce")) {
     fail("execution presence must only start heartbeat after queue-start bootstrap");
+  }
+  if (presenceStart.indexOf("presenceTimer = setInterval") > presenceStart.indexOf('runPrivateMemberWalletHeartbeat("online")')) {
+    fail("background presence retry must be installed before the initial heartbeat can fail or lose its browser caller");
   }
   if (privateBootstrap.includes("slice(2, 10)")) {
     fail("liq2 private writes must not derive a username from the wallet address");
@@ -175,8 +204,44 @@ function checkClientContract() {
   if (!profileMigration.includes("DROP TABLE IF EXISTS liq2_user_profiles") || !profileMigration.includes("TRUNCATE TABLE")) {
     fail("liq2_user_profiles migration must be a hard cutover");
   }
-  if (!profileMigration.includes("uq_liq2_user_profiles_chain_wallet") || !stateApi.includes("ON CONFLICT (chain, wallet_address) DO UPDATE")) {
-    fail("liq2 profile writes must upsert by chain plus full wallet address");
+  if (!privateBootstrap.includes("buildSystemId(chain, walletAddress, rpcUrl, appToken)")) {
+    fail("LIQ2 profile identity must include the RPC/app-token credential pair");
+  }
+  const unmountHandler = liquidationView.slice(liquidationView.indexOf("onBeforeUnmount"), liquidationView.indexOf("function startVisiblePolling"));
+  if (unmountHandler.includes('reportExecutionPresence("stopped"') || unmountHandler.includes("sendQueueStopBeacon")) {
+    fail("closing the browser view must not mark a running LIQ2 user offline");
+  }
+  const offlineHandler = liquidationView.slice(liquidationView.indexOf("function handleClientOffline"), liquidationView.indexOf("function handleClientOnline"));
+  if (offlineHandler.includes('reportExecutionPresence("stopped"') || offlineHandler.includes('queueState.value = "paused"')) {
+    fail("browser offline/close must hand off to background without stopping the LIQ2 user");
+  }
+  if (!queueMiddleware.includes("startBackgroundQueueHeartbeat(env, httpFallbackEndpoint, payload)")) {
+    fail("a successful LIQ2 start must hand heartbeat ownership to the local background service");
+  }
+  if (!latestMiddleware.includes('req.url?.startsWith("/api/liq2/online-wallets")') || !latestMiddleware.includes("DEFAULT_ONLINE_USERS_API_URL")) {
+    fail("LIQ2 online display must read privateapi.superarb.ai/online-users through its dedicated local route");
+  }
+  if (!latestMiddleware.includes("const queueUrl = new URL(DEFAULT_ONLINE_USERS_API_URL)")) {
+    fail("LIQ2 online display endpoint must not be redirected to a legacy/custom queue source");
+  }
+  if (!queueMiddleware.includes("return DEFAULT_QUEUE_STATUS_API_URL") || queueMiddleware.includes("env.LIQ2_ONLINE_USERS_API_URL")) {
+    fail("queue status reads must use only privateapi.superarb.ai/online-users");
+  }
+  const liq2OnlineHandler = latestMiddleware.slice(
+    latestMiddleware.indexOf("async function fetchLiq2OnlineWallets"),
+    latestMiddleware.indexOf("async function fetchMarketSnapshot"),
+  );
+  if (liq2OnlineHandler.includes("readLocalQueuedWallets") || liq2OnlineHandler.includes("LIQUIDATION_QUEUE_WSS_URL")) {
+    fail("LIQ2 online display must not merge local or WSS queue rows into privateARB public.users");
+  }
+  if (latestMiddleware.includes("readLocalQueuedWallets") || latestMiddleware.includes("private-local-mirror") || latestMiddleware.includes("fetchPrivateProfileQueuedWallets")) {
+    fail("legacy online-user compatibility sources must not be used anywhere in the LIQ2 display middleware");
+  }
+  if (!latestMiddleware.includes("filter(isLiq2SubmittedOnlineUser)")) {
+    fail("privateARB public.users results must be restricted to online LIQ2 submissions");
+  }
+  if (!latestMiddleware.includes("submissionSource: stringValue") || !latestMiddleware.includes("row.participantId || row.queueMemberKey || row.dedupeKey || row.id")) {
+    fail("online-user normalization must preserve LIQ2 source and distinct same-wallet rows");
   }
   if (!allMarketSnapshot.includes("/api/market-snapshot")) {
     fail("all market snapshot must use the independent market snapshot endpoint");

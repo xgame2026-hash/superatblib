@@ -29,12 +29,12 @@
             </el-select>
           </label>
           <div class="market-buttons">
-            <button :class="['run-button', { 'is-running': marketRunning }]" type="button" :disabled="marketRunning" @click="startMarketExecution">
+            <button :class="['run-button', { 'is-running': marketRunning }]" type="button" :disabled="marketRunning || marketTransitioning" @click="startMarketExecution">
               <img v-if="marketRunning" class="run-state-icon" :src="runIcon" alt="" />
               <el-icon v-else><VideoPlay /></el-icon>
               {{ marketRunning ? t("liquidation.running") : t("liquidation.start") }}
             </button>
-            <button class="pause-button" type="button" :disabled="!marketRunning" @click="pauseMarketExecution">
+            <button class="pause-button" type="button" :disabled="!marketRunning || marketTransitioning" @click="pauseMarketExecution">
               <el-icon><VideoPause /></el-icon>
               {{ t("liquidation.pause") }}
             </button>
@@ -174,6 +174,7 @@ const market = ref<MarketValue>("unconfigured");
 const terminalLines = ref<string[]>([]);
 const queueState = ref<QueueState>("idle");
 const marketRunning = ref(false);
+const marketTransitioning = ref(false);
 const queueMonitorRows = ref<ClientQueueStatusRow[]>(createEmptyClientQueueRows());
 const snapshotStrategyRows = ref<SnapshotStrategyRow[]>([]);
 const queueMonitorParticipantCount = ref(0);
@@ -218,9 +219,12 @@ function formatRpcUsageDisplay(
 
 let queueMonitorRefreshTimer = 0;
 let marketHeartbeatTimer = 0;
-let marketHeartbeatInFlight = false;
+let marketHeartbeatGeneration = 0;
+let marketHeartbeatInFlightGeneration = 0;
 let marketHeartbeatFailureCount = 0;
 let marketStartIntentId = "";
+let marketExecutionGeneration = 0;
+let marketQueueStartInFlight: Promise<Record<string, any>> | null = null;
 const MARKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const MARKET_HEARTBEAT_MAX_FAILURES = 6;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
@@ -275,6 +279,8 @@ function stopVisiblePolling() {
 }
 
 async function startMarketExecution() {
+  const executionGeneration = ++marketExecutionGeneration;
+  marketTransitioning.value = true;
   marketStartIntentId = createQueueStartIntentId();
   queueState.value = "waiting";
   marketRunning.value = true;
@@ -284,13 +290,18 @@ async function startMarketExecution() {
     marketRunning.value = false;
     appendTerminal(`market unavailable: ${displayStatus(currentMarket.value.apiStatus)}`);
     emit("launch-sound", "not-launched");
+    marketTransitioning.value = false;
     return;
   }
   appendTerminal(`snapshot source: ${currentMarket.value.endpoint}`);
   appendTerminal(`strategy status: ${displayStatus(currentMarket.value.apiStatus)}`);
   appendTerminal(t("liquidation.enteringQueue"));
+  let startRequest: Promise<Record<string, any>> | null = null;
   try {
-    const payload = await registerMarketQueueStart(currentMarket.value);
+    startRequest = registerMarketQueueStart(currentMarket.value);
+    marketQueueStartInFlight = startRequest;
+    const payload = await startRequest;
+    if (executionGeneration !== marketExecutionGeneration) return;
     queueState.value = payload.eligible === false ? "waiting" : "queued";
     appendTerminal(t("liquidation.queueSuccess", { id: displayQueueId(payload) }));
     appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
@@ -298,11 +309,13 @@ async function startMarketExecution() {
     if (payload.remoteAvailable === false && typeof payload.warning === "string") appendTerminal(payload.warning);
     persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
     await reportExecutionPresence("running", currentMarket.value);
+    if (executionGeneration !== marketExecutionGeneration) return;
     startMarketHeartbeat(payload.heartbeatIntervalMs);
     emit("launch-sound", "launched");
     await loadQueueMonitorStatus();
     await refreshMarketSnapshotDisplay();
   } catch (error) {
+    if (executionGeneration !== marketExecutionGeneration) return;
     marketStartIntentId = "";
     queueState.value = "idle";
     marketRunning.value = false;
@@ -311,11 +324,17 @@ async function startMarketExecution() {
     appendTerminal(`queue register failed: ${message}`);
     notifyQueueError(message);
     emit("launch-sound", "not-launched");
+  } finally {
+    if (marketQueueStartInFlight === startRequest) marketQueueStartInFlight = null;
+    if (executionGeneration === marketExecutionGeneration) marketTransitioning.value = false;
   }
 }
 
 async function pauseMarketExecution() {
+  ++marketExecutionGeneration;
+  marketTransitioning.value = true;
   const runningMarket = currentMarket.value;
+  const pendingStart = marketQueueStartInFlight;
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
@@ -323,6 +342,10 @@ async function pauseMarketExecution() {
   emit("launch-sound", "not-launched");
   if (!runningMarket.disabled) {
     try {
+      // A start and pause can overlap. Always let the start request settle before
+      // sending stop, otherwise the late start can clear the stop tombstone and
+      // revive a queue that the UI already considers paused.
+      await pendingStart?.catch(() => undefined);
       // The local UI has stopped execution even if the independent queue-stop
       // request later fails, so do not leave it advertised as executing.
       await reportExecutionPresence("stopped", runningMarket);
@@ -334,9 +357,12 @@ async function pauseMarketExecution() {
       const message = error instanceof Error ? error.message : t("liquidation.stopFailed");
       appendTerminal(`queue unregister failed: ${message}`);
       ElMessage.error(message);
+    } finally {
+      marketTransitioning.value = false;
     }
   } else {
     appendTerminal(`no running market to pause: ${runningMarket.label}`);
+    marketTransitioning.value = false;
   }
 }
 
@@ -350,10 +376,11 @@ function setTerminalLines(lines: string[]) {
 
 function startMarketHeartbeat(intervalMs: unknown = marketHeartbeatIntervalMs) {
   stopMarketHeartbeat();
+  const heartbeatGeneration = marketHeartbeatGeneration;
   marketHeartbeatIntervalMs = normalizeHeartbeatIntervalMs(intervalMs);
   marketHeartbeatFailureCount = 0;
   marketHeartbeatTimer = window.setInterval(() => {
-    void sendMarketHeartbeat();
+    void sendMarketHeartbeat(heartbeatGeneration);
   }, marketHeartbeatIntervalMs);
 }
 
@@ -361,24 +388,35 @@ function resumeMarketHeartbeat() {
   if (!marketHeartbeatTimer) startMarketHeartbeat(marketHeartbeatIntervalMs);
 }
 
-async function sendMarketHeartbeat() {
-  if (!marketRunning.value || currentMarket.value.disabled || marketHeartbeatInFlight) return;
-  marketHeartbeatInFlight = true;
+async function sendMarketHeartbeat(heartbeatGeneration = marketHeartbeatGeneration) {
+  if (
+    heartbeatGeneration !== marketHeartbeatGeneration ||
+    !marketRunning.value ||
+    currentMarket.value.disabled ||
+    marketHeartbeatInFlightGeneration === heartbeatGeneration
+  ) return;
+  marketHeartbeatInFlightGeneration = heartbeatGeneration;
   try {
     const payload = await registerMarketQueueStart(currentMarket.value, "heartbeat");
+    if (heartbeatGeneration !== marketHeartbeatGeneration) return;
     marketHeartbeatFailureCount = 0;
     queueState.value = payload.eligible === false ? "waiting" : "queued";
     persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
     await reportExecutionPresence("running", currentMarket.value);
+    if (heartbeatGeneration !== marketHeartbeatGeneration) return;
     const nextInterval = normalizeHeartbeatIntervalMs(payload.heartbeatIntervalMs);
     if (nextInterval !== marketHeartbeatIntervalMs) startMarketHeartbeat(nextInterval);
   } catch (error) {
+    if (heartbeatGeneration !== marketHeartbeatGeneration) return;
     const message = error instanceof Error ? error.message : "unknown error";
     marketHeartbeatFailureCount += 1;
     appendTerminal(`queue heartbeat failed (${marketHeartbeatFailureCount}/${MARKET_HEARTBEAT_MAX_FAILURES}): ${message}`);
     if (isRecoverableHeartbeatError(message) && marketHeartbeatFailureCount < MARKET_HEARTBEAT_MAX_FAILURES) return;
     if (isFatalQueueRuntimeError(message)) {
-      sendQueueStopBeacon(currentMarket.value);
+      // The server has already applied a local pause/stop tombstone. Sending a
+      // second stop here can arrive after the user's next start and pause that
+      // new queue, recreating the stale-heartbeat loop.
+      if (!isLocalQueueStoppedError(message)) sendQueueStopBeacon(currentMarket.value);
       void reportExecutionPresence("stopped", currentMarket.value);
       marketRunning.value = false;
       queueState.value = "idle";
@@ -388,7 +426,7 @@ async function sendMarketHeartbeat() {
       emit("launch-sound", "not-launched");
     }
   } finally {
-    marketHeartbeatInFlight = false;
+    if (marketHeartbeatInFlightGeneration === heartbeatGeneration) marketHeartbeatInFlightGeneration = 0;
   }
 }
 
@@ -398,10 +436,9 @@ function normalizeHeartbeatIntervalMs(value: unknown): number {
 }
 
 function stopMarketHeartbeat() {
-  if (!marketHeartbeatTimer) return;
-  window.clearInterval(marketHeartbeatTimer);
+  ++marketHeartbeatGeneration;
+  if (marketHeartbeatTimer) window.clearInterval(marketHeartbeatTimer);
   marketHeartbeatTimer = 0;
-  marketHeartbeatInFlight = false;
 }
 
 async function unregisterMarketQueue(item: MarketOption): Promise<Record<string, any>> {
@@ -460,25 +497,36 @@ function queueWalletTail8(value: string): string {
 }
 
 function restoreRunningMarketState() {
+  if (marketQueueStartInFlight || marketRunning.value) return;
+  const executionGeneration = ++marketExecutionGeneration;
+  marketTransitioning.value = true;
   const saved = readRunningMarketState();
-  if (!saved) return;
+  if (!saved) {
+    marketTransitioning.value = false;
+    return;
+  }
   market.value = saved.market;
   queueState.value = "waiting";
   marketRunning.value = false;
   marketStartIntentId = createQueueStartIntentId();
   setTerminalLines([`queue reconnecting: ${saved.market}`, "startup detection: full queue sync required"]);
-  void registerMarketQueueStart(saved.option, "start")
+  const startRequest = registerMarketQueueStart(saved.option, "start");
+  marketQueueStartInFlight = startRequest;
+  void startRequest
     .then(async (payload) => {
+      if (executionGeneration !== marketExecutionGeneration) return;
       queueState.value = payload.eligible === false ? "waiting" : "queued";
       marketRunning.value = true;
       appendTerminal(`queue registered: ${payload.chainLabel || normalizeChainLabel(payload.chain)} ${shortAddress(payload.walletAddress)}`);
       persistRunningMarketState(typeof payload.walletAddress === "string" ? payload.walletAddress : undefined, payload);
       await reportExecutionPresence("running", currentMarket.value);
+      if (executionGeneration !== marketExecutionGeneration) return;
       startMarketHeartbeat(payload.heartbeatIntervalMs);
       void loadQueueMonitorStatus();
       void refreshMarketSnapshotDisplay();
     })
     .catch((error) => {
+      if (executionGeneration !== marketExecutionGeneration) return;
       const message = error instanceof Error ? error.message : "unknown error";
       appendTerminal(`auto reconnect failed: ${message}`);
       if (isFatalQueueRuntimeError(message)) {
@@ -488,6 +536,10 @@ function restoreRunningMarketState() {
         clearRunningMarketState();
         emit("launch-sound", "not-launched");
       }
+    })
+    .finally(() => {
+      if (marketQueueStartInFlight === startRequest) marketQueueStartInFlight = null;
+      if (executionGeneration === marketExecutionGeneration) marketTransitioning.value = false;
     });
 }
 
@@ -528,10 +580,11 @@ function restoreRunningMarketIntent() {
 
 function handleClientOffline() {
   if (!marketRunning.value) return;
-  queueState.value = "paused";
   stopMarketHeartbeat();
-  void reportExecutionPresence("stopped", currentMarket.value);
-  appendTerminal("network offline: queue heartbeat paused");
+  // Browser connectivity is not a user pause. The local service owns the
+  // background presence heartbeat after start, so never mark the user stopped
+  // merely because this page went offline or is about to close.
+  appendTerminal("network offline: foreground heartbeat handed to background");
 }
 
 function handleClientOnline() {
@@ -658,6 +711,10 @@ function isFatalQueueRuntimeError(message: string): boolean {
 
 function isRecoverableHeartbeatError(message: string): boolean {
   return /队列服务请求超时|请求超时|WSS 队列服务连接超时|WSS 队列服务暂时不可用|在确认上报前断开|WebSocket is not open|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|network|timeout/i.test(message);
+}
+
+function isLocalQueueStoppedError(message: string): boolean {
+  return /本地队列已暂停|本地队列已停止/.test(message);
 }
 
 function notifyQueueError(message: string) {

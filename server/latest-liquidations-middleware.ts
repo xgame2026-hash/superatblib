@@ -7,7 +7,6 @@ import { queueWssToken } from "./queue-token";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
-const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SNAPSHOT_API_URL = "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot";
 const LEGACY_SNAPSHOT_API_URLS = new Set([
@@ -98,6 +97,8 @@ type SnapshotQueueRow = {
   netProfit: string;
   status: string;
   source: string;
+  submissionSource?: string;
+  online?: boolean;
   registeredAt?: string;
   joinedAt?: string;
   startedAt?: string;
@@ -340,8 +341,8 @@ async function fetchLiq2OnlineWallets(req: IncomingMessage) {
       queuedWallets: [],
     };
   }
-  const online = await fetchWssQueuedWallets(env, req);
-  const queuedWallets = sortQueueRowsByRealtimeUsdtDesc(dedupeAndSortStateRows(online.rows));
+  const online = await fetchPrivateOnlineUsers(env, req);
+  const queuedWallets = sortQueueRowsByRealtimeUsdtDesc(dedupeAndSortStateRows(online.rows.filter(isLiq2SubmittedOnlineUser)));
   const updatedAt = stringValue(online.status.updatedAt, online.status.updated_at) ?? new Date().toISOString();
   return {
     ok: true,
@@ -361,7 +362,7 @@ async function fetchMarketSnapshot(req: IncomingMessage) {
   assertOfficialConfig("全部市场快照读取", env);
   const snapshotUrl = normalizeSnapshotUrl(env.LIQUIDATION_SNAPSHOT_API_URL?.trim() || DEFAULT_SNAPSHOT_API_URL);
   const payload = await fetchSnapshotPayload(snapshotUrl, env, req);
-  const response = buildSnapshotResponse(payload, env, [], emptyWssQueueSnapshot());
+  const response = buildSnapshotResponse(payload, env, [], emptyPrivateOnlineSnapshot());
   response.queueTransport = "snapshot";
   response.queueSource = "liquidation-snapshot-service";
   response.queueParticipantCount = 0;
@@ -377,15 +378,13 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   assertOfficialConfig("清算快照读取", env);
   const snapshotUrl = normalizeSnapshotUrl(env.LIQUIDATION_SNAPSHOT_API_URL?.trim() || DEFAULT_SNAPSHOT_API_URL);
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
-  const wssQueue = options.fast ? emptyWssQueueSnapshot() : await fetchWssQueuedWallets(env, req).catch(() => emptyWssQueueSnapshot());
-  const privateProfileRows = await fetchPrivateProfileQueuedWallets(env).catch(() => []);
+  const privateOnline = options.fast ? emptyPrivateOnlineSnapshot() : await fetchPrivateOnlineUsers(env, req).catch(() => emptyPrivateOnlineSnapshot());
+  const privateProfileRows = privateOnline.rows.filter(isLiq2SubmittedOnlineUser);
   const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
-  const response = buildSnapshotResponse(payload, env, wssQueue.rows, wssQueue);
-  const localQueuedWallets = readLocalQueuedWallets();
-  response.queuedWallets = dedupeAndSortStateRows([...privateProfileRows, ...wssQueue.rows, ...localQueuedWallets]);
-  response.queueTransport =
-    privateProfileRows.length > 0 ? "private-global" : wssQueue.ok ? "private" : localQueuedWallets.length > 0 ? "private-local-mirror" : "private-local-empty";
-  response.queueSource = privateProfileRows.length > 0 ? "privateapi.superarb.ai/online-users" : wssQueue.ok ? "privateapi.superarb.ai/online-users" : "privateapi.superarb.ai/local-liq2";
+  const response = buildSnapshotResponse(payload, env, privateProfileRows, privateOnline);
+  response.queuedWallets = dedupeAndSortStateRows(privateProfileRows);
+  response.queueTransport = privateOnline.ok ? "private-global" : "private-unavailable";
+  response.queueSource = "privateapi.superarb.ai/online-users";
   response.queueParticipantCount = response.queuedWallets.length;
   response.queueUpdatedAt = new Date().toISOString();
   if (options.queueOnly) {
@@ -397,16 +396,6 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const queuedWalletsWithChanges = options.queueOnly ? queuedWallets : await enrichExactTodayContractChanges(queuedWallets, env, authCode);
   response.queuedWallets = sortQueueRowsByRealtimeUsdtDesc(queuedWalletsWithChanges);
   return response;
-}
-
-function readLocalQueuedWallets(): SnapshotQueueRow[] {
-  if (!existsSync(LOCAL_QUEUE_STATE_FILE)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(LOCAL_QUEUE_STATE_FILE, "utf8")) as { items?: unknown };
-    return dedupeAndSortStateRows(readQueue(parsed.items));
-  } catch {
-    return [];
-  }
 }
 
 function dedupeAndSortStateRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
@@ -427,7 +416,7 @@ function sortQueueRowsByRealtimeUsdtDesc(rows: SnapshotQueueRow[]): SnapshotQueu
 }
 
 function queueMergeKey(row: SnapshotQueueRow): string {
-  return [row.chain || row.chainLabel || "unknown", row.wallet.toLowerCase()].join(":");
+  return row.participantId || row.queueMemberKey || row.dedupeKey || row.id || [row.chain || row.chainLabel || "unknown", row.wallet.toLowerCase()].join(":");
 }
 
 async function fetchSnapshotPayload(snapshotUrl: string, env: Record<string, string>, req: IncomingMessage): Promise<SnapshotPayload> {
@@ -458,15 +447,18 @@ function normalizeSnapshotUrl(value: string): string {
   }
 }
 
-async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingMessage, includeAllLiq2 = false): Promise<{ ok: boolean; rows: SnapshotQueueRow[]; status: SnapshotPayload }> {
-  const queueUrl = new URL(env.LIQ2_ONLINE_USERS_API_URL?.trim() || DEFAULT_ONLINE_USERS_API_URL);
+async function fetchPrivateOnlineUsers(env: Record<string, string>, req: IncomingMessage, includeAllLiq2 = false): Promise<{ ok: boolean; rows: SnapshotQueueRow[]; status: SnapshotPayload }> {
+  // This is the single authoritative privateARB public.users list. Do not
+  // redirect it to legacy queue APIs or local mirrors through environment
+  // configuration.
+  const queueUrl = new URL(DEFAULT_ONLINE_USERS_API_URL);
   if (includeAllLiq2) queueUrl.searchParams.set("scope", "all");
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const response = await fetch(queueUrl, {
     headers: privateMemberQueueStatusHeaders(env, authCode),
     signal: AbortSignal.timeout(timeoutMs(env)),
   });
-  if (!response.ok) throw new Error(`WSS 队列状态请求失败 (${response.status})`);
+  if (!response.ok) throw new Error(`privateapi online-users request failed (${response.status})`);
   const payload = (await response.json()) as SnapshotPayload;
   const sourcePayload = unwrapPayload(payload);
   return {
@@ -476,16 +468,34 @@ async function fetchWssQueuedWallets(env: Record<string, string>, req: IncomingM
   };
 }
 
-async function fetchPrivateProfileQueuedWallets(env: Record<string, string>): Promise<SnapshotQueueRow[]> {
-  const response = await fetch(env.LIQ2_ONLINE_USERS_API_URL?.trim() || DEFAULT_ONLINE_USERS_API_URL, {
-    headers: privateMemberQueueStatusHeaders(env, ""),
-    signal: AbortSignal.timeout(timeoutMs(env)),
-  });
-  if (!response.ok) throw new Error(`privateapi online users request failed (${response.status})`);
-  const payload = (await response.json()) as SnapshotPayload;
-  const sourcePayload = unwrapPayload(payload);
-  const payloadRecord = sourcePayload as Record<string, unknown>;
-  return readQueue(payloadRecord.onlineUsers ?? payloadRecord.online_users ?? payloadRecord.users ?? payloadRecord.queuedWallets ?? sourcePayload.queue ?? sourcePayload.rows ?? []);
+function isLiq2SubmittedOnlineUser(row: SnapshotQueueRow): boolean {
+  const record = row as Record<string, unknown>;
+  const submissionSource = stringValue(
+    record.submissionSource,
+    record.submission_source,
+    record.submissionType,
+    record.submission_type,
+    record.submittedBy,
+    record.submitted_by,
+  );
+  if (submissionSource && submissionSource.toLowerCase() !== "liq2") return false;
+  const online = onlineBooleanValue(record.online, record.isOnline, record.is_online);
+  const status = (stringValue(record.status, record.presenceStatus, record.presence_status) ?? "").toLowerCase();
+  if (online === false || ["offline", "stopped", "paused", "logout"].includes(status)) return false;
+  return true;
+}
+
+function onlineBooleanValue(...values: unknown[]): boolean | null {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number" && Number.isFinite(value)) return value > 0;
+    if (typeof value === "string" && value.trim()) {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "1", "online", "active", "running"].includes(normalized)) return true;
+      if (["false", "0", "offline", "stopped", "paused"].includes(normalized)) return false;
+    }
+  }
+  return null;
 }
 
 function privateMemberQueueStatusHeaders(env: Record<string, string>, authCode: string): Record<string, string> {
@@ -508,7 +518,7 @@ function privateMemberQueueStatusToken(env: Record<string, string>): string {
   );
 }
 
-function emptyWssQueueSnapshot() {
+function emptyPrivateOnlineSnapshot() {
   return { ok: false, rows: [] as SnapshotQueueRow[], status: {} as SnapshotPayload };
 }
 
@@ -731,6 +741,8 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
     netProfit: formatMaybeMoney(row.netProfit, row.netProfitUsd, row.net_profit, row.net_profit_usd, row.roughNetProfit, row.rough_net_profit),
     status: stringValue(row.status) ?? "候选",
     source: stringValue(row.source) ?? "--",
+    submissionSource: stringValue(row.submissionSource, row.submission_source, row.submissionType, row.submission_type, row.submittedBy, row.submitted_by),
+    online: onlineBooleanValue(row.online, row.isOnline, row.is_online) ?? undefined,
     registeredAt: stringValue(row.registeredAt, row.registered_at),
     joinedAt: stringValue(row.joinedAt, row.joined_at),
     startedAt: stringValue(row.startedAt, row.started_at),
