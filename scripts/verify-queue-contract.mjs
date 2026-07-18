@@ -6,7 +6,7 @@ const privateUrl = process.env.VERIFY_STATE_URL || "https://privateapi.superarb.
 const shouldCheckRemote = process.env.VERIFY_PRIVATE_REMOTE === "1" || Boolean(process.env.VERIFY_STATE_URL);
 const forbiddenUiTerms = ["数据库"];
 const sourceDirs = ["src", "server"];
-const requiredVersion = "1.6.3";
+const requiredVersion = "1.6.5";
 const requiredProtocol = "liq2-cutover-20260624-v160";
 
 function fail(message) {
@@ -52,6 +52,7 @@ function checkClientContract() {
   const privateBootstrap = read("server/private-member-wallet-bootstrap.ts");
   const settingsMiddleware = read("server/settings-middleware.ts");
   const stateApi = read("server/state-api-rust/src/main.rs");
+  const viteConfig = read("vite.config.ts");
   const profileMigration = read("server/state-api-rust/migrations/20260624_rebuild_liq2_user_profiles.sql");
   const packageJson = JSON.parse(read("package.json"));
   const cargoToml = read("server/state-api-rust/Cargo.toml");
@@ -102,6 +103,15 @@ function checkClientContract() {
   }
   if (!queueMiddleware.includes('bootstrapPrivateMemberWalletOnce("queue-start"')) {
     fail("liq2 queue start must write the current wallet profile before heartbeats begin");
+  }
+  if (viteConfig.includes('bootstrapPrivateMemberWalletOnce("vite-startup"')) {
+    fail("opening the liq2 dashboard must not submit a wallet profile");
+  }
+  if (privateBootstrap.includes("validateSuperMtNodeAppToken")) {
+    fail("liq2 bootstrap must use one authoritative privateapi write, without a separate member-tier preflight");
+  }
+  if (stateApi.includes("resolve_supermtnode_rpc_plan")) {
+    fail("liq2 database bootstrap must not wait for an external RPC-plan lookup");
   }
   if (!queueMiddleware.includes("throw new Error(`用户数据写入失败")) {
     fail("liq2 queue start must stop when the user profile was not written");

@@ -214,9 +214,9 @@ type SwapHistoryItem = {
   createdAt: string;
 };
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
-const HISTORY_KEY = "superarb-xbch-swap-history-v1.6.3";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
+const HISTORY_KEY = "superarb-xbch-swap-history-v1.6.5";
 
 const fromToken = ref<SwapToken>("xBCH");
 const fromAmount = ref("");

@@ -19,8 +19,8 @@ const props = defineProps<{
   alertSounds: Record<"rewardReceived" | "slotAnchored", AlertSoundId | string>;
 }>();
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
 const REFRESH_INTERVAL_MS = 15_000;
 
 let refreshTimer = 0;

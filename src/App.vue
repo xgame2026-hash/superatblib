@@ -385,9 +385,9 @@ type QueueKey =
   | "heartbeatIntervalMs"
   | "txEventsUrl";
 
-const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.3";
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
+const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.5";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
 // Fixed by protocol: authorization-code verification must use this endpoint.
 const LICENSE_CHECK_URL = "https://api.supermtnode.io/license/check";
 const ACTIVE_VIEW_KEY = "liq2-active-view";
@@ -397,7 +397,7 @@ const GITHUB_UPDATE_PENDING_KEY = "liq2-github-update-pending";
 const GITHUB_UPDATE_ANNOUNCED_KEY = "liq2-github-update-announced";
 const GITHUB_VERSION_REFRESH_MS = 5 * 60 * 1000;
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.6.3";
+const appVersion = "1.6.5";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
@@ -1212,7 +1212,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.6.3 internal settings.",
+    "# Generated from SuperARB 1.6.5 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",

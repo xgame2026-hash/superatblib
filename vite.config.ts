@@ -15,7 +15,7 @@ import { handleSlotsOrdersRequest } from "./server/slots-orders-middleware";
 import { handleSwapRequest } from "./server/swap-middleware";
 import { handleTxGraphRequest } from "./server/tx-graph-middleware";
 import { handleWalletAssetsRequest } from "./server/wallet-assets-middleware";
-import { bootstrapPrivateMemberWalletOnce, stopPrivateMemberWalletHeartbeat } from "./server/private-member-wallet-bootstrap";
+import { stopPrivateMemberWalletHeartbeat } from "./server/private-member-wallet-bootstrap";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -31,7 +31,6 @@ export default defineConfig(({ mode }) => {
     {
       name: "superarb-settings-api",
       configureServer(server) {
-        void bootstrapPrivateMemberWalletOnce("vite-startup");
         restoreLocalQueueHeartbeats();
         server.httpServer?.once("close", () => {
           void stopPrivateMemberWalletHeartbeat();

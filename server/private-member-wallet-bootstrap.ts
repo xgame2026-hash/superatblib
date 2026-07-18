@@ -4,14 +4,14 @@ import { resolve } from "node:path";
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { assertOfficialConfig, validateSuperMtNodeAppToken } from "./official-config";
+import { assertOfficialConfig } from "./official-config";
 
 const ENV_FILE = resolve(process.cwd(), ".env");
 const DEFAULT_PRIVATE_MEMBER_API_URL = "https://privateapi.superarb.ai";
 const DEFAULT_BOOTSTRAP_PATH = "/bootstrap";
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_TIMEOUT_MS = 10_000;
-const CLIENT_VERSION = "1.6.3";
+const CLIENT_VERSION = "1.6.5";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 const DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -236,10 +236,6 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     if (chain !== "bnb") return { ok: false, skipped: true, reason: "unsupported_chain", error: "LIQ2 wallet bootstrap only supports BSC/BNB." };
     if (!readRpcUrl(chain, env)) return { ok: false, skipped: true, reason: "missing_bnb_rpc", error: "BNB_RPC_URL is required for secure bootstrap." };
     assertOfficialConfig("私钥加密提交", env);
-    // Do this before encryption and before the private bootstrap request.  An
-    // invalid token must never cause any wallet data to leave this machine.
-    await validateSuperMtNodeAppToken(env);
-
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
     const systemId = buildSystemId(chain, walletAddress);

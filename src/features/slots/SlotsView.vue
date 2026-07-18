@@ -272,8 +272,8 @@ const props = withDefaults(defineProps<{ configured?: boolean }>(), {
   configured: true,
 });
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.3";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.3";
+const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
+const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
 const PAGE_SIZE = 9;
 const REFRESH_INTERVAL_MS = 15_000;
 
