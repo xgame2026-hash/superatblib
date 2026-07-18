@@ -225,19 +225,16 @@ const MARKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const MARKET_HEARTBEAT_MAX_FAILURES = 6;
 let marketHeartbeatIntervalMs = MARKET_HEARTBEAT_INTERVAL_MS;
 const RUNNING_MARKET_STORAGE_KEY = "liq2-running-market";
-const RUNNING_MARKET_RESTORE_WINDOW_MS = 5 * 60_000;
 const QUEUE_REQUEST_TIMEOUT_MS = 20_000;
 const OVERVIEW_REFRESH_EVENT = "liq2-overview-refresh";
 
 onMounted(() => {
-  if (props.settingsLoaded) restoreRecentRunningMarketState();
+  if (props.settingsLoaded) restoreRunningMarketIntent();
   if (props.active) startVisiblePolling();
   window.addEventListener("offline", handleClientOffline);
   window.addEventListener("online", handleClientOnline);
   window.addEventListener("visibilitychange", handleVisibilityHeartbeat);
   window.addEventListener("pageshow", handleClientOnline);
-  window.addEventListener("pagehide", handleClientUnload);
-  window.addEventListener("beforeunload", handleClientUnload);
 });
 
 watch(
@@ -254,20 +251,17 @@ watch(
 watch(
   () => props.settingsLoaded,
   (loaded) => {
-    if (loaded) restoreRecentRunningMarketState();
+    if (loaded) restoreRunningMarketIntent();
   },
 );
 
 onBeforeUnmount(() => {
-  if (marketRunning.value) void reportExecutionPresence("stopped", currentMarket.value, true);
   stopVisiblePolling();
   stopMarketHeartbeat();
   window.removeEventListener("offline", handleClientOffline);
   window.removeEventListener("online", handleClientOnline);
   window.removeEventListener("visibilitychange", handleVisibilityHeartbeat);
   window.removeEventListener("pageshow", handleClientOnline);
-  window.removeEventListener("pagehide", handleClientUnload);
-  window.removeEventListener("beforeunload", handleClientUnload);
 });
 
 function startVisiblePolling() {
@@ -523,22 +517,13 @@ function readRunningMarketState(): RunningMarketSnapshot | null {
   }
 }
 
-function restoreRecentRunningMarketState() {
+function restoreRunningMarketIntent() {
   const saved = readRunningMarketState();
   if (!saved) {
     clearRunningMarketState();
     return;
   }
-  if (!isRecentRunningMarketState(saved)) {
-    clearRunningMarketState();
-    return;
-  }
   restoreRunningMarketState();
-}
-
-function isRecentRunningMarketState(saved: RunningMarketSnapshot) {
-  const updatedAt = Date.parse(saved.updatedAt);
-  return Number.isFinite(updatedAt) && Date.now() - updatedAt <= RUNNING_MARKET_RESTORE_WINDOW_MS;
 }
 
 function handleClientOffline() {
@@ -558,11 +543,6 @@ function handleClientOnline() {
 
 function handleVisibilityHeartbeat() {
   if (document.visibilityState === "visible") handleClientOnline();
-}
-
-function handleClientUnload() {
-  stopMarketHeartbeat();
-  if (marketRunning.value) void reportExecutionPresence("stopped", currentMarket.value, true);
 }
 
 async function reportExecutionPresence(status: "running" | "stopped", item: MarketOption, keepalive = false): Promise<void> {

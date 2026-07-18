@@ -630,8 +630,6 @@ onMounted(() => {
   githubVersionRefreshTimer = window.setInterval(() => void loadGithubVersion(), GITHUB_VERSION_REFRESH_MS);
   document.addEventListener("pointerdown", closeGithubMenuOnOutside);
   window.addEventListener("hashchange", applyViewFromUrl);
-  window.addEventListener("pagehide", handlePresencePageExit);
-  window.addEventListener("beforeunload", handlePresencePageExit);
   if (isAuthenticated.value) {
     void loadNews();
   }
@@ -642,8 +640,6 @@ onBeforeUnmount(() => {
   if (githubVersionRefreshTimer) window.clearInterval(githubVersionRefreshTimer);
   document.removeEventListener("pointerdown", closeGithubMenuOnOutside);
   window.removeEventListener("hashchange", applyViewFromUrl);
-  window.removeEventListener("pagehide", handlePresencePageExit);
-  window.removeEventListener("beforeunload", handlePresencePageExit);
 });
 
 watch(launchSoundEnabled, (enabled) => {
@@ -804,10 +800,6 @@ async function stopPresenceHeartbeat() {
   } catch {
     // The server-side 90-second timeout is the fallback when logout cannot reach the local API.
   }
-}
-
-function handlePresencePageExit() {
-  if (isAuthenticated.value) void stopPresenceHeartbeat();
 }
 
 function mapAuthError(error: string) {

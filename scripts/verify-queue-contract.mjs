@@ -45,6 +45,7 @@ async function checkPrivateService() {
 }
 
 function checkClientContract() {
+  const app = read("src/App.vue");
   const liquidationView = read("src/features/liquidation/LiquidationView.vue");
   const allMarketSnapshot = read("src/features/liquidation/AllMarketSnapshot.vue");
   const queueMiddleware = read("server/liquidation-queue-status-middleware.ts");
@@ -71,6 +72,12 @@ function checkClientContract() {
   }
   if (!liquidationView.includes("function resumeMarketHeartbeat()")) {
     fail("client must restart heartbeat after a short network interruption");
+  }
+  if (app.includes("handlePresencePageExit") || liquidationView.includes("handleClientUnload")) {
+    fail("closing the dashboard must not stop server-owned execution presence");
+  }
+  if (liquidationView.includes("RUNNING_MARKET_RESTORE_WINDOW_MS") || !liquidationView.includes("restoreRunningMarketIntent")) {
+    fail("running intent must survive a closed dashboard until the user explicitly pauses it");
   }
   if (!queueMiddleware.includes("validQueueStartIntentId")) {
     fail("queue start must require a fresh start intent");
