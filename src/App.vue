@@ -211,6 +211,7 @@
             :feed-fields="feedFields"
             :alert-sound-fields="alertSoundFields"
             :alert-sound-options="alertSoundOptions"
+            :sound-enabled="launchSoundEnabled"
             @security-check="checkOfficialSettings"
             @save="saveSettings"
             @logout="logout"
@@ -321,7 +322,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, r
 import { ElMessage } from "element-plus";
 import { Hide, Key, View } from "@element-plus/icons-vue";
 import { useNews } from "./composables/useNews";
-import { ALERT_SOUND_IDS, normalizeAlertSoundId, playAlertSound, type AlertSoundKey } from "./audio/alert-sounds";
+import { ALERT_SOUND_IDS, normalizeAlertSoundId, playAlertSound, setAlertSoundsEnabled, type AlertSoundKey } from "./audio/alert-sounds";
 import {
   commitsMatch,
   compareVersionLabels,
@@ -616,6 +617,7 @@ const metrics = ref([
 
 let notLaunchedReminderTimer = 0;
 let githubVersionRefreshTimer = 0;
+const activeLaunchAudios = new Set<HTMLAudioElement>();
 
 onMounted(() => {
   clearLegacyAuthCache();
@@ -637,6 +639,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopNotLaunchedReminder();
+  stopLaunchAudios();
   if (githubVersionRefreshTimer) window.clearInterval(githubVersionRefreshTimer);
   document.removeEventListener("pointerdown", closeGithubMenuOnOutside);
   window.removeEventListener("hashchange", applyViewFromUrl);
@@ -644,8 +647,12 @@ onBeforeUnmount(() => {
 
 watch(launchSoundEnabled, (enabled) => {
   localStorage.setItem(LAUNCH_SOUND_KEY, enabled ? "enabled" : "disabled");
-  if (!enabled) stopNotLaunchedReminder();
-});
+  setAlertSoundsEnabled(enabled);
+  if (!enabled) {
+    stopNotLaunchedReminder();
+    stopLaunchAudios();
+  }
+}, { immediate: true });
 
 watch(isAuthenticated, async (authorized) => {
   if (authorized) {
@@ -1349,7 +1356,19 @@ function playLaunchAudio(url: string) {
   if (!launchSoundEnabled.value) return;
   const audio = new Audio(url);
   audio.volume = 0.82;
-  void audio.play().catch(() => {});
+  activeLaunchAudios.add(audio);
+  const release = () => activeLaunchAudios.delete(audio);
+  audio.addEventListener("ended", release, { once: true });
+  audio.addEventListener("error", release, { once: true });
+  void audio.play().catch(release);
+}
+
+function stopLaunchAudios() {
+  for (const audio of activeLaunchAudios) {
+    audio.pause();
+    audio.currentTime = 0;
+  }
+  activeLaunchAudios.clear();
 }
 
 function startNotLaunchedReminder() {

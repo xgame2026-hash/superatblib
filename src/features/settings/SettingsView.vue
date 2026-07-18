@@ -315,7 +315,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CircleCheck, Hide, SwitchButton, VideoPause, VideoPlay, View } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import * as secp from "@noble/secp256k1";
@@ -365,6 +365,7 @@ const props = defineProps<{
   feedFields: LooseRecord[];
   alertSoundFields: LooseRecord[];
   alertSoundOptions: readonly string[];
+  soundEnabled: boolean;
 }>();
 
 const languageSelectRef = ref<HTMLElement | null>(null);
@@ -405,6 +406,10 @@ onBeforeUnmount(() => {
   revokeProfileAvatarObjectUrl();
 });
 
+watch(() => props.soundEnabled, (enabled) => {
+  if (!enabled) stopAlertSoundPreview();
+});
+
 function selectLanguage(value: string) {
   props.settingsForm.language = value;
   languageMenuOpen.value = false;
@@ -431,6 +436,7 @@ function toggleAlertSoundPreview(key: string) {
 }
 
 async function playAlertSoundPreview(key: string) {
+  if (!props.soundEnabled) return;
   const alertKey = key as AlertSoundKey;
   const soundId = normalizeAlertSoundId(props.settingsForm.alertSounds[alertKey]);
   stopAlertSoundPreview();

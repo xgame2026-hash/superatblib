@@ -60,6 +60,9 @@ export const ALERT_SOUND_URLS = {
   },
 } as const satisfies Record<AlertSoundKey, Record<AlertSoundId, string>>;
 
+let alertSoundsEnabled = true;
+const activeAlertSounds = new Set<HTMLAudioElement>();
+
 export function normalizeAlertSoundId(value: unknown): AlertSoundId {
   const normalized = typeof value === "string" || typeof value === "number"
     ? String(value).trim().toLowerCase()
@@ -72,11 +75,27 @@ export function resolveAlertSoundUrl(key: AlertSoundKey, id: unknown): string {
   return ALERT_SOUND_URLS[key][normalizeAlertSoundId(id)];
 }
 
-/** Plays one configured notification without sharing state with other alerts. */
-export function playAlertSound(key: AlertSoundKey, id: unknown): HTMLAudioElement {
+/** Keeps every configured notification under the application's global sound switch. */
+export function setAlertSoundsEnabled(enabled: boolean): void {
+  alertSoundsEnabled = enabled;
+  if (enabled) return;
+  for (const audio of activeAlertSounds) {
+    audio.pause();
+    audio.currentTime = 0;
+  }
+  activeAlertSounds.clear();
+}
+
+/** Plays one configured notification when the application's global sound switch is on. */
+export function playAlertSound(key: AlertSoundKey, id: unknown): HTMLAudioElement | null {
+  if (!alertSoundsEnabled) return null;
   const audio = new Audio(resolveAlertSoundUrl(key, id));
   audio.preload = "auto";
   audio.volume = 0.82;
-  void audio.play().catch(() => undefined);
+  activeAlertSounds.add(audio);
+  const release = () => activeAlertSounds.delete(audio);
+  audio.addEventListener("ended", release, { once: true });
+  audio.addEventListener("error", release, { once: true });
+  void audio.play().catch(release);
   return audio;
 }
