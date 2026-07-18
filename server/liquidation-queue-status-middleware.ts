@@ -582,7 +582,7 @@ async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, str
   } catch (error) {
     session.failureCount += 1;
     session.lastError = error instanceof Error ? error.message : String(error);
-    if (/列队已暂停/.test(session.lastError)) {
+    if (/队列已暂停|队列已停止/.test(session.lastError)) {
       stopBackgroundQueueHeartbeat(key, "state-stopped");
       return;
     }

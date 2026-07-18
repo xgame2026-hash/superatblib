@@ -85,6 +85,12 @@ function checkClientContract() {
   if (!queueMiddleware.includes("本地队列已暂停")) {
     fail("old heartbeats must be rejected after pause");
   }
+  if (!liquidationView.includes("本地队列已暂停|本地队列已停止")) {
+    fail("client must permanently stop stale heartbeats after a local queue pause");
+  }
+  if (queueMiddleware.includes("/列队已暂停/") || !queueMiddleware.includes("/队列已暂停|队列已停止/")) {
+    fail("background heartbeat must stop after the local queue is paused or stopped");
+  }
   const registerStart = queueMiddleware.indexOf("async function registerQueueStatus");
   const registerEnd = queueMiddleware.indexOf("async function fetchQueueStatus", registerStart);
   const registerQueueStatus =

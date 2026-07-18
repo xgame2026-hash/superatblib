@@ -653,7 +653,7 @@ function authHeaders(authCode = readAuthCode()): Record<string, string> {
 }
 
 function isFatalQueueRuntimeError(message: string): boolean {
-  return /SUPERMTNODE_APP_TOKEN|PRIVATE_KEY|授权码|license|credits|RPC 未绑定|未配置|格式不正确|不能启动|不能重复启动|另一台电脑|请求超时|远端队列未确认|当前钱包|队列状态请求失败|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|not configured|invalid|timeout|token/i.test(message);
+  return /本地队列已暂停|本地队列已停止|SUPERMTNODE_APP_TOKEN|PRIVATE_KEY|授权码|license|credits|RPC 未绑定|未配置|格式不正确|不能启动|不能重复启动|另一台电脑|请求超时|远端队列未确认|当前钱包|队列状态请求失败|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|not configured|invalid|timeout|token/i.test(message);
 }
 
 function isRecoverableHeartbeatError(message: string): boolean {
