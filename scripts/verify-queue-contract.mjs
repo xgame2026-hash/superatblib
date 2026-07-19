@@ -51,8 +51,10 @@ function checkClientContract() {
   const latestView = read("src/features/latest-liquidations/LatestLiquidationsView.vue");
   const queueMiddleware = read("server/liquidation-queue-status-middleware.ts");
   const latestMiddleware = read("server/latest-liquidations-middleware.ts");
+  const avatarMiddleware = read("server/avatar-profile-middleware.ts");
   const privateBootstrap = read("server/private-member-wallet-bootstrap.ts");
   const settingsMiddleware = read("server/settings-middleware.ts");
+  const settingsView = read("src/features/settings/SettingsView.vue");
   const stateApi = read("server/state-api-rust/src/main.rs");
   const viteConfig = read("vite.config.ts");
   const profileMigration = read("server/state-api-rust/migrations/20260624_rebuild_liq2_user_profiles.sql");
@@ -251,7 +253,22 @@ function checkClientContract() {
     fail("online-user normalization must preserve LIQ2 source and distinct same-wallet rows");
   }
   if (!latestView.includes('const WALLET_AVATAR_API = "/api/profile/avatar"') || latestView.includes("api.supermtglobal.com/avatars")) {
-    fail("all LIQ2 avatar displays must use the same merged wallet-to-uploaded-image interface as settings");
+    fail("all LIQ2 avatar displays must use the same canonical wallet avatar interface as settings");
+  }
+  if (!avatarMiddleware.includes('const PROFILE_API_URL = "https://api.supermtglobal.com/avatar"')) {
+    fail("LIQ2 avatar reads and profile writes must use api.supermtglobal.com/avatar");
+  }
+  if (!avatarMiddleware.includes('const PROFILE_IMAGE_API_URL = "https://upload.supermtglobal.com/api/avatar"')) {
+    fail("LIQ2 avatar image uploads must use upload.supermtglobal.com/api/avatar");
+  }
+  if (avatarMiddleware.includes("readMergedProfile") || avatarMiddleware.includes("readUpstreamJson(PROFILE_IMAGE_API_URL")) {
+    fail("LIQ2 avatar reads must not merge or fall back to the upload service");
+  }
+  if (!settingsView.includes('form.set("avatarUrl", avatarUrl)') || !settingsView.includes('form.set("avatarUpdatedAt", avatarUpdatedAt)')) {
+    fail("LIQ2 must write the uploaded canonical avatar URL into the shared read API");
+  }
+  if (!settingsView.includes('section === "profile"') || !settingsView.includes("void loadProfileFromSupermt3()")) {
+    fail("opening LIQ2 profile settings must read the shared avatar automatically");
   }
   if (!allMarketSnapshot.includes("/api/market-snapshot")) {
     fail("all market snapshot must use the independent market snapshot endpoint");

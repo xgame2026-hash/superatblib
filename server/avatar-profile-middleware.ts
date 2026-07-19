@@ -61,8 +61,8 @@ export function handleAvatarProfileRequest(req: IncomingMessage, res: ServerResp
   const uploadToken = headerValue(req.headers["x-superimg-upload-token"]);
 
   if (pathname === PROFILE_ROUTE && req.method === "GET") {
-    void readMergedProfile(wallet, uploadToken)
-      .then((result) => sendMergedProfileResult(res, wallet, result))
+    void readCanonicalProfile(wallet, uploadToken)
+      .then((result) => sendCanonicalProfileResult(res, wallet, result))
       .catch((error: unknown) => sendUnexpectedError(res, error));
     return true;
   }
@@ -82,38 +82,23 @@ export function handleAvatarProfileRequest(req: IncomingMessage, res: ServerResp
   return true;
 }
 
-async function readMergedProfile(wallet: string, uploadToken?: string): Promise<[UpstreamReadResult, UpstreamReadResult]> {
-  const headers = upstreamHeaders(wallet, uploadToken);
-  return Promise.all([
-    readUpstreamJson(PROFILE_API_URL, headers, PROFILE_READ_TIMEOUT_MS),
-    readUpstreamJson(PROFILE_IMAGE_API_URL, headers, PROFILE_READ_TIMEOUT_MS),
-  ]);
+async function readCanonicalProfile(wallet: string, uploadToken?: string): Promise<UpstreamReadResult> {
+  return readUpstreamJson(PROFILE_API_URL, upstreamHeaders(wallet, uploadToken), PROFILE_READ_TIMEOUT_MS);
 }
 
-function sendMergedProfileResult(
-  res: ServerResponse,
-  wallet: string,
-  [metadataResult, imageResult]: [UpstreamReadResult, UpstreamReadResult],
-): void {
-  const metadata = usableProfilePayload(metadataResult);
-  const image = usableProfilePayload(imageResult);
-
-  if (!metadata && !image) {
-    sendReadFailure(res, metadataResult, imageResult);
+function sendCanonicalProfileResult(res: ServerResponse, wallet: string, result: UpstreamReadResult): void {
+  const profile = usableProfilePayload(result);
+  if (!profile) {
+    sendReadFailure(res, result);
     return;
   }
 
-  const imageAvatarUrl = nonEmptyStringField(image, "avatarUrl", "avatar_url", "url");
-  const metadataAvatarUrl = nonEmptyStringField(metadata, "avatarUrl", "avatar_url");
-  const imageUpdatedAt = nonEmptyStringField(image, "avatarUpdatedAt", "avatar_updated_at");
-  const metadataUpdatedAt = nonEmptyStringField(metadata, "avatarUpdatedAt", "avatar_updated_at");
-
   json(res, 200, {
     walletAddress: wallet,
-    nickname: stringField(metadata, "nickname", "displayName", "display_name") ?? stringField(image, "nickname", "displayName", "display_name") ?? "",
-    bio: stringField(metadata, "bio", "intro", "introduction") ?? stringField(image, "bio", "intro", "introduction") ?? "",
-    avatarUrl: imageAvatarUrl || metadataAvatarUrl || "",
-    avatarUpdatedAt: imageUpdatedAt || metadataUpdatedAt || null,
+    nickname: stringField(profile, "nickname", "displayName", "display_name") ?? "",
+    bio: stringField(profile, "bio", "intro", "introduction") ?? "",
+    avatarUrl: nonEmptyStringField(profile, "avatarUrl", "avatar_url") || "",
+    avatarUpdatedAt: nonEmptyStringField(profile, "avatarUpdatedAt", "avatar_updated_at") || null,
   });
 }
 

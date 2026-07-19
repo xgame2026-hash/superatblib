@@ -410,6 +410,16 @@ watch(() => props.soundEnabled, (enabled) => {
   if (!enabled) stopAlertSoundPreview();
 });
 
+watch(
+  () => [props.settingsSection, props.settingsForm.privateKey] as const,
+  ([section]) => {
+    if (section === "profile" && profileWalletAddress() && !profileLoading.value && !profileSaving.value) {
+      void loadProfileFromSupermt3();
+    }
+  },
+  { immediate: true },
+);
+
 function selectLanguage(value: string) {
   props.settingsForm.language = value;
   languageMenuOpen.value = false;
