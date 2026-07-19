@@ -320,9 +320,9 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
 }
 
 /**
- * Read the server-maintained LIQ2 online-wallet cache. Do not attach market
- * snapshot candidates, local mirrors, or client-side RPC balance probes here:
- * privateapi owns the online filter and its balance worker owns the values.
+ * Read only the server-maintained LIQ2 online-wallet list. privateapi remains
+ * authoritative for membership; when an older deployment omits its
+ * server-maintained USDT field, this server fills only that missing value.
  */
 async function fetchLiq2OnlineWallets(req: IncomingMessage) {
   const env = readEnv();
@@ -342,7 +342,8 @@ async function fetchLiq2OnlineWallets(req: IncomingMessage) {
     };
   }
   const online = await fetchPrivateOnlineUsers(env, req);
-  const queuedWallets = sortQueueRowsByRealtimeUsdtDesc(dedupeAndSortStateRows(online.rows.filter(isLiq2SubmittedOnlineUser)));
+  const onlineWallets = dedupeAndSortStateRows(online.rows.filter(isLiq2SubmittedOnlineUser));
+  const queuedWallets = sortQueueRowsByRealtimeUsdtDesc(await enrichQueuedWalletBalances(onlineWallets, env));
   const updatedAt = stringValue(online.status.updatedAt, online.status.updated_at) ?? new Date().toISOString();
   return {
     ok: true,
@@ -753,7 +754,18 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
 
 function normalizeQueueBalances(row: Record<string, unknown>): Record<string, unknown> | undefined {
   const balances = isRecord(row.balances) ? { ...row.balances } : {};
-  const usdt = firstDefined(row.usdt, row.USDT, row.usdtBalance, row.usdt_balance, row.usdtAmount, row.usdt_amount);
+  const usdt = firstDefined(
+    row.usdt,
+    row.USDT,
+    row.usdtBalance,
+    row.usdt_balance,
+    row.usdtAmount,
+    row.usdt_amount,
+    row.walletUsdt,
+    row.wallet_usdt,
+    row.walletUsdtBalance,
+    row.wallet_usdt_balance,
+  );
   if (usdt !== undefined && balances.usdt === undefined) {
     balances.usdt = isRecord(usdt) ? usdt : { symbol: "USDT", formatted: usdt };
   }

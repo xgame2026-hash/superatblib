@@ -240,6 +240,12 @@ function checkClientContract() {
   if (!latestMiddleware.includes("filter(isLiq2SubmittedOnlineUser)")) {
     fail("privateARB public.users results must be restricted to online LIQ2 submissions");
   }
+  if (!liq2OnlineHandler.includes("await enrichQueuedWalletBalances(onlineWallets, env)")) {
+    fail("LIQ2 online display must fill missing server-side USDT balances without changing online membership");
+  }
+  if (!latestMiddleware.includes("row.walletUsdt") || !latestMiddleware.includes("row.wallet_usdt")) {
+    fail("LIQ2 online display must accept the privateARB wallet USDT field aliases");
+  }
   if (!latestMiddleware.includes("submissionSource: stringValue") || !latestMiddleware.includes("row.participantId || row.queueMemberKey || row.dedupeKey || row.id")) {
     fail("online-user normalization must preserve LIQ2 source and distinct same-wallet rows");
   }
