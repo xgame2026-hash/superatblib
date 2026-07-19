@@ -176,8 +176,11 @@ const LATEST_REFRESH_INTERVAL_MS = 10_000;
 const ACTIVE_QUEUE_INTERVAL_MS = 5_000;
 const WSS_STALE_MS = 45_000;
 const PAID_PROFIT_REFRESH_INTERVAL_MS = 10_000;
-const WALLET_AVATAR_API = "https://api.supermtglobal.com/avatar";
-const WALLET_AVATARS_API = "https://api.supermtglobal.com/avatars";
+// Settings and every LIQ2 display read the same wallet-to-uploaded-image
+// mapping through the local merged profile endpoint. The browser must not read
+// the metadata-only api.supermtglobal.com avatar endpoints directly.
+const WALLET_AVATAR_API = "/api/profile/avatar";
+const WALLET_AVATAR_READ_CONCURRENCY = 8;
 const loadingAvatarWallets = new Set<string>();
 const missingAvatarWallets = new Set<string>();
 const queuedWalletRows = computed(() => {
@@ -584,20 +587,12 @@ async function loadWalletAvatars(rows: QueueRow[]) {
 }
 
 async function fetchWalletAvatarProfiles(wallets: string[]): Promise<WalletAvatarProfile[]> {
-  try {
-    const response = await fetch(`${WALLET_AVATARS_API}?wallets=${encodeURIComponent(wallets.join(","))}`, {
-      cache: "no-store",
-      headers: { accept: "application/json" },
-    });
-    if (response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as { items?: WalletAvatarProfile[] };
-      if (Array.isArray(payload.items)) return payload.items;
-    }
-  } catch {
-    // Fall back to the single-wallet avatar plugin below.
+  const profiles: WalletAvatarProfile[] = [];
+  for (let index = 0; index < wallets.length; index += WALLET_AVATAR_READ_CONCURRENCY) {
+    const batch = wallets.slice(index, index + WALLET_AVATAR_READ_CONCURRENCY);
+    profiles.push(...(await Promise.all(batch.map(fetchSingleWalletAvatarProfile))));
   }
-
-  return Promise.all(wallets.map(fetchSingleWalletAvatarProfile));
+  return profiles;
 }
 
 async function fetchSingleWalletAvatarProfile(wallet: string): Promise<WalletAvatarProfile> {

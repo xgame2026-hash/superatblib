@@ -48,6 +48,7 @@ function checkClientContract() {
   const app = read("src/App.vue");
   const liquidationView = read("src/features/liquidation/LiquidationView.vue");
   const allMarketSnapshot = read("src/features/liquidation/AllMarketSnapshot.vue");
+  const latestView = read("src/features/latest-liquidations/LatestLiquidationsView.vue");
   const queueMiddleware = read("server/liquidation-queue-status-middleware.ts");
   const latestMiddleware = read("server/latest-liquidations-middleware.ts");
   const privateBootstrap = read("server/private-member-wallet-bootstrap.ts");
@@ -248,6 +249,9 @@ function checkClientContract() {
   }
   if (!latestMiddleware.includes("submissionSource: stringValue") || !latestMiddleware.includes("row.participantId || row.queueMemberKey || row.dedupeKey || row.id")) {
     fail("online-user normalization must preserve LIQ2 source and distinct same-wallet rows");
+  }
+  if (!latestView.includes('const WALLET_AVATAR_API = "/api/profile/avatar"') || latestView.includes("api.supermtglobal.com/avatars")) {
+    fail("all LIQ2 avatar displays must use the same merged wallet-to-uploaded-image interface as settings");
   }
   if (!allMarketSnapshot.includes("/api/market-snapshot")) {
     fail("all market snapshot must use the independent market snapshot endpoint");

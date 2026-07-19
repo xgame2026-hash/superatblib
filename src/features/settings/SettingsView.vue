@@ -39,8 +39,8 @@
           <el-button
             class="save-settings-button"
             type="primary"
-            :loading="settingsSaveDialogVisible && settingsSaveState === 'saving'"
-            @click="emit('save')"
+            :loading="profileSaving || (settingsSaveDialogVisible && settingsSaveState === 'saving')"
+            @click="saveCurrentSettingsSection"
           >
             <img class="settings-action-icon" :src="saveIconUrl" alt="" aria-hidden="true" />
             {{ t("settings.save") }}
@@ -558,15 +558,17 @@ async function saveProfileToSupermt3() {
       });
     }
 
+    const uploadedAvatarUrl = stringValue(uploaded?.url, uploaded?.avatarUrl, uploaded?.avatar_url);
+    const uploadedAt = stringValue(uploaded?.avatarUpdatedAt, uploaded?.avatar_updated_at);
+    const canonicalAvatarUrl = uploadedAvatarUrl || props.settingsForm.profile.avatarUrl || "";
+
     const payload = await requestAvatarProfile(AVATAR_PROFILE_API, {
       method: "POST",
       headers: { "x-wallet-address": wallet },
-      body: buildProfileForm(wallet, nickname, bio),
+      body: buildProfileForm(wallet, nickname, bio, canonicalAvatarUrl, uploadedAt),
     });
     if (profileWalletAddress() !== wallet) return;
 
-    const uploadedAvatarUrl = stringValue(uploaded?.url, uploaded?.avatarUrl, uploaded?.avatar_url);
-    const uploadedAt = stringValue(uploaded?.avatarUpdatedAt, uploaded?.avatar_updated_at);
     applyAvatarProfile(
       {
         ...payload,
@@ -582,6 +584,14 @@ async function saveProfileToSupermt3() {
   } finally {
     profileSaving.value = false;
   }
+}
+
+async function saveCurrentSettingsSection() {
+  if (props.settingsSection === "profile") {
+    await saveProfileToSupermt3();
+    return;
+  }
+  emit("save");
 }
 
 async function requestAvatarProfile(path: string, init: RequestInit): Promise<AvatarProfilePayload> {
@@ -611,13 +621,15 @@ function applyAvatarProfile(payload: AvatarProfilePayload, options: { forceVersi
   revokeProfileAvatarObjectUrl();
 }
 
-function buildProfileForm(wallet: string, nickname: string, bio: string) {
+function buildProfileForm(wallet: string, nickname: string, bio: string, avatarUrl = "", avatarUpdatedAt = "") {
   const issuedAt = new Date().toISOString();
   const message = buildAvatarSignatureMessage(wallet, issuedAt);
   const form = new FormData();
   form.set("wallet", wallet);
   form.set("nickname", nickname);
   form.set("bio", bio);
+  form.set("avatarUrl", avatarUrl);
+  if (avatarUpdatedAt) form.set("avatarUpdatedAt", avatarUpdatedAt);
   form.set("issuedAt", issuedAt);
   form.set("message", message);
   form.set("signature", signProfileMessage(message));
