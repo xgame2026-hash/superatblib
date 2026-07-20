@@ -22,12 +22,11 @@ function main() {
 
   const existingProgress = readJson(progressFile);
   const currentCommit = fullCommit("HEAD");
-  let progress = validProgress(existingProgress) && existingProgress.toCommit === currentCommit ? existingProgress : null;
+  let progress = validProgress(existingProgress) && [existingProgress.fromCommit, existingProgress.toCommit].includes(currentCommit)
+    ? existingProgress
+    : null;
 
   if (!progress) {
-    const dirty = commandOutput("git", ["status", "--porcelain", "--untracked-files=all"]);
-    if (dirty) fail("升级已停止：工作区存在未提交或未跟踪文件，请先处理 git status 中的内容。");
-
     run("git", ["fetch", "--prune", remote, branch], "拉取远程版本失败。");
     const targetCommit = fullCommit(`${remote}/${branch}`);
     if (targetCommit === currentCommit) {
@@ -43,13 +42,34 @@ function main() {
       toCommit: targetCommit,
       fromVersion: packageVersion(),
       startedAt: new Date().toISOString(),
+      localStashCommit: null,
+      localChangesRestored: false,
     };
+    const dirty = commandOutput("git", ["status", "--porcelain", "--untracked-files=all"]);
+    if (dirty) {
+      writeAutoUpdateStatus({ status: "updating", fromCommit: currentCommit, toCommit: targetCommit, message: "正在安全暂存本地改动。" });
+      const previousStashCommit = optionalFullCommit("refs/stash");
+      run("git", ["stash", "push", "--include-untracked", "--message", `superarb-auto-update-${Date.now()}`], "无法安全暂存本地改动；升级尚未修改代码。");
+      progress.localStashCommit = optionalFullCommit("refs/stash");
+      if (!progress.localStashCommit || progress.localStashCommit === previousStashCommit) {
+        fail("当前工作区包含 Git 无法自动保护的改动；升级尚未修改代码。");
+      }
+      if (commandOutput("git", ["status", "--porcelain", "--untracked-files=all"])) {
+        restoreLocalChanges(progress.localStashCommit);
+        fail("当前工作区包含 Git 无法自动保护的改动；本地文件已恢复，升级尚未修改代码。");
+      }
+    }
     writeJsonAtomic(progressFile, progress);
     writeAutoUpdateStatus({ status: "updating", fromCommit: currentCommit, toCommit: targetCommit, message: "正在拉取并安装新版本。" });
+  }
+
+  if (fullCommit("HEAD") === progress.fromCommit) {
     run("git", ["merge", "--ff-only", `${remote}/${branch}`], "无法以 fast-forward 方式升级；没有写入升级成功凭证。");
-    if (fullCommit("HEAD") !== targetCommit) fail("升级后的 Commit 与远程目标不一致；没有写入升级成功凭证。");
-  } else {
+    if (fullCommit("HEAD") !== progress.toCommit) fail("升级后的 Commit 与远程目标不一致；没有写入升级成功凭证。");
+  } else if (fullCommit("HEAD") === progress.toCommit) {
     console.log(`继续上次未完成的升级：${short(progress.fromCommit)} -> ${short(progress.toCommit)}`);
+  } else {
+    fail("当前 Commit 与升级进度不一致；为避免覆盖本地内容，自动升级已停止。");
   }
 
   run(npmCommand(), ["ci"], "依赖安装失败；没有写入升级成功凭证。修复后可重新运行 npm run update。");
@@ -58,6 +78,12 @@ function main() {
 
   const installedCommit = fullCommit("HEAD");
   if (installedCommit !== progress.toCommit) fail("构建期间代码 Commit 发生变化；没有写入升级成功凭证。");
+  if (progress.localStashCommit && !progress.localChangesRestored) {
+    writeAutoUpdateStatus({ status: "updating", fromCommit: progress.fromCommit, toCommit: progress.toCommit, message: "新版本已构建，正在恢复本地改动。" });
+    restoreLocalChanges(progress.localStashCommit);
+    progress.localChangesRestored = true;
+    writeJsonAtomic(progressFile, progress);
+  }
   const receipt = {
     schemaVersion: 1,
     receiptId: randomUUID(),
@@ -68,6 +94,7 @@ function main() {
     toVersion: packageVersion(),
     completedAt: new Date().toISOString(),
     buildVerified: true,
+    localChangesPreserved: Boolean(progress.localStashCommit),
     healthCheckPassed: false,
     announcedAt: null,
   };
@@ -115,6 +142,11 @@ function fullCommit(reference) {
   return commandOutput("git", ["rev-parse", reference]).toLowerCase();
 }
 
+function optionalFullCommit(reference) {
+  const result = spawnSync("git", ["rev-parse", "--quiet", "--verify", reference], { cwd: root, encoding: "utf8", env: process.env });
+  return result.status === 0 ? result.stdout.trim().toLowerCase() : "";
+}
+
 function packageVersion() {
   const payload = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
   return typeof payload.version === "string" ? payload.version : "";
@@ -122,6 +154,18 @@ function packageVersion() {
 
 function validProgress(value) {
   return value && value.status === "installing" && typeof value.fromCommit === "string" && typeof value.toCommit === "string";
+}
+
+function restoreLocalChanges(stashCommit) {
+  const result = spawnSync("git", ["stash", "apply", "--index", stashCommit], { cwd: root, stdio: "inherit", env: process.env });
+  if (result.status !== 0) {
+    fail(`新版本已经安装，但本地改动无法自动合并。改动仍安全保存在 stash ${short(stashCommit)}，请处理冲突后重新启动。`);
+  }
+  const stashEntry = commandOutput("git", ["stash", "list", "--format=%gd %H"])
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .find(([, commit]) => commit === stashCommit)?.[0];
+  if (stashEntry) run("git", ["stash", "drop", stashEntry], "本地改动已经恢复，但自动清理临时 stash 失败。请手动检查 git stash list。");
 }
 
 function readJson(path) {
