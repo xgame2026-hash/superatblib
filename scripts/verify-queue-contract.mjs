@@ -233,6 +233,9 @@ function checkClientContract() {
   if (!privateBootstrap.includes('status: input.reason === "queue-start" ? "online" : "offline"')) {
     fail("a successful queue start must mark the private member wallet online immediately");
   }
+  if (!privateBootstrap.includes('return value === "pause" || value === "logout" || value === "rpc-expired"')) {
+    fail("only Pause, Settings Exit, or authoritative RPC expiry may stop private-member presence");
+  }
   if (!settingsMiddleware.includes('bootstrapPrivateMemberWalletOnce("settings-save"')) {
     fail("saving complete private-key, BNB RPC, and app-token settings must submit the encrypted wallet profile");
   }
