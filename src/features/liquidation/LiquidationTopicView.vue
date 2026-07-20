@@ -1,84 +1,6 @@
 <template>
   <section class="liquidation-topic">
-    <div class="topic-summary-grid">
-      <article v-for="item in summaryCards" :key="item.label" class="topic-summary-card" :class="`is-${item.tone}`">
-        <div class="topic-summary-head">
-          <span>{{ item.label }}</span>
-          <i aria-hidden="true"></i>
-        </div>
-        <div class="topic-summary-body">
-          <strong>{{ item.value }}</strong>
-          <small>{{ item.note }}</small>
-        </div>
-      </article>
-    </div>
-
     <section class="topic-main-grid">
-      <article class="panel topic-classification-panel">
-        <div class="topic-panel-heading">
-          <div>
-            <p class="topic-kicker">Market Classification</p>
-            <h2>{{ t("topic.marketStatus") }}</h2>
-          </div>
-          <div class="topic-heading-actions">
-            <span>{{ loading && sources.length === 0 ? t("dashboard.loading") : snapshotMeta }}</span>
-            <button type="button" :disabled="loading" @click="refreshSnapshot">
-              {{ loading ? t("dashboard.refreshing") : t("dashboard.refresh") }}
-            </button>
-          </div>
-        </div>
-
-        <p v-if="loading && sources.length === 0" class="topic-empty-state">{{ t("topic.readingSnapshot") }}</p>
-        <div v-else-if="sources.length > 0" class="topic-source-grid">
-          <article v-for="source in sources" :key="source.id" class="topic-source-card">
-            <header class="topic-source-head">
-              <img :src="chainIcon(source.chain)" alt="" aria-hidden="true" />
-              <div>
-                <strong>{{ source.chainLabel }}</strong>
-                <span>{{ source.source }}</span>
-              </div>
-              <em :class="statusClass(source.status)">{{ displayStatus(source.status) }}</em>
-            </header>
-            <dl class="topic-source-metrics">
-              <div>
-                <dt>RPC</dt>
-                <dd>{{ source.rpc }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("dashboard.candidateQueue") }}</dt>
-                <dd>{{ source.queueCount }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("dashboard.snapshot") }}</dt>
-                <dd>{{ source.liquidationCount }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("dashboard.updatedAt") }}</dt>
-                <dd>{{ formatDateTime(source.updatedAt) }}</dd>
-              </div>
-            </dl>
-          </article>
-        </div>
-        <p v-else class="topic-empty-state">{{ error || t("topic.waitingClassification") }}</p>
-      </article>
-
-      <aside class="panel topic-score-panel">
-        <div class="topic-panel-heading">
-          <div>
-            <p class="topic-kicker">Strategy Matrix</p>
-            <h2>{{ t("topic.strategyMatrix") }}</h2>
-          </div>
-        </div>
-        <div v-if="sources.length > 0" class="topic-matrix-list">
-          <div v-for="source in sources" :key="`${source.id}-matrix`" class="topic-matrix-row">
-            <span>{{ source.chainLabel }}</span>
-            <i><b :style="{ width: `${sourceWeight(source)}%` }"></b></i>
-            <strong>{{ sourceWeight(source) }}%</strong>
-          </div>
-        </div>
-        <p v-else class="topic-empty-state">{{ t("topic.noMatrix") }}</p>
-      </aside>
-
       <article class="panel topic-strategy-panel">
         <div class="topic-panel-heading">
           <div>
@@ -115,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { onMounted, ref, watch } from "vue";
 import arbIcon from "../../img/arb.svg";
 import bnbIcon from "../../img/bnb.svg";
 import ethIcon from "../../img/eth.svg";
@@ -180,22 +102,6 @@ const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
 const TOPIC_SNAPSHOT_CACHE_KEY = "liq2-liquidation-topic-snapshot-cache";
 let snapshotRequested = false;
 
-const summaryCards = computed(() => {
-  const total = sources.value.length;
-  const rpcReady = sources.value.filter((source) => source.rpc && source.rpc !== "--").length;
-  const ready = strategies.value.filter((strategy) => isReadyStatus(strategy.status)).length;
-  const executable = queue.value.filter((item) => /可执行|ready/i.test(item.status)).length;
-
-  return [
-    { label: t("topic.coveredMarkets"), value: String(total), note: total > 0 ? t("topic.snapshotService") : t("topic.waitingSnapshot"), tone: "market" },
-    { label: t("topic.rpcMarket"), value: String(rpcReady), note: rpcReady > 0 ? t("topic.rpcReady") : t("topic.waitingRpc"), tone: "rpc" },
-    { label: t("topic.strategyDeployment"), value: `${ready} / ${strategies.value.length}`, note: strategies.value.length > 0 ? t("topic.runningTotal") : t("topic.waitingStrategy"), tone: "node" },
-    { label: t("dashboard.candidateQueue"), value: `${executable} / ${queue.value.length}`, note: queue.value.length > 0 ? t("topic.executableCandidate") : t("topic.waitingCandidate"), tone: "queue" },
-  ];
-});
-
-const snapshotMeta = computed(() => (updatedAt.value ? t("dashboard.updated", { time: formatDateTime(updatedAt.value) }) : "RPC / Queue / Keeper"));
-
 onMounted(() => {
   restoreSnapshotCache();
   if (props.active) void loadSnapshotOnce();
@@ -212,11 +118,6 @@ async function loadSnapshotOnce() {
   if (snapshotRequested) return;
   snapshotRequested = true;
   if (sources.value.length === 0) await loadSnapshot();
-}
-
-function refreshSnapshot() {
-  snapshotRequested = true;
-  void loadSnapshot();
 }
 
 async function loadSnapshot() {
@@ -326,10 +227,6 @@ function snapshotHeaders(): Record<string, string> {
   };
 }
 
-function isReadyStatus(status: string) {
-  return /运行|RPC 就绪|有候选|可执行|ready/i.test(status);
-}
-
 function modeLabel(mode: StrategyRow["mode"]) {
   if (mode === "execute") return t("liquidation.execute");
   if (mode === "monitor") return t("liquidation.monitor");
@@ -337,19 +234,6 @@ function modeLabel(mode: StrategyRow["mode"]) {
   return mode || "--";
 }
 
-function sourceWeight(source: SourceRow) {
-  const rpcWeight = source.rpc && source.rpc !== "--" ? 30 : 0;
-  const queueWeight = Math.min(source.queueCount * 25, 60);
-  const liquidationWeight = Math.min(source.liquidationCount * 12, 30);
-  return Math.min(100, rpcWeight + queueWeight + liquidationWeight);
-}
-
-function formatDateTime(value: string) {
-  const parsed = new Date(value);
-  if (!Number.isFinite(parsed.getTime())) return value || "--";
-  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000).toISOString();
-  return `${local.slice(0, 10).replaceAll("-", "/")} ${local.slice(11, 19)}`;
-}
 </script>
 
 <style scoped src="./LiquidationTopicView.css"></style>

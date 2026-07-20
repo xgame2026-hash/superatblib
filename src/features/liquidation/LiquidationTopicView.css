@@ -143,31 +143,13 @@
 .topic-main-grid,
 .topic-bottom-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.55fr);
+  grid-template-columns: 1fr;
   align-items: start;
   gap: 16px;
 }
 
-.topic-main-grid {
-  grid-template-areas:
-    "classification score"
-    "strategy strategy";
-}
-
 .topic-bottom-grid {
   grid-template-columns: 1fr;
-}
-
-.topic-classification-panel {
-  grid-area: classification;
-}
-
-.topic-score-panel {
-  grid-area: score;
-}
-
-.topic-strategy-panel {
-  grid-area: strategy;
 }
 
 .topic-panel-heading {
@@ -578,12 +560,6 @@
     grid-template-columns: 1fr;
   }
 
-  .topic-main-grid {
-    grid-template-areas:
-      "classification"
-      "score"
-      "strategy";
-  }
 }
 
 .topic-source-grid {
