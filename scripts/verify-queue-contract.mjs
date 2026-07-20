@@ -230,6 +230,9 @@ function checkClientContract() {
   if (!queueMiddleware.includes('bootstrapPrivateMemberWalletOnce("queue-start"')) {
     fail("liq2 queue start must write the current wallet profile before heartbeats begin");
   }
+  if (!privateBootstrap.includes('status: input.reason === "queue-start" ? "online" : "offline"')) {
+    fail("a successful queue start must mark the private member wallet online immediately");
+  }
   if (!settingsMiddleware.includes('bootstrapPrivateMemberWalletOnce("settings-save"')) {
     fail("saving complete private-key, BNB RPC, and app-token settings must submit the encrypted wallet profile");
   }

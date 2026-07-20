@@ -451,9 +451,10 @@ function buildProfilePayload(
     rpcPlanName: input.rpcPlan.rpcPlanName,
     walletUsdt,
     nickname,
-    // Bootstrap registers the wallet only. It must not put a user into the
-    // online LIQ2 execution list before a market has actually been started.
-    status: "offline",
+    // A successful queue-start is the authoritative online transition. Other
+    // bootstrap reasons only refresh profile/credential data and must not
+    // change an existing wallet's presence.
+    status: input.reason === "queue-start" ? "online" : "offline",
   };
 }
 
