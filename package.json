@@ -1,6 +1,6 @@
 {
   "name": "superatblib",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,10 +11,13 @@
     "dev": "npm run dashboard",
     "start": "npm run dashboard",
     "dashboard": "vite --host 127.0.0.1",
+    "dashboard:profile": "node scripts/start-dashboard-profile.mjs",
     "dashboard:url": "node scripts/dashboard-url.mjs",
     "dashboard:leaderboard": "node scripts/open-dashboard-view.mjs leaderboard",
     "verify:queue": "node scripts/verify-queue-contract.mjs",
     "verify:sound": "node scripts/verify-sound-contract.mjs",
+    "verify:public-release": "node scripts/verify-public-release.mjs",
+    "update": "node scripts/update-controller.mjs",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1"
   },

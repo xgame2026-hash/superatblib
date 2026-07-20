@@ -7,24 +7,50 @@ coverage/
 .vite/
 *.tsbuildinfo
 
-# Local environment files (the safe template is intentionally committed)
+# Unused local font sources; the dashboard ships the referenced DatDot OTF files.
+src/font/DottedSongti*.otf
+src/font/DatDot-*.ttf
+
+# Local environment and credential files
 .env
 .env.*
-!.env.example
+*.env
+*.env.*
+.envrc
+.direnv/
+*.secrets.json
+*.credentials.json
+secrets/
+credentials/
 *.local
+
+# The public template is intentionally committed and must contain placeholders only.
+!.env.example
 
 # LIQ2 local runtime state
 .superarb/
 
-# Rust build output
-server/state-api-rust/target/
+# Private backend source belongs in a separate, access-controlled repository.
+server/state-api-rust/
 
 # Logs, caches, and temporary files
 *.log
 logs/
 .cache/
+.nyc_output/
 .tmp/
 tmp/
+outputs/
+reports/
+playwright-report/
+test-results/
+*.pid
+*.pid.lock
+*.sock
+*.retry
+*.bak
+*.orig
+*.rej
 *.swp
 *.swo
 *~
@@ -51,6 +77,14 @@ Thumbs.db
 .idea/
 .vscode/
 *.code-workspace
+.codex/
+.agents/
+
+# Internal release/acceptance checks are kept outside the minimal public client.
+scripts/verify-*.mjs
+!scripts/verify-queue-contract.mjs
+!scripts/verify-sound-contract.mjs
+!scripts/verify-public-release.mjs
 
 # Local-only notes
 efft.md

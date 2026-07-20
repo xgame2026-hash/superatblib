@@ -34,7 +34,7 @@
               <el-icon v-else><VideoPlay /></el-icon>
               {{ marketRunning ? t("liquidation.running") : t("liquidation.start") }}
             </button>
-            <button class="pause-button" type="button" :disabled="!marketRunning || marketTransitioning" @click="pauseMarketExecution">
+            <button class="pause-button" type="button" :disabled="!marketRunning || marketTransitioning" @click="pauseMarketExecution('pause')">
               <el-icon><VideoPause /></el-icon>
               {{ t("liquidation.pause") }}
             </button>
@@ -330,26 +330,34 @@ async function startMarketExecution() {
   }
 }
 
-async function pauseMarketExecution() {
+async function pauseMarketExecution(action: "pause" | "logout" = "pause") {
   ++marketExecutionGeneration;
   marketTransitioning.value = true;
-  const runningMarket = currentMarket.value;
+  const savedRunningState = readRunningMarketState();
+  const hadRunningIntent = marketRunning.value || Boolean(savedRunningState);
+  const runningMarket = savedRunningState?.option ?? currentMarket.value;
   const pendingStart = marketQueueStartInFlight;
   queueState.value = "paused";
   marketRunning.value = false;
   stopMarketHeartbeat();
   clearRunningMarketState();
   emit("launch-sound", "not-launched");
-  if (!runningMarket.disabled) {
+  if (hadRunningIntent && !runningMarket.disabled) {
     try {
       // A start and pause can overlap. Always let the start request settle before
       // sending stop, otherwise the late start can clear the stop tombstone and
       // revive a queue that the UI already considers paused.
       await pendingStart?.catch(() => undefined);
-      // The local UI has stopped execution even if the independent queue-stop
-      // request later fails, so do not leave it advertised as executing.
-      await reportExecutionPresence("stopped", runningMarket);
-      await unregisterMarketQueue(runningMarket);
+      // Presence and queue membership are independent remote writes. Always
+      // attempt both so a temporary failure cannot leave a paused user online.
+      const [presenceStop, queueStop] = await Promise.allSettled([
+        reportExecutionPresence("stopped", runningMarket, false, action),
+        unregisterMarketQueue(runningMarket, action),
+      ]);
+      const stopErrors = [presenceStop, queueStop]
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason));
+      if (stopErrors.length) throw new Error(stopErrors.join("；"));
       appendTerminal(t("liquidation.queuePaused", { market: runningMarket.label }));
       await loadQueueMonitorStatus();
       await refreshMarketSnapshotDisplay();
@@ -361,7 +369,7 @@ async function pauseMarketExecution() {
       marketTransitioning.value = false;
     }
   } else {
-    appendTerminal(`no running market to pause: ${runningMarket.label}`);
+    appendTerminal(`no running market to ${action}: ${runningMarket.label}`);
     marketTransitioning.value = false;
   }
 }
@@ -411,19 +419,23 @@ async function sendMarketHeartbeat(heartbeatGeneration = marketHeartbeatGenerati
     const message = error instanceof Error ? error.message : "unknown error";
     marketHeartbeatFailureCount += 1;
     appendTerminal(`queue heartbeat failed (${marketHeartbeatFailureCount}/${MARKET_HEARTBEAT_MAX_FAILURES}): ${message}`);
-    if (isRecoverableHeartbeatError(message) && marketHeartbeatFailureCount < MARKET_HEARTBEAT_MAX_FAILURES) return;
-    if (isFatalQueueRuntimeError(message)) {
-      // The server has already applied a local pause/stop tombstone. Sending a
-      // second stop here can arrive after the user's next start and pause that
-      // new queue, recreating the stale-heartbeat loop.
-      if (!isLocalQueueStoppedError(message)) sendQueueStopBeacon(currentMarket.value);
-      void reportExecutionPresence("stopped", currentMarket.value);
+    if (isRpcServiceExpiredError(message)) {
+      // Heartbeat is telemetry only. The sole automatic offline condition is
+      // an authoritative response saying that the configured RPC has expired.
+      sendQueueStopBeacon(currentMarket.value);
+      void reportExecutionPresence("stopped", currentMarket.value, false, "rpc-expired");
       marketRunning.value = false;
       queueState.value = "idle";
       stopMarketHeartbeat();
       clearRunningMarketState();
       notifyQueueError(message);
       emit("launch-sound", "not-launched");
+      return;
+    }
+    // Network/auth/status failures do not own queue membership. Keep the
+    // running intent and let the next telemetry cycle retry indefinitely.
+    if (!isRecoverableHeartbeatError(message) && marketHeartbeatFailureCount % MARKET_HEARTBEAT_MAX_FAILURES === 0) {
+      appendTerminal("queue remains online; heartbeat is telemetry only");
     }
   } finally {
     if (marketHeartbeatInFlightGeneration === heartbeatGeneration) marketHeartbeatInFlightGeneration = 0;
@@ -441,8 +453,8 @@ function stopMarketHeartbeat() {
   marketHeartbeatTimer = 0;
 }
 
-async function unregisterMarketQueue(item: MarketOption): Promise<Record<string, any>> {
-  return registerMarketQueueStart(item, "stop");
+async function unregisterMarketQueue(item: MarketOption, action: "pause" | "logout"): Promise<Record<string, any>> {
+  return registerMarketQueueStart(item, action);
 }
 
 function persistRunningMarketState(walletAddress?: string, runtime?: Record<string, any>) {
@@ -506,8 +518,8 @@ function restoreRunningMarketState() {
     return;
   }
   market.value = saved.market;
-  queueState.value = "waiting";
-  marketRunning.value = false;
+  marketRunning.value = true;
+  queueState.value = saved.queueState === "queued" ? "queued" : "waiting";
   marketStartIntentId = createQueueStartIntentId();
   setTerminalLines([`queue reconnecting: ${saved.market}`, "startup detection: full queue sync required"]);
   const startRequest = registerMarketQueueStart(saved.option, "start");
@@ -529,13 +541,16 @@ function restoreRunningMarketState() {
       if (executionGeneration !== marketExecutionGeneration) return;
       const message = error instanceof Error ? error.message : "unknown error";
       appendTerminal(`auto reconnect failed: ${message}`);
-      if (isFatalQueueRuntimeError(message)) {
+      if (isRpcServiceExpiredError(message)) {
         marketRunning.value = false;
         queueState.value = "idle";
         stopMarketHeartbeat();
         clearRunningMarketState();
         emit("launch-sound", "not-launched");
+        return;
       }
+      appendTerminal("saved queue remains online; background sync will retry");
+      startMarketHeartbeat();
     })
     .finally(() => {
       if (marketQueueStartInFlight === startRequest) marketQueueStartInFlight = null;
@@ -598,11 +613,16 @@ function handleVisibilityHeartbeat() {
   if (document.visibilityState === "visible") handleClientOnline();
 }
 
-async function reportExecutionPresence(status: "running" | "stopped", item: MarketOption, keepalive = false): Promise<void> {
+async function reportExecutionPresence(
+  status: "running" | "stopped",
+  item: MarketOption,
+  keepalive = false,
+  leaveAction?: "pause" | "logout" | "rpc-expired",
+): Promise<void> {
   const response = await fetch("/api/settings/execution-presence", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ status, chain: normalizeChainKey(item.chain), market: item.value }),
+    body: JSON.stringify({ status, chain: normalizeChainKey(item.chain), market: item.value, leaveAction }),
     keepalive,
   });
   if (!response.ok) {
@@ -612,7 +632,7 @@ async function reportExecutionPresence(status: "running" | "stopped", item: Mark
 }
 
 function sendQueueStopBeacon(item: MarketOption) {
-  const body = JSON.stringify(queueRequestBody(item, "stop"));
+  const body = JSON.stringify(queueRequestBody(item, "rpc-expired"));
   const authCode = readAuthCode();
   if (authCode) {
     void fetch("/api/liquidation-queue/status", {
@@ -705,16 +725,12 @@ function authHeaders(authCode = readAuthCode()): Record<string, string> {
   };
 }
 
-function isFatalQueueRuntimeError(message: string): boolean {
-  return /本地队列已暂停|本地队列已停止|SUPERMTNODE_APP_TOKEN|PRIVATE_KEY|授权码|license|credits|RPC 未绑定|未配置|格式不正确|不能启动|不能重复启动|另一台电脑|请求超时|远端队列未确认|当前钱包|队列状态请求失败|已用完|exhausted|expired|过期|失效|HTTP 401|HTTP 403|unauthorized|forbidden|not configured|invalid|timeout|token/i.test(message);
+function isRpcServiceExpiredError(message: string): boolean {
+  return /RPC_SERVICE_EXPIRED/.test(message);
 }
 
 function isRecoverableHeartbeatError(message: string): boolean {
   return /队列服务请求超时|请求超时|WSS 队列服务连接超时|WSS 队列服务暂时不可用|在确认上报前断开|WebSocket is not open|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|network|timeout/i.test(message);
-}
-
-function isLocalQueueStoppedError(message: string): boolean {
-  return /本地队列已暂停|本地队列已停止/.test(message);
 }
 
 function notifyQueueError(message: string) {
@@ -733,6 +749,7 @@ async function refreshCandidateSnapshot(): Promise<void> {
 
 defineExpose({
   refreshCandidateSnapshot,
+  leaveQueueForLogout: () => pauseMarketExecution("logout"),
 });
 
 async function refreshMarketSnapshotDisplay(): Promise<void> {

@@ -11,14 +11,18 @@ import { handleNewsRequest } from "./server/news-middleware";
 import { handlePaidProfitRequest } from "./server/paid-profit-middleware";
 import { handleRpcUsageRequest } from "./server/rpc-usage-middleware";
 import { handleSettingsRequest } from "./server/settings-middleware";
+import { restorePendingPrivateMemberLeave } from "./server/private-member-wallet-bootstrap";
 import { handleSlotsOrdersRequest } from "./server/slots-orders-middleware";
 import { handleSwapRequest } from "./server/swap-middleware";
 import { handleTxGraphRequest } from "./server/tx-graph-middleware";
+import { handleUpdateCompletionRequest } from "./server/update-completion-middleware";
 import { handleWalletAssetsRequest } from "./server/wallet-assets-middleware";
-import { stopPrivateMemberWalletHeartbeat } from "./server/private-member-wallet-bootstrap";
+import { handlePolymarketMarketRequest } from "./server/polymarket-market-middleware";
+import { handleCrossExchangeMarketRequest } from "./server/cross-exchange-market-middleware";
+import { ENV_FILE, LIQ2_PROFILE, STATE_DIR, stateFile } from "./server/runtime-paths";
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
+  const env = { ...loadEnv(mode, process.cwd(), ""), ...readSelectedEnv() };
   const dashboardPort = normalizePort(env.DASHBOARD_PORT, 4311);
   const gitCommit = shortGitCommit();
 
@@ -32,9 +36,7 @@ export default defineConfig(({ mode }) => {
       name: "superarb-settings-api",
       configureServer(server) {
         restoreLocalQueueHeartbeats();
-        server.httpServer?.once("close", () => {
-          void stopPrivateMemberWalletHeartbeat();
-        });
+        restorePendingPrivateMemberLeave();
         server.httpServer?.once("listening", () => {
           const address = server.httpServer?.address();
           const port = typeof address === "object" && address ? address.port : dashboardPort;
@@ -51,6 +53,8 @@ export default defineConfig(({ mode }) => {
           }
           if (
             !handleAvatarProfileRequest(req, res) &&
+            !handlePolymarketMarketRequest(req, res) &&
+            !handleCrossExchangeMarketRequest(req, res) &&
             !handleSlotsOrdersRequest(req, res) &&
             !handleSwapRequest(req, res) &&
             !handleSettingsRequest(req, res) &&
@@ -61,6 +65,7 @@ export default defineConfig(({ mode }) => {
             !handleTxGraphRequest(req, res) &&
             !handleRpcUsageRequest(req, res) &&
             !handleGithubVersionRequest(req, res) &&
+            !handleUpdateCompletionRequest(req, res) &&
             !handleWalletAssetsRequest(req, res)
           ) {
             next();
@@ -112,12 +117,32 @@ function normalizePort(value: string | undefined, fallback: number): number {
 
 function writeDashboardRuntimePort(port: number): void {
   try {
-    const path = resolve(process.cwd(), ".superarb/dashboard-runtime.json");
+    const path = stateFile("dashboard-runtime.json");
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify({ host: "127.0.0.1", port, url: `http://127.0.0.1:${port}/`, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
+    writeFileSync(path, `${JSON.stringify({
+      host: "127.0.0.1",
+      port,
+      pid: process.pid,
+      profile: LIQ2_PROFILE,
+      envFile: ENV_FILE,
+      stateDir: STATE_DIR,
+      url: `http://127.0.0.1:${port}/`,
+      updatedAt: new Date().toISOString(),
+    }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   } catch {
     // Runtime URL discovery is best-effort; Vite still prints the actual URL.
   }
+}
+
+function readSelectedEnv(): Record<string, string> {
+  if (!existsSync(ENV_FILE)) return {};
+  return Object.fromEntries(
+    readFileSync(ENV_FILE, "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#") && line.includes("="))
+      .map((line) => [line.slice(0, line.indexOf("=")).trim(), line.slice(line.indexOf("=") + 1).trim()]),
+  );
 }
 
 function applyLocalApiCors(origin: string | string[] | undefined, res: { setHeader(name: string, value: string): void }): void {

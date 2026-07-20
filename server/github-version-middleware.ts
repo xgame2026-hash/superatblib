@@ -3,8 +3,8 @@ import { resolve } from "node:path";
 import { execSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isBuildCurrentOrNewer, normalizeVersionLabel as normalizeVersion } from "../src/github-version";
+import { ENV_FILE } from "./runtime-paths";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
 const PACKAGE_FILE = resolve(process.cwd(), "package.json");
 const BUILD_COMMIT_FILE = resolve(process.cwd(), ".superarb-build-commit");
 const DEFAULT_GITHUB_REPOSITORY = "xgame2026-hash/superatblib";
@@ -167,9 +167,9 @@ function readPackageVersion(): string {
   try {
     const source = existsSync(PACKAGE_FILE) ? readFileSync(PACKAGE_FILE, "utf8") : "{}";
     const payload = JSON.parse(source) as { version?: string };
-    return payload.version ?? "1.6.5";
+    return payload.version ?? "1.6.6";
   } catch {
-    return "1.6.5";
+    return "1.6.6";
   }
 }
 

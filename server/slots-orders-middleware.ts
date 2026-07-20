@@ -1,19 +1,21 @@
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolve } from "node:path";
-import { Wallet } from "ethers";
+import { Wallet, id } from "ethers";
+import { ENV_FILE } from "./runtime-paths";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
 const DEFAULT_PRIVATE_ARB_API_URL = "https://privateapi.superarb.ai";
 const DEFAULT_PRIVATE_ARB_WALLET_ACTIVITY_PATH = "/wallet-activity";
+const DEFAULT_TX2_TREASURY_CONFIG_PATH = "/api/private-member/treasury-compensation-config";
 const UPSTREAM_PAGE_SIZE = 200;
 const MAX_ORDERS = 2_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 const BSC_USDT_ADDRESS = "0x55d398326f99059ff775485246999027b3197955";
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const COMPENSATION_PAID_OUT_TOPIC = id("CompensationPaidOut(bytes32,address,uint256,address)").toLowerCase();
 const BSC_PUBLIC_RPC_URL = "https://bsc-dataseed.binance.org";
 const ON_CHAIN_AMOUNT_CONCURRENCY = 5;
+const TREASURY_POOL_CACHE_MS = 5 * 60_000;
 
 type JsonRecord = Record<string, unknown>;
 type OrderStatusGroup = "active" | "completed" | "failed" | "cancelled" | "unknown";
@@ -33,6 +35,13 @@ type SlotOrder = {
   usdtAmount: string;
   effectiveUsdtAmount: string;
   rewardUsdt: string;
+  rewardVerified: boolean;
+  rewardProofId: string;
+  rewardRequestId: string;
+  rewardRecordSource: string;
+  rewardPipelineSource: string;
+  rewardDirection: string;
+  rewardCounterparty: string;
   parentOrderId: string;
   parentOrderNo: string;
   rewardCount: number;
@@ -64,10 +73,13 @@ type RpcLog = {
 };
 
 type RpcReceipt = {
+  status?: string;
   logs?: RpcLog[];
 } | null;
 
 const onChainOrderAmountCache = new Map<string, string>();
+const rewardProofCache = new Map<string, { verified: boolean; checkedAt: number }>();
+const treasuryPoolCache = new Map<string, { addresses: Set<string>; checkedAt: number }>();
 
 class SlotsApiError extends Error {
   constructor(readonly statusCode: number, readonly code: string, message: string) {
@@ -104,6 +116,7 @@ async function loadSlotsOrders(req: IncomingMessage) {
   const allSorted = [...result.orders].sort((left, right) => orderTimestamp(right) - orderTimestamp(left));
   const sorted = allSorted.slice(0, MAX_ORDERS);
   await enrichBscOrderAmounts(sorted, walletAddress, env);
+  await enrichBscRewardProofs(sorted, walletAddress, env);
   linkRewardsToOrders(sorted);
 
   return {
@@ -206,6 +219,116 @@ async function bscOrderAmountFromReceipt(txHash: string, walletAddress: string, 
   return formatted;
 }
 
+async function enrichBscRewardProofs(orders: SlotOrder[], walletAddress: string, env: Record<string, string>): Promise<void> {
+  const treasuryPool = await readTx2TreasuryPool(env).catch(() => new Set<string>());
+  const candidates = orders.filter((order) => (
+    isStrictTx2RewardCandidate(order)
+    && treasuryPool.has(order.rewardCounterparty.toLowerCase())
+  ));
+  await forEachWithConcurrency(candidates, ON_CHAIN_AMOUNT_CONCURRENCY, async (order) => {
+    order.rewardVerified = await verifyTx2RewardOnChain(order, walletAddress, env).catch(() => false);
+  });
+}
+
+async function readTx2TreasuryPool(env: Record<string, string>): Promise<Set<string>> {
+  const endpoint = tx2TreasuryConfigEndpoint(env);
+  const cached = treasuryPoolCache.get(endpoint);
+  if (cached && Date.now() - cached.checkedAt < TREASURY_POOL_CACHE_MS) return cached.addresses;
+
+  const response = await fetch(endpoint, {
+    headers: privateArbActivityHeaders(env, ""),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const payload = (await response.json().catch(() => ({}))) as JsonRecord;
+  if (!response.ok || payload.ok === false || !Array.isArray(payload.addresses)) {
+    throw new Error(`tx2 treasury config unavailable (HTTP ${response.status})`);
+  }
+  const addresses = new Set(
+    payload.addresses
+      .map((address) => String(address || "").trim().toLowerCase())
+      .filter((address) => /^0x[a-f0-9]{40}$/.test(address)),
+  );
+  if (addresses.size === 0) throw new Error("tx2 treasury config returned an empty contract pool");
+  treasuryPoolCache.set(endpoint, { addresses, checkedAt: Date.now() });
+  return addresses;
+}
+
+function tx2TreasuryConfigEndpoint(env: Record<string, string>): string {
+  const configured = env.TX2_TREASURY_COMPENSATION_CONFIG_URL?.trim();
+  if (configured) return configured;
+  const activityUrl = new URL(privateArbActivityEndpoint(env));
+  activityUrl.pathname = DEFAULT_TX2_TREASURY_CONFIG_PATH;
+  activityUrl.search = "";
+  activityUrl.hash = "";
+  return activityUrl.toString();
+}
+
+function isStrictTx2RewardCandidate(order: SlotOrder): boolean {
+  return isRewardOrderType(order.orderType)
+    && order.rewardRecordSource === "tx2"
+    && order.rewardPipelineSource === "treasury-compensation-relayer"
+    && order.rewardDirection === "in"
+    && (order.chainId === 56 || order.chain === "bnb" || order.chain === "bsc")
+    && order.tokenAddress.toLowerCase() === BSC_USDT_ADDRESS
+    && /^0x[a-fA-F0-9]{40}$/.test(order.rewardCounterparty)
+    && /^0x[a-fA-F0-9]{64}$/.test(order.rewardRequestId)
+    && /^0x[a-fA-F0-9]{64}$/.test(order.txHash)
+    && decimalToTokenAmount(order.rewardUsdt, 18) > 0n;
+}
+
+async function verifyTx2RewardOnChain(order: SlotOrder, walletAddress: string, env: Record<string, string>): Promise<boolean> {
+  const expectedAmount = decimalToTokenAmount(order.rewardUsdt, 18);
+  const cacheKey = [order.txHash, walletAddress, order.rewardCounterparty, order.rewardRequestId, expectedAmount].join(":").toLowerCase();
+  const cached = rewardProofCache.get(cacheKey);
+  if (cached && (cached.verified || Date.now() - cached.checkedAt < 15_000)) return cached.verified;
+
+  const rpcUrl = env.BNB_RPC_URL?.trim() || env.BSC_RPC_URL?.trim() || BSC_PUBLIC_RPC_URL;
+  const receipt = await rpcRequest<RpcReceipt>(rpcUrl, "eth_getTransactionReceipt", [order.txHash]);
+  const treasury = order.rewardCounterparty.toLowerCase();
+  const walletTopic = addressTopic(walletAddress);
+  const treasuryTopic = addressTopic(treasury);
+  const tokenTopic = addressTopic(BSC_USDT_ADDRESS);
+  const requestTopic = order.rewardRequestId.toLowerCase();
+  let transferVerified = false;
+  let payoutEventVerified = false;
+
+  if (receipt?.status === "0x1") {
+    for (const log of receipt.logs || []) {
+      const topics = Array.isArray(log.topics) ? log.topics.map((topic) => String(topic).toLowerCase()) : [];
+      const amount = hexTokenAmount(log.data);
+      if (
+        log.address?.toLowerCase() === BSC_USDT_ADDRESS
+        && topics[0] === ERC20_TRANSFER_TOPIC
+        && topics[1] === treasuryTopic
+        && topics[2] === walletTopic
+        && amount === expectedAmount
+      ) transferVerified = true;
+      if (
+        log.address?.toLowerCase() === treasury
+        && topics[0] === COMPENSATION_PAID_OUT_TOPIC
+        && topics[1] === requestTopic
+        && topics[2] === walletTopic
+        && topics[3] === tokenTopic
+        && amount === expectedAmount
+      ) payoutEventVerified = true;
+    }
+  }
+
+  const verified = transferVerified && payoutEventVerified;
+  rewardProofCache.set(cacheKey, { verified, checkedAt: Date.now() });
+  return verified;
+}
+
+function addressTopic(address: string): string {
+  return `0x${address.toLowerCase().replace(/^0x/, "").padStart(64, "0")}`;
+}
+
+function decimalToTokenAmount(value: string, decimals: number): bigint {
+  const match = value.trim().match(/^(\d+)(?:\.(\d+))?$/);
+  if (!match) return 0n;
+  return BigInt(match[1]) * 10n ** BigInt(decimals) + BigInt((match[2] || "").slice(0, decimals).padEnd(decimals, "0"));
+}
+
 async function forEachWithConcurrency<T>(items: T[], concurrency: number, task: (item: T) => Promise<void>): Promise<void> {
   let cursor = 0;
   const worker = async () => {
@@ -260,6 +383,9 @@ async function fetchActivityPage(
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const payload = (await response.json().catch(() => ({}))) as JsonRecord;
+  // privateARB uses 404 when a wallet does not have any activity yet.
+  // Treat that as an empty ledger so the Slots page can render its empty state.
+  if (response.status === 404) return [];
   if (!response.ok || payload.ok === false) {
     throw new SlotsApiError(502, "PRIVATE_ARB_ACTIVITY_UNAVAILABLE", `privateARB 钱包活动服务暂不可用（HTTP ${response.status}）。`);
   }
@@ -308,6 +434,8 @@ function normalizeOrder(row: JsonRecord): SlotOrder | null {
   const approveTxHash = txHashValue(row.approveTxHash, row.approve_tx_hash);
   const rewardTxHash = txHashValue(row.rewardTxHash, row.reward_tx_hash, row.payoutTxHash, row.payout_tx_hash);
   const txHash = executionTxHash || paymentTxHash || approveTxHash || rewardTxHash;
+  const detail = recordValue(row.detail, row.metadata);
+  const rewardRequestId = txHashValue(row.requestId, row.request_id, detail.requestId, detail.request_id);
 
   return {
     id: id || orderNo,
@@ -335,6 +463,13 @@ function normalizeOrder(row: JsonRecord): SlotOrder | null {
       isRewardOrderType(orderType) ? row.usdtAmount : undefined,
       isRewardOrderType(orderType) ? row.usdt_amount : undefined,
     ),
+    rewardVerified: false,
+    rewardProofId: rewardRequestId ? `tx2:${rewardRequestId}` : "",
+    rewardRequestId,
+    rewardRecordSource: normalizeIdentifier(stringValue(row.source), ""),
+    rewardPipelineSource: normalizeIdentifier(stringValue(detail.source), ""),
+    rewardDirection: normalizeIdentifier(stringValue(row.direction), ""),
+    rewardCounterparty: addressValue(row.counterparty, detail.treasuryAddress, detail.treasury_address),
     parentOrderId: safeLabel(
       row.parentOrderId ?? row.parent_order_id ?? row.sourceOrderId ?? row.source_order_id ?? row.slotOrderId ?? row.slot_order_id,
       "",
@@ -568,6 +703,21 @@ function arrayValue(...values: unknown[]): unknown[] | null {
     if (Array.isArray(value)) return value;
   }
   return null;
+}
+
+function recordValue(...values: unknown[]): JsonRecord {
+  for (const value of values) {
+    if (isRecord(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (isRecord(parsed)) return parsed;
+      } catch {
+        // Ignore malformed upstream metadata; it can never verify a reward.
+      }
+    }
+  }
+  return {};
 }
 
 function headerValue(value: string | string[] | undefined): string {

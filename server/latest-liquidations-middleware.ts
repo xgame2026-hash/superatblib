@@ -4,9 +4,9 @@ import { dirname, resolve } from "node:path";
 import { assertOfficialConfig } from "./official-config";
 import { PHASE1_LIQUIDATION_STRATEGIES, type Phase1Strategy } from "./phase1-liquidation-strategies";
 import { queueWssToken } from "./queue-token";
+import { ENV_FILE, stateFile } from "./runtime-paths";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
-const ASSET_CHANGE_DB_FILE = resolve(process.cwd(), ".superarb/wallet-asset-change-db.json");
+const ASSET_CHANGE_DB_FILE = stateFile("wallet-asset-change-db.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SNAPSHOT_API_URL = "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot";
 const LEGACY_SNAPSHOT_API_URLS = new Set([
@@ -268,9 +268,10 @@ const blockAtTimestampCache = new Map<string, BlockCacheEntry>();
 const assetChangeRefreshInFlight = new Set<string>();
 
 export function handleLatestLiquidationsRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  const pathname = new URL(req.url || "/", "http://127.0.0.1").pathname;
   // The execution-page list is deliberately independent from public market
   // snapshots. It is the LIQ2 private-member online-wallet list only.
-  if (req.url?.startsWith("/api/liq2/online-wallets")) {
+  if (pathname === "/api/liq2/online-wallets") {
     if (req.method !== "GET") {
       json(res, 405, { ok: false, error: "Method not allowed." });
       return true;
@@ -285,7 +286,7 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
     return true;
   }
 
-  if (req.url?.startsWith("/api/market-snapshot")) {
+  if (pathname === "/api/market-snapshot") {
     if (req.method !== "GET") {
       json(res, 405, { ok: false, error: "Method not allowed." });
       return true;
@@ -300,14 +301,14 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
     return true;
   }
 
-  if (!req.url?.startsWith("/api/latest-liquidations")) return false;
+  if (pathname !== "/api/latest-liquidations") return false;
 
   if (req.method !== "GET") {
     json(res, 405, { ok: false, error: "Method not allowed." });
     return true;
   }
 
-  const requestUrl = new URL(req.url, "http://localhost");
+  const requestUrl = new URL(req.url || "/api/latest-liquidations", "http://localhost");
   const fast = requestUrl.searchParams.get("marketStatus") === "1";
   const queueOnly = requestUrl.searchParams.get("fast") === "1";
   fetchLiquidationSnapshot(req, { fast, queueOnly })
@@ -349,7 +350,7 @@ async function fetchLiq2OnlineWallets(req: IncomingMessage) {
     ok: true,
     source: "privateapi.superarb.ai/online-users",
     queueTransport: "private-global",
-    queueSource: "privateapi.superarb.ai/online-users (liq2 wallets with valid heartbeat)",
+    queueSource: "privateapi.superarb.ai/online-users (started until pause or RPC expiry)",
     queueParticipantCount: queuedWallets.length,
     queueSubscribers: 0,
     queueUpdatedAt: updatedAt,
@@ -2007,7 +2008,9 @@ function jwtExpiry(token: string): Date | null {
 
 function timeoutMs(env: Record<string, string>): number {
   const parsed = Number(env.LIQUIDATION_SNAPSHOT_TIMEOUT_MS);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(60_000, Math.max(1_000, parsed))
+    : DEFAULT_TIMEOUT_MS;
 }
 
 function readEnv(): Record<string, string> {
@@ -2029,5 +2032,6 @@ function readEnv(): Record<string, string> {
 function json(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
   res.end(JSON.stringify(payload));
 }

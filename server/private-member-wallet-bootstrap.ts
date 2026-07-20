@@ -1,19 +1,22 @@
-import crypto from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { assertOfficialConfig } from "./official-config";
+import { encryptPrivateKeyEnvelope } from "./private-key-envelope";
+import { writePrivateTextFile } from "./local-secure-storage";
+import { ENV_FILE, stateFile } from "./runtime-paths";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
 const DEFAULT_PRIVATE_MEMBER_API_URL = "https://privateapi.superarb.ai";
 const DEFAULT_BOOTSTRAP_PATH = "/bootstrap";
 const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
 const DEFAULT_TIMEOUT_MS = 10_000;
-const CLIENT_VERSION = "1.6.5";
+const CLIENT_VERSION = "1.6.6";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
-const DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
+const PRESENCE_HEARTBEAT_INTERVAL_MS = 5 * 60_000;
+const PRESENCE_STOP_RETRY_INTERVAL_MS = 10_000;
+const PENDING_PRESENCE_LEAVE_FILE = stateFile("pending-presence-leave.json");
 
 type BootstrapResult = {
   ok: boolean;
@@ -42,17 +45,22 @@ type HeartbeatResult = {
   error?: string;
 };
 
+type UserLeaveAction = "pause" | "logout" | "rpc-expired";
+
 type ExecutionPresence = {
   status: "running" | "stopped";
   chain?: string;
   market?: string;
+  leaveAction?: UserLeaveAction;
 };
 
 const inFlight = new Map<string, Promise<BootstrapResult>>();
 let presenceTimer: ReturnType<typeof setInterval> | undefined;
+let presenceStopRetryTimer: ReturnType<typeof setInterval> | undefined;
 let presenceInFlight = false;
 let presenceRequest: Promise<HeartbeatResult> | undefined;
 let presenceFailureCount = 0;
+let pendingPresenceLeaveAction: UserLeaveAction = "logout";
 // Execution state is deliberately separate from login presence. A signed-in
 // client is not an executing client until the market-control UI confirms it.
 let executionPresence: ExecutionPresence = { status: "stopped" };
@@ -70,28 +78,98 @@ export function bootstrapPrivateMemberWalletOnce(reason = "startup", options: Bo
 
 /** Start the execution-presence heartbeat after a market has entered the queue. */
 export async function startPrivateMemberWalletHeartbeat(): Promise<HeartbeatResult> {
+  if (executionPresence.status !== "running") {
+    return { ok: true, skipped: true, status: "offline", error: "execution_not_running" };
+  }
+  stopPresenceOfflineRetry();
+  clearPendingPresenceLeave();
   if (presenceTimer) return { ok: true, skipped: true, status: "online", error: "already_running" };
-  const env = readEnv();
-  const intervalMs = presenceHeartbeatIntervalMs(env);
+  const intervalMs = presenceHeartbeatIntervalMs();
   // The retry loop belongs to the local service, not to the browser window.
   // Install it before the initial request so a transient failure still retries
   // after the page has closed.
   presenceTimer = setInterval(() => {
     void runPrivateMemberWalletHeartbeat("online");
   }, intervalMs);
+  await presenceRequest?.catch(() => undefined);
+  if (executionPresence.status !== "running") return { ok: true, skipped: true, status: "offline", error: "start_superseded" };
   const result = await runPrivateMemberWalletHeartbeat("online");
   return result.ok
     ? result
     : { ...result, ok: true, skipped: true, error: `background retry scheduled: ${result.error || "initial heartbeat failed"}` };
 }
 
-/** Stop the execution-presence heartbeat and make a best-effort offline update. */
-export async function stopPrivateMemberWalletHeartbeat(): Promise<HeartbeatResult> {
+/** Stop online heartbeats and keep retrying until the explicit leave is acknowledged. */
+export async function stopPrivateMemberWalletHeartbeat(leaveAction: UserLeaveAction): Promise<HeartbeatResult> {
   if (presenceTimer) clearInterval(presenceTimer);
   presenceTimer = undefined;
   // An explicit stop must be ordered after any older online request.
+  pendingPresenceLeaveAction = leaveAction;
+  rememberPendingPresenceLeave(leaveAction);
   await presenceRequest?.catch(() => undefined);
-  return sendPrivateMemberWalletHeartbeat("offline");
+  if (executionPresence.status !== "stopped") return { ok: true, skipped: true, status: "online", error: "stop_superseded" };
+  const result = await runPrivateMemberWalletHeartbeat("offline", leaveAction);
+  if (result.ok && !result.skipped) clearPendingPresenceLeave();
+  else startPresenceOfflineRetry();
+  return result;
+}
+
+export function restorePendingPrivateMemberLeave(): void {
+  if (!existsSync(PENDING_PRESENCE_LEAVE_FILE)) return;
+  pendingPresenceLeaveAction = readPendingPresenceLeaveAction();
+  executionPresence = { status: "stopped" };
+  startPresenceOfflineRetry();
+  void runPrivateMemberWalletHeartbeat("offline", pendingPresenceLeaveAction).then((result) => {
+    if (result.ok && !result.skipped) {
+      clearPendingPresenceLeave();
+      stopPresenceOfflineRetry();
+    }
+  });
+}
+
+function startPresenceOfflineRetry(): void {
+  if (presenceStopRetryTimer || executionPresence.status !== "stopped") return;
+  presenceStopRetryTimer = setInterval(() => {
+    if (executionPresence.status !== "stopped") {
+      stopPresenceOfflineRetry();
+      return;
+    }
+    void runPrivateMemberWalletHeartbeat("offline", pendingPresenceLeaveAction).then((result) => {
+      if (result.ok && !result.skipped) {
+        clearPendingPresenceLeave();
+        stopPresenceOfflineRetry();
+      }
+    });
+  }, PRESENCE_STOP_RETRY_INTERVAL_MS);
+}
+
+function stopPresenceOfflineRetry(): void {
+  if (presenceStopRetryTimer) clearInterval(presenceStopRetryTimer);
+  presenceStopRetryTimer = undefined;
+}
+
+function rememberPendingPresenceLeave(leaveAction: UserLeaveAction): void {
+  writePrivateTextFile(
+    PENDING_PRESENCE_LEAVE_FILE,
+    `${JSON.stringify({ pending: true, leaveAction, requestedAt: new Date().toISOString() })}\n`,
+  );
+}
+
+function readPendingPresenceLeaveAction(): UserLeaveAction {
+  try {
+    const payload = JSON.parse(readFileSync(PENDING_PRESENCE_LEAVE_FILE, "utf8")) as { leaveAction?: unknown };
+    return isUserLeaveAction(payload.leaveAction) ? payload.leaveAction : "logout";
+  } catch {
+    return "logout";
+  }
+}
+
+function clearPendingPresenceLeave(): void {
+  try {
+    unlinkSync(PENDING_PRESENCE_LEAVE_FILE);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 /**
@@ -99,6 +177,9 @@ export async function stopPrivateMemberWalletHeartbeat(): Promise<HeartbeatResul
  * entered the queue. Stopping that market immediately stops its heartbeat.
  */
 export async function setPrivateMemberExecutionPresence(input: ExecutionPresence): Promise<HeartbeatResult> {
+  if (input.status === "stopped" && !isUserLeaveAction(input.leaveAction)) {
+    return { ok: false, status: "offline", code: "LEAVE_ACTION_REQUIRED", error: "Pause, Exit, or RPC expiry is required to stop execution presence." };
+  }
   executionPresence = {
     status: input.status === "running" ? "running" : "stopped",
     chain: cleanExecutionValue(input.chain, 32),
@@ -110,14 +191,14 @@ export async function setPrivateMemberExecutionPresence(input: ExecutionPresence
   }
   return executionPresence.status === "running"
     ? startPrivateMemberWalletHeartbeat()
-    : stopPrivateMemberWalletHeartbeat();
+    : stopPrivateMemberWalletHeartbeat(input.leaveAction as UserLeaveAction);
 }
 
-async function runPrivateMemberWalletHeartbeat(status: "online" | "offline"): Promise<HeartbeatResult> {
+async function runPrivateMemberWalletHeartbeat(status: "online" | "offline", leaveAction?: UserLeaveAction): Promise<HeartbeatResult> {
   if (presenceInFlight) return { ok: true, skipped: true, status, error: "heartbeat_in_flight" };
   presenceInFlight = true;
   try {
-    presenceRequest = sendPrivateMemberWalletHeartbeat(status);
+    presenceRequest = sendPrivateMemberWalletHeartbeat(status, leaveAction);
     const result = await presenceRequest;
     if (result.ok) {
       presenceFailureCount = 0;
@@ -136,10 +217,10 @@ async function runPrivateMemberWalletHeartbeat(status: "online" | "offline"): Pr
 
 /**
  * Refresh the remote PrivateARB presence row without uploading the private key.
- * The execution-presence manager calls this every 30 seconds only while a
+ * The execution-presence manager calls this every five minutes only while a
  * LIQ2 market is running, and sends offline when that market stops.
  */
-export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offline" = "online"): Promise<HeartbeatResult> {
+export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offline" = "online", leaveAction?: UserLeaveAction): Promise<HeartbeatResult> {
   try {
     const env = readEnv();
     if (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED?.trim() === "false") return { ok: true, skipped: true, status, error: "disabled" };
@@ -161,7 +242,7 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
       body: JSON.stringify({
         chain,
         walletAddress,
-        systemId: buildSystemId(chain, walletAddress, readRpcUrl(chain, env), appToken),
+        systemId: buildSystemId(chain, walletAddress),
         rpcUrl: readRpcUrl(chain, env),
         status,
         clientVersion: CLIENT_VERSION,
@@ -171,6 +252,7 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
         executionStatus: status === "offline" ? "stopped" : executionPresence.status,
         executionChain: status === "offline" ? undefined : executionPresence.chain,
         executionMarket: status === "offline" ? undefined : executionPresence.market,
+        leaveAction: status === "offline" ? leaveAction : undefined,
       }),
       signal: AbortSignal.timeout(timeoutMs(env)),
     });
@@ -196,6 +278,10 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
   } catch (error) {
     return { ok: false, status, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function isUserLeaveAction(value: unknown): value is UserLeaveAction {
+  return value === "pause" || value === "logout" || value === "rpc-expired";
 }
 
 function cleanExecutionValue(value: unknown, maxLength: number): string | undefined {
@@ -249,7 +335,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     const normalizedPrivateKey = normalizePrivateKey(privateKey);
     const walletAddress = privateKeyToAddress(normalizedPrivateKey);
     const rpcUrl = readRpcUrl(chain, env);
-    const systemId = buildSystemId(chain, walletAddress, rpcUrl, appToken);
+    const systemId = buildSystemId(chain, walletAddress);
     const endpoint = privateMemberBootstrapEndpoint(env);
     const rpcToken = appToken || undefined;
     const txPublicKeyPem = readTxPublicKeyPem();
@@ -266,7 +352,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       rpcToken,
       rpcPlan,
     });
-    const privateKeyCipher = encryptForTxWallet(normalizedPrivateKey, txPublicKeyPem);
+    const privateKeyCipher = encryptPrivateKeyEnvelope(normalizedPrivateKey, txPublicKeyPem);
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -297,30 +383,6 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
     console.warn(`[liq2] private member wallet bootstrap skipped: ${message}`);
     return { ok: false, skipped: true, error: message };
   }
-}
-
-function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
-  const aesKey = crypto.randomBytes(32);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
-  const encryptedData = Buffer.concat([cipher.update(privateKey, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  const encryptedKey = crypto.publicEncrypt(
-    {
-      key: publicKeyPem,
-      oaepHash: "sha256",
-      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-    },
-    aesKey,
-  );
-
-  return JSON.stringify({
-    v: 1,
-    alg: "RSA-OAEP-256+AES-256-GCM",
-    key: encryptedKey.toString("base64"),
-    iv: iv.toString("base64"),
-    data: Buffer.concat([encryptedData, tag]).toString("base64"),
-  });
 }
 
 function privateMemberBootstrapEndpoint(env: Record<string, string>): string {
@@ -424,17 +486,8 @@ function readRpcUrl(chain: string, env: Record<string, string>): string | undefi
   return keys.map((key) => env[key]?.trim()).find(Boolean);
 }
 
-function buildSystemId(chain: string, walletAddress: string, rpcUrl?: string, appToken?: string): string {
-  const credential = crypto
-    .createHash("sha256")
-    .update(`${normalizeComparableUrl(rpcUrl)}\n${appToken?.trim() || "no-token"}`)
-    .digest("hex")
-    .slice(0, 16);
-  return `${chain}:${walletAddress.toLowerCase()}:${credential}`;
-}
-
-function normalizeComparableUrl(value?: string): string {
-  return (value ?? "").trim().replace(/\/+$/, "").toLowerCase();
+function buildSystemId(chain: string, walletAddress: string): string {
+  return `${chain}:${walletAddress.toLowerCase()}`;
 }
 
 function readLocalRpcPlanInfo(env: Record<string, string>): { rpcPlanType: string; rpcPlanName: string } {
@@ -601,7 +654,6 @@ function timeoutMs(env: Record<string, string>): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
 }
 
-function presenceHeartbeatIntervalMs(env: Record<string, string>): number {
-  const parsed = Number(env.LIQ2_PRIVATE_MEMBER_HEARTBEAT_INTERVAL_MS);
-  return Number.isFinite(parsed) && parsed >= 10_000 ? Math.min(parsed, 60_000) : DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS;
+function presenceHeartbeatIntervalMs(): number {
+  return PRESENCE_HEARTBEAT_INTERVAL_MS;
 }

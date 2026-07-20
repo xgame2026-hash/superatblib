@@ -6,7 +6,7 @@ const privateUrl = process.env.VERIFY_STATE_URL || "https://privateapi.superarb.
 const shouldCheckRemote = process.env.VERIFY_PRIVATE_REMOTE === "1" || Boolean(process.env.VERIFY_STATE_URL);
 const forbiddenUiTerms = ["数据库"];
 const sourceDirs = ["src", "server"];
-const requiredVersion = "1.6.5";
+const requiredVersion = "1.6.6";
 const requiredProtocol = "liq2-cutover-20260624-v160";
 
 function fail(message) {
@@ -54,18 +54,15 @@ function checkClientContract() {
   const avatarMiddleware = read("server/avatar-profile-middleware.ts");
   const privateBootstrap = read("server/private-member-wallet-bootstrap.ts");
   const settingsMiddleware = read("server/settings-middleware.ts");
+  const licenseMiddleware = read("server/supermtnode-license.ts");
+  const credentialAudit = read("server/credential-audit.ts");
   const settingsView = read("src/features/settings/SettingsView.vue");
-  const stateApi = read("server/state-api-rust/src/main.rs");
   const viteConfig = read("vite.config.ts");
-  const profileMigration = read("server/state-api-rust/migrations/20260624_rebuild_liq2_user_profiles.sql");
   const packageJson = JSON.parse(read("package.json"));
-  const cargoToml = read("server/state-api-rust/Cargo.toml");
 
   if (packageJson.version !== requiredVersion) fail(`package.json version must be ${requiredVersion}`);
-  if (!cargoToml.includes(`version = "${requiredVersion}"`)) fail(`Cargo.toml version must be ${requiredVersion}`);
-  if (!stateApi.includes(`const VERSION: &str = "${requiredVersion}"`)) fail(`private state API version must be ${requiredVersion}`);
-  if (!stateApi.includes(requiredProtocol) || !queueMiddleware.includes(requiredProtocol) || !privateBootstrap.includes(requiredProtocol)) {
-    fail("liq2 protocol version must be shared by client middleware and private API");
+  if (!queueMiddleware.includes(requiredProtocol) || !privateBootstrap.includes(requiredProtocol)) {
+    fail("liq2 protocol version must be shared by client middleware modules");
   }
   if (!liquidationView.includes('registerMarketQueueStart(saved.option, "start")')) {
     fail("refresh restore must perform a full start sync");
@@ -80,12 +77,39 @@ function checkClientContract() {
     fail("heartbeats from an older client run must not mutate a restarted queue");
   }
   const pauseStartWait = liquidationView.indexOf("await pendingStart?.catch(() => undefined)");
-  const pauseStopRequest = liquidationView.indexOf("await unregisterMarketQueue(runningMarket)", pauseStartWait);
+  const pauseStopRequest = liquidationView.indexOf("Promise.allSettled", pauseStartWait);
   if (pauseStartWait < 0 || pauseStopRequest < pauseStartWait) {
     fail("pause must settle an overlapping start before sending the queue stop request");
   }
+  if (!liquidationView.includes('pauseMarketExecution("logout")') || !app.includes("leaveQueueForLogout")) {
+    fail("the explicit Exit button must leave the queue before clearing the login session");
+  }
+  if (!liquidationView.includes("const runningMarket = savedRunningState?.option ?? currentMarket.value")) {
+    fail("Pause and Exit must target the saved running market, not a newly selected market");
+  }
+  if (!queueMiddleware.includes('const USER_LEAVE_ACTIONS = ["pause", "logout"]')) {
+    fail("only explicit Pause and Exit may be user-initiated queue leave actions");
+  }
+  if (!queueMiddleware.includes('["start", "heartbeat", ...STOP_ACTIONS].includes(action)')) {
+    fail("unknown and legacy queue actions must be rejected instead of falling through as start");
+  }
+  if (queueMiddleware.includes('"disconnect", "unregister"') || queueMiddleware.includes('const STOP_ACTIONS = ["stop"')) {
+    fail("disconnect, unregister, and generic stop must not remove queue membership");
+  }
+  if (!liquidationView.includes('queueRequestBody(item, "rpc-expired")') || !queueMiddleware.includes('const SYSTEM_LEAVE_ACTIONS = ["rpc-expired"]')) {
+    fail("authoritative RPC expiry must remain a separate forced-offline action");
+  }
+  if (settingsMiddleware.includes('req.url.startsWith("/api/settings/presence/stop")') || settingsMiddleware.includes('req.url.startsWith("/api/settings/presence/start")')) {
+    fail("legacy presence endpoints must not bypass confirmed execution state");
+  }
+  if (!settingsMiddleware.includes('!["pause", "logout", "rpc-expired"].includes(leaveAction)')) {
+    fail("execution-presence stop must carry an approved explicit leave reason");
+  }
   if (app.includes("handlePresencePageExit") || liquidationView.includes("handleClientUnload")) {
     fail("closing the dashboard must not stop server-owned execution presence");
+  }
+  if (viteConfig.includes("stopPrivateMemberWalletHeartbeat") || app.includes("void stopPresenceHeartbeat()")) {
+    fail("dashboard shutdown or logout must not force an executing queue member offline");
   }
   if (liquidationView.includes("RUNNING_MARKET_RESTORE_WINDOW_MS") || !liquidationView.includes("restoreRunningMarketIntent")) {
     fail("running intent must survive a closed dashboard until the user explicitly pauses it");
@@ -102,11 +126,18 @@ function checkClientContract() {
   if (!queueMiddleware.includes("本地队列已暂停")) {
     fail("old heartbeats must be rejected after pause");
   }
-  if (!liquidationView.includes("本地队列已暂停|本地队列已停止")) {
-    fail("a locally stopped heartbeat must terminate the client heartbeat timer");
+  if (!liquidationView.includes("function isRpcServiceExpiredError") || !liquidationView.includes("RPC_SERVICE_EXPIRED")) {
+    fail("only an authoritative RPC-service expiry may force the client offline");
   }
-  if (!liquidationView.includes("if (!isLocalQueueStoppedError(message)) sendQueueStopBeacon")) {
-    fail("an acknowledged local stop must not enqueue another stop that can race with restart");
+  const heartbeatHandler = liquidationView.slice(
+    liquidationView.indexOf("async function sendMarketHeartbeat"),
+    liquidationView.indexOf("function normalizeHeartbeatIntervalMs"),
+  );
+  if (!heartbeatHandler.includes("if (isRpcServiceExpiredError(message))") || heartbeatHandler.includes("isFatalQueueRuntimeError")) {
+    fail("heartbeat failures must remain telemetry unless RPC service expiry is explicit");
+  }
+  if (!liquidationView.includes("saved queue remains online; background sync will retry")) {
+    fail("saved running intent must remain online when reconnect sync fails");
   }
   if (queueMiddleware.includes("/列队已暂停/") || !queueMiddleware.includes("/队列已暂停|队列已停止/")) {
     fail("a locally stopped queue must terminate the background heartbeat timer");
@@ -122,6 +153,44 @@ function checkClientContract() {
   if (localStopIndex < 0 || localMissingIndex < 0) {
     fail("old heartbeat guards must run before any remote private write");
   }
+  if (queueMiddleware.includes("Date.now() - lastSeenAt > 30 * 60 * 1000")) {
+    fail("local queue restore must not expire membership from a stale heartbeat");
+  }
+  if (queueMiddleware.includes("!isExpiredLocalQueueRow(row)")) {
+    fail("local queue membership must not be garbage-collected by a heartbeat lease");
+  }
+  if (!queueMiddleware.includes("expiresAt: payload.expiresAt") || !queueMiddleware.includes("QUEUE_NO_RPC_EXPIRY")) {
+    fail("queue expiry must represent RPC-service expiry, not a refreshed heartbeat lease");
+  }
+  if (!queueMiddleware.includes("scheduleBackgroundQueueRpcExpiry(key)")) {
+    fail("the local controller must schedule authoritative RPC expiry independently of the browser");
+  }
+  if (!queueMiddleware.includes('action: "rpc-expired"') || !queueMiddleware.includes('leaveAction: "rpc-expired"')) {
+    fail("background RPC expiry must stop local membership and remote execution presence with an explicit reason");
+  }
+  if (!queueMiddleware.includes('stopBackgroundQueueHeartbeat(key, "rpc-expired")')) {
+    fail("RPC expiry must stop the controller-owned background heartbeat");
+  }
+  if (
+    !app.includes('from "../server/credential-audit"')
+    || !app.includes("auditAuthorizationCode(code)")
+    || !credentialAudit.includes("expiry.getTime() <= Date.now()")
+    || !licenseMiddleware.includes("Number.isFinite(expiry)")
+  ) {
+    fail("browser credential module and server authorization checks must require a parseable future expiry");
+  }
+  if (!queueMiddleware.includes("fetchSuperMtNodeEndpointsByToken(token)")) {
+    fail("RPC expiry must be audited against the authoritative SuperMTNode endpoint metadata");
+  }
+  if (!settingsMiddleware.includes("isSameOriginLocalRequest(req)")) {
+    fail("settings secrets must not be readable from a different localhost origin");
+  }
+  if (!settingsMiddleware.includes('res.setHeader("Cache-Control", "no-store, max-age=0")')) {
+    fail("credential-bearing settings responses must never be cached");
+  }
+  if (!settingsMiddleware.includes("writePrivateTextFile(ENV_FILE")) {
+    fail("credential-bearing settings must use the owner-only atomic storage boundary");
+  }
   if (!privateBootstrap.includes('"https://privateapi.superarb.ai"') || !privateBootstrap.includes('const DEFAULT_BOOTSTRAP_PATH = "/bootstrap"')) {
     fail("private bootstrap must write through privateapi.superarb.ai /bootstrap endpoint");
   }
@@ -131,11 +200,26 @@ function checkClientContract() {
   if (!privateBootstrap.includes("response.status === 409") || !privateBootstrap.includes('reason: "already_registered"')) {
     fail("repeating the same valid private-key/RPC/app-token bootstrap must be idempotent");
   }
-  if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/heartbeat") || !settingsMiddleware.includes("/api/settings/presence/start")) {
-    fail("liq2 client presence must refresh privateapi.superarb.ai /heartbeat");
+  if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/heartbeat") || !settingsMiddleware.includes("/api/settings/execution-presence")) {
+    fail("confirmed liq2 execution presence must refresh privateapi.superarb.ai /heartbeat");
   }
   if (!privateBootstrap.includes("background retry scheduled") || !privateBootstrap.includes("await presenceRequest?.catch")) {
     fail("privateapi heartbeat must be non-blocking at startup and ordered on explicit stop");
+  }
+  if (!privateBootstrap.includes("startPresenceOfflineRetry") || !privateBootstrap.includes('runPrivateMemberWalletHeartbeat("offline",')) {
+    fail("an explicit Pause or Exit must retry its privateapi offline update until acknowledged");
+  }
+  if (!privateBootstrap.includes("leaveAction: status === \"offline\" ? leaveAction : undefined")) {
+    fail("privateapi offline retries must preserve the explicit Pause, Exit, or RPC-expiry reason");
+  }
+  if (!privateBootstrap.includes("readPendingPresenceLeaveAction")) {
+    fail("a controller restart must restore the original explicit leave reason");
+  }
+  if (!privateBootstrap.includes("stopPresenceOfflineRetry()")) {
+    fail("a new Start must cancel any older explicit-leave retry");
+  }
+  if (!privateBootstrap.includes("PENDING_PRESENCE_LEAVE_FILE") || !viteConfig.includes("restorePendingPrivateMemberLeave()")) {
+    fail("an unacknowledged Pause or Exit must survive a controller restart");
   }
   if (privateBootstrap.includes("username") || queueMiddleware.includes("username")) {
     fail("liq2 private writes must identify users by full wallet address, never by a derived username");
@@ -146,14 +230,20 @@ function checkClientContract() {
   if (!queueMiddleware.includes('bootstrapPrivateMemberWalletOnce("queue-start"')) {
     fail("liq2 queue start must write the current wallet profile before heartbeats begin");
   }
+  if (!settingsMiddleware.includes('bootstrapPrivateMemberWalletOnce("settings-save"')) {
+    fail("saving complete private-key, BNB RPC, and app-token settings must submit the encrypted wallet profile");
+  }
+  if (!settingsMiddleware.includes('reason: "critical_settings_incomplete"')) {
+    fail("incomplete critical settings must remain local and must not trigger a remote bootstrap");
+  }
+  if (!app.includes('headers: { "Content-Type": "application/json", ...authHeadersForSettings() }')) {
+    fail("settings save must authorize secure remote bootstrap with the active login identity");
+  }
   if (viteConfig.includes('bootstrapPrivateMemberWalletOnce("vite-startup"')) {
     fail("opening the liq2 dashboard must not submit a wallet profile");
   }
   if (privateBootstrap.includes("validateSuperMtNodeAppToken")) {
     fail("liq2 bootstrap must use one authoritative privateapi write, without a separate member-tier preflight");
-  }
-  if (stateApi.includes("resolve_supermtnode_rpc_plan")) {
-    fail("liq2 database bootstrap must not wait for an external RPC-plan lookup");
   }
   if (!queueMiddleware.includes("throw new Error(`用户数据写入失败")) {
     fail("liq2 queue start must stop when the user profile was not written");
@@ -182,33 +272,8 @@ function checkClientContract() {
   ]) {
     if (!privateBootstrap.includes(term)) fail(`private bootstrap payload is missing ${term}`);
   }
-  if (!stateApi.includes("async fn liq2_wallet_bootstrap")) {
-    fail("liq2 state API bootstrap handler is missing");
-  }
-  for (const field of [
-    "system_id",
-    "chain",
-    "wallet_address",
-    "rpc_url",
-    "rpc_token",
-    "encrypted_private_key",
-    "credential_auth_mode",
-    "single_trade_auth_amount_usdt",
-    "arbitrage_intensity",
-    "rpc_plan_type",
-    "rpc_plan_name",
-    "wallet_usdt",
-    "nickname",
-    "status",
-    "heartbeat_at",
-  ]) {
-    if (!profileMigration.includes(field)) fail(`liq2_user_profiles migration is missing ${field}`);
-  }
-  if (!profileMigration.includes("DROP TABLE IF EXISTS liq2_user_profiles") || !profileMigration.includes("TRUNCATE TABLE")) {
-    fail("liq2_user_profiles migration must be a hard cutover");
-  }
-  if (!privateBootstrap.includes("buildSystemId(chain, walletAddress, rpcUrl, appToken)")) {
-    fail("LIQ2 profile identity must include the RPC/app-token credential pair");
+  if (!privateBootstrap.includes("buildSystemId(chain, walletAddress)")) {
+    fail("LIQ2 profile identity must use the complete wallet address independently of shared RPC credentials");
   }
   const unmountHandler = liquidationView.slice(liquidationView.indexOf("onBeforeUnmount"), liquidationView.indexOf("function startVisiblePolling"));
   if (unmountHandler.includes('reportExecutionPresence("stopped"') || unmountHandler.includes("sendQueueStopBeacon")) {
@@ -221,7 +286,7 @@ function checkClientContract() {
   if (!queueMiddleware.includes("startBackgroundQueueHeartbeat(env, httpFallbackEndpoint, payload)")) {
     fail("a successful LIQ2 start must hand heartbeat ownership to the local background service");
   }
-  if (!latestMiddleware.includes('req.url?.startsWith("/api/liq2/online-wallets")') || !latestMiddleware.includes("DEFAULT_ONLINE_USERS_API_URL")) {
+  if (!latestMiddleware.includes('pathname === "/api/liq2/online-wallets"') || !latestMiddleware.includes("DEFAULT_ONLINE_USERS_API_URL")) {
     fail("LIQ2 online display must read privateapi.superarb.ai/online-users through its dedicated local route");
   }
   if (!latestMiddleware.includes("const queueUrl = new URL(DEFAULT_ONLINE_USERS_API_URL)")) {
@@ -276,7 +341,7 @@ function checkClientContract() {
   if (liquidationView.includes("/api/latest-liquidations")) {
     fail("LiquidationView must not fetch the old combined latest-liquidations endpoint for the market snapshot");
   }
-  if (!latestMiddleware.includes('req.url?.startsWith("/api/market-snapshot")')) {
+  if (!latestMiddleware.includes('pathname === "/api/market-snapshot"')) {
     fail("server must expose /api/market-snapshot");
   }
   if (!latestMiddleware.includes('queueSource = "liquidation-snapshot-service"') || !latestMiddleware.includes("queuedWallets = []")) {

@@ -88,6 +88,18 @@ export function setAlertSoundsEnabled(enabled: boolean): void {
 
 /** Plays one configured notification when the application's global sound switch is on. */
 export function playAlertSound(key: AlertSoundKey, id: unknown): HTMLAudioElement | null {
+  return startAlertSound(key, id)?.audio ?? null;
+}
+
+/** Resolves true only after the browser has actually allowed playback to start. */
+export async function confirmAlertSoundPlayback(key: AlertSoundKey, id: unknown): Promise<boolean> {
+  return (await startAlertSound(key, id)?.playback) ?? false;
+}
+
+function startAlertSound(
+  key: AlertSoundKey,
+  id: unknown,
+): { audio: HTMLAudioElement; playback: Promise<boolean> } | null {
   if (!alertSoundsEnabled) return null;
   const audio = new Audio(resolveAlertSoundUrl(key, id));
   audio.preload = "auto";
@@ -96,6 +108,12 @@ export function playAlertSound(key: AlertSoundKey, id: unknown): HTMLAudioElemen
   const release = () => activeAlertSounds.delete(audio);
   audio.addEventListener("ended", release, { once: true });
   audio.addEventListener("error", release, { once: true });
-  void audio.play().catch(release);
-  return audio;
+  const playback = audio.play().then(
+    () => true,
+    () => {
+      release();
+      return false;
+    },
+  );
+  return { audio, playback };
 }

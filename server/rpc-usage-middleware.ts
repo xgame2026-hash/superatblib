@@ -1,8 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolve } from "node:path";
-
-const ENV_FILE = resolve(process.cwd(), ".env");
+import { ENV_FILE } from "./runtime-paths";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 

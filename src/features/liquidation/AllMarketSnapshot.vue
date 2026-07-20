@@ -5,6 +5,9 @@
         <strong>{{ t("snapshot.allMarkets") }}</strong>
         <span>{{ allMarketSnapshotSummary }}</span>
       </div>
+      <span v-if="snapshotError" class="snapshot-stale-status" :title="snapshotError">
+        {{ t("topic.snapshotUnavailable") }}
+      </span>
     </div>
     <div class="snapshot-refresh-progress" aria-hidden="true">
       <span :style="{ width: `${snapshotRefreshProgress}%` }"></span>
@@ -166,9 +169,12 @@ const opportunitiesPanel = ref<HTMLElement | null>(null);
 const opportunitiesPanelHeight = ref("calc(100vh - 206px)");
 const snapshotRefreshing = ref(false);
 const snapshotRefreshProgress = ref(0);
+const snapshotError = ref("");
 
 let snapshotProgressTimer = 0;
 let snapshotProgressStartedAt = 0;
+let snapshotRequestSequence = 0;
+let snapshotController: AbortController | undefined;
 
 const snapshotMarketCount = computed(() => FORCED_SNAPSHOT_MARKET_COUNT);
 const allMarketSnapshotSummary = computed(() =>
@@ -213,41 +219,47 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (snapshotProgressTimer) window.clearInterval(snapshotProgressTimer);
   snapshotProgressTimer = 0;
+  snapshotController?.abort();
   window.removeEventListener("resize", updateOpportunitiesPanelHeight);
 });
 
 async function loadMarketSnapshot(): Promise<void> {
+  const sequence = ++snapshotRequestSequence;
+  snapshotController?.abort();
+  const controller = new AbortController();
+  snapshotController = controller;
+  snapshotRefreshing.value = true;
   try {
     const response = await fetch(`/api/market-snapshot?t=${Date.now()}`, {
       cache: "no-store",
       headers: authHeaders(),
+      signal: controller.signal,
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = (await response.json()) as { queue?: SnapshotQueueRow[]; queuedWallets?: SnapshotQueueRow[]; sources?: SnapshotSourceRow[]; strategies?: SnapshotStrategyRow[] };
+    const payload = (await response.json()) as { ok?: boolean; message?: string; queue?: SnapshotQueueRow[]; queuedWallets?: SnapshotQueueRow[]; sources?: SnapshotSourceRow[]; strategies?: SnapshotStrategyRow[] };
+    if (sequence !== snapshotRequestSequence) return;
+    if (payload.ok === false) throw new Error(payload.message || t("topic.snapshotUnavailable"));
     candidateQueueRows.value = Array.isArray(payload.queue) ? payload.queue.filter(isCandidateAccountRow) : [];
     queuedWalletRows.value = Array.isArray(payload.queuedWallets) ? payload.queuedWallets.filter(isQueuedWalletRow) : [];
     snapshotSourceRows.value = Array.isArray(payload.sources) ? payload.sources : [];
     snapshotStrategyRows.value = Array.isArray(payload.strategies) ? payload.strategies.map(normalizeStrategyRow) : [];
+    snapshotError.value = "";
     emit("strategies-updated", snapshotStrategyRows.value);
-  } catch {
-    candidateQueueRows.value = [];
-    queuedWalletRows.value = [];
-    snapshotSourceRows.value = [];
-    snapshotStrategyRows.value = [];
-    emit("strategies-updated", []);
+  } catch (error) {
+    if (sequence !== snapshotRequestSequence || (error as { name?: string }).name === "AbortError") return;
+    snapshotError.value = error instanceof Error ? error.message : t("topic.snapshotUnavailable");
   } finally {
-    void nextTick(updateOpportunitiesPanelHeight);
+    if (sequence === snapshotRequestSequence) {
+      snapshotRefreshing.value = false;
+      resetSnapshotProgress();
+      if (snapshotController === controller) snapshotController = undefined;
+      void nextTick(updateOpportunitiesPanelHeight);
+    }
   }
 }
 
 async function refreshMarketSnapshot(): Promise<void> {
-  snapshotRefreshing.value = true;
-  try {
-    await loadMarketSnapshot();
-  } finally {
-    snapshotRefreshing.value = false;
-    resetSnapshotProgress();
-  }
+  await loadMarketSnapshot();
 }
 
 defineExpose({
@@ -538,6 +550,12 @@ function formatSnapshotTime(value: string) {
 
 .opportunity-snapshot span {
   font-size: 10px;
+}
+
+.snapshot-stale-status {
+  margin-left: auto;
+  color: #f0a84b;
+  font-size: 11px !important;
 }
 
 .opportunity-table-shell {

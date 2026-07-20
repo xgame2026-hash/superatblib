@@ -14,8 +14,8 @@ import {
   zeroPadValue,
   type TransactionReceipt,
 } from "ethers";
+import { ENV_FILE } from "./runtime-paths";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
 const BSC_CHAIN_ID = 56n;
 const TOKEN_DECIMALS = 18;
 const BPS_DENOMINATOR = 10_000n;

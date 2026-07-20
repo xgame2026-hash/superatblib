@@ -116,6 +116,13 @@
           </el-select>
         </label>
         <label class="settings-field">
+          <span>{{ t("settings.updateMode") }}</span>
+          <el-select v-model="settingsForm.updateMode">
+            <el-option :label="t('settings.auto')" value="automatic" />
+            <el-option :label="t('settings.manual')" value="manual" />
+          </el-select>
+        </label>
+        <label class="settings-field">
           <span>{{ t("settings.dashboardPort") }}</span>
           <el-input
             v-model="settingsForm.dashboardPort"

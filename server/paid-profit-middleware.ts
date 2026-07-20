@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-const DEFAULT_PRIVATE_MEMBER_API_URL = "https://privateapi.superarb.ai";
+const DEFAULT_PAID_PROFIT_URL = "https://private.superarb.ai/api/liq2/paid-profit";
 const DEFAULT_TIMEOUT_MS = 8_000;
 
 type PaidProfitPayload = {
@@ -44,9 +44,12 @@ function requestPathname(url: string | undefined) {
 
 async function fetchPaidProfit() {
   const env = readEnv();
-  const privateMemberBase = (env.LIQ2_PRIVATE_MEMBER_API_URL?.trim() || DEFAULT_PRIVATE_MEMBER_API_URL).replace(/\/+$/, "");
-  const response = await fetch(`${privateMemberBase}/paid-profit`, {
-    headers: { accept: "application/json" },
+  const endpoint = env.LIQ2_PAID_PROFIT_URL?.trim() || DEFAULT_PAID_PROFIT_URL;
+  const url = new URL(endpoint);
+  url.searchParams.set("t", String(Date.now()));
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { accept: "application/json", "cache-control": "no-cache" },
     signal: AbortSignal.timeout(timeoutMs(env)),
   });
   if (!response.ok) throw new Error(`private paid profit request failed (${response.status})`);

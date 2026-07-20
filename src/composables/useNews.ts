@@ -11,23 +11,37 @@ export function useNews() {
   const newsItems = ref<NewsItem[]>([]);
   const newsLoading = ref(false);
   const newsError = ref("");
+  let requestSequence = 0;
+  let requestController: AbortController | undefined;
 
   async function loadNews() {
+    const sequence = ++requestSequence;
+    requestController?.abort();
+    const controller = new AbortController();
+    requestController = controller;
     newsLoading.value = true;
     newsError.value = "";
     try {
       const query = new URLSearchParams({ limit: "50", locale: getLocale() });
-      const response = await fetch(`/api/news?${query}`, { headers: { accept: "application/json" } });
+      const response = await fetch(`/api/news?${query}`, {
+        cache: "no-store",
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
       const payload = (await response.json().catch(() => ({}))) as NewsResponse;
+      if (sequence !== requestSequence) return;
       if (!response.ok || payload.success === false || !Array.isArray(payload.data)) {
         throw new Error(t("news.apiUnavailable"));
       }
       newsItems.value = payload.data.map(normalizeNews).filter(Boolean) as NewsItem[];
     } catch (error) {
+      if (sequence !== requestSequence || (error as { name?: string }).name === "AbortError") return;
       newsError.value = error instanceof Error ? error.message : t("news.apiUnavailable");
-      newsItems.value = [];
     } finally {
-      newsLoading.value = false;
+      if (sequence === requestSequence) {
+        newsLoading.value = false;
+        if (requestController === controller) requestController = undefined;
+      }
     }
   }
 

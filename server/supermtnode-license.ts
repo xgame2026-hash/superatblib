@@ -7,6 +7,10 @@ type LicenseCheckPayload = {
   error?: unknown;
   reason?: unknown;
   message?: unknown;
+  expiresAt?: unknown;
+  expires_at?: unknown;
+  validUntil?: unknown;
+  valid_until?: unknown;
 };
 
 /**
@@ -25,9 +29,20 @@ export async function assertActiveSuperMtNodeLicense(authCode: string): Promise<
     signal: AbortSignal.timeout(8_000),
   });
   const payload = (await response.json().catch(() => ({}))) as LicenseCheckPayload;
-  if (response.ok && payload.ok === true && payload.valid === true && payload.status === "active") return;
+  const expiryValue = stringValue(payload.expiresAt, payload.expires_at, payload.validUntil, payload.valid_until);
+  const expiry = expiryValue ? Date.parse(expiryValue) : Number.NaN;
+  if (
+    response.ok
+    && payload.ok === true
+    && payload.valid === true
+    && payload.status === "active"
+    && Number.isFinite(expiry)
+    && expiry > Date.now()
+  ) return;
 
-  const detail = stringValue(payload.error, payload.reason, payload.message, payload.status) || `HTTP ${response.status}`;
+  const detail = stringValue(payload.error, payload.reason, payload.message)
+    || (!expiryValue ? "授权服务未返回有效期。" : expiry <= Date.now() ? "授权码已过期。" : stringValue(payload.status))
+    || `HTTP ${response.status}`;
   throw new Error(detail);
 }
 

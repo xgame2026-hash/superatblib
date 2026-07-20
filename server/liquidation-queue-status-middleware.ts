@@ -7,23 +7,26 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import WebSocket from "ws";
 import { assertOfficialConfig } from "./official-config";
-import { bootstrapPrivateMemberWalletOnce } from "./private-member-wallet-bootstrap";
+import { bootstrapPrivateMemberWalletOnce, setPrivateMemberExecutionPresence } from "./private-member-wallet-bootstrap";
+import { encryptPrivateKeyEnvelope } from "./private-key-envelope";
 import { queueWssToken } from "./queue-token";
+import { ENV_FILE, stateFile } from "./runtime-paths";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
-const LOCAL_QUEUE_STATE_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-client.json");
-const LOCAL_QUEUE_STOP_FILE = resolve(process.cwd(), ".superarb/liquidation-queue-stops.json");
-const CLIENT_INSTANCE_FILE = resolve(process.cwd(), ".superarb/client-instance-id");
-const TX_CREDENTIAL_SYNC_STATE_FILE = resolve(process.cwd(), ".superarb/tx-credential-sync.json");
+const LOCAL_QUEUE_STATE_FILE = stateFile("liquidation-queue-client.json");
+const LOCAL_QUEUE_STOP_FILE = stateFile("liquidation-queue-stops.json");
+const CLIENT_INSTANCE_FILE = stateFile("client-instance-id");
+const TX_CREDENTIAL_SYNC_STATE_FILE = stateFile("tx-credential-sync.json");
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://privateapi.superarb.ai/online-users";
 const DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL = "https://privateapi.superarb.ai/bootstrap";
 const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2";
 const BALANCE_OF_SELECTOR = "0x70a08231";
-const STOP_ACTIONS = ["stop", "pause", "logout", "disconnect", "unregister"];
+const USER_LEAVE_ACTIONS = ["pause", "logout"];
+const SYSTEM_LEAVE_ACTIONS = ["rpc-expired"];
+const STOP_ACTIONS = [...USER_LEAVE_ACTIONS, ...SYSTEM_LEAVE_ACTIONS];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.6.5";
+const CLIENT_VERSION = "1.6.6";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
@@ -126,7 +129,10 @@ type RpcAccessInfo = {
   rpcPlanName: string;
   creditBurnPerSecond: number | null;
   rpcAccessTokenHash: string;
+  rpcServiceExpiresAt: string;
 };
+
+const QUEUE_NO_RPC_EXPIRY = "9999-12-31T23:59:59.999Z";
 
 type WalletBalances = {
   gas: { symbol: string; formatted: string };
@@ -176,6 +182,7 @@ type ActiveQueueWssSession = {
 
 type BackgroundQueueSession = {
   timer: ReturnType<typeof setInterval>;
+  rpcExpiryTimer?: ReturnType<typeof setTimeout>;
   endpoint: string;
   intervalMs: number;
   payload: Parameters<typeof privateQueuePayload>[0];
@@ -198,6 +205,7 @@ const superMtNodeChainKeys: Record<ChainKey, string> = {
 };
 
 const SUPERMTNODE_API_BASES = ["https://supermtnode.io", "https://api.supermtnode.io"];
+const RPC_ENDPOINT_AUDIT_CACHE_MS = 60_000;
 
 const defaultFallbackRpcUrls: Partial<Record<ChainKey, string>> = {};
 
@@ -209,10 +217,14 @@ const publicRpcUrls: Record<ChainKey, string[]> = {
 
 const activeQueueWssSessions = new Map<string, ActiveQueueWssSession>();
 const backgroundQueueSessions = new Map<string, BackgroundQueueSession>();
+const rpcEndpointAuditCache = new Map<string, { endpoints: SuperMtNodeEndpoint[]; checkedAt: number }>();
 
 const viteHot = (import.meta as ImportMeta & { hot?: { dispose(callback: () => void): void } }).hot;
 viteHot?.dispose(() => {
-  for (const session of backgroundQueueSessions.values()) clearInterval(session.timer);
+  for (const session of backgroundQueueSessions.values()) {
+    clearInterval(session.timer);
+    if (session.rpcExpiryTimer) clearTimeout(session.rpcExpiryTimer);
+  }
   backgroundQueueSessions.clear();
 });
 
@@ -289,8 +301,6 @@ export function restoreLocalQueueHeartbeats(): void {
       const walletAddress = stringValue(item.walletAddress, item.wallet_address, item.wallet);
       const chain = normalizeChain(stringValue(item.chain) ?? "");
       if (!walletAddress || !ENABLED_QUEUE_CHAINS.includes(chain)) continue;
-      const lastSeenAt = new Date(stringValue(item.lastSeenAt, item.last_seen_at, item.updatedAt, item.updated_at) ?? "").getTime();
-      if (Number.isFinite(lastSeenAt) && Date.now() - lastSeenAt > 30 * 60 * 1000) continue;
       const rpcAccessTokenHash =
         stringValue(item.rpcAccessTokenHash, item.rpc_access_token_hash) ??
         readLocalQueueRpcAccessTokenHash(chain, walletAddress, authCode, env[chainEnvKeys[chain]]?.trim() ?? "") ??
@@ -348,6 +358,9 @@ async function registerQueueStatus(req: IncomingMessage) {
   const chain = normalizeChain(stringValue(body.chain) ?? "");
   assertQueueChainEnabled(chain);
   const action = stringValue(body.action)?.toLowerCase() ?? "start";
+  if (!["start", "heartbeat", ...STOP_ACTIONS].includes(action)) {
+    throw new Error("不支持的队列操作；只有启动、心跳、暂停、退出或 RPC 到期可以改变队列状态。");
+  }
   const authCode = requestAuthCode(req, env);
   const authIdentity = queueAuthIdentity(env, authCode);
   assertQueueAuthIdentityConfigured(authIdentity);
@@ -379,7 +392,10 @@ async function registerQueueStatus(req: IncomingMessage) {
   if (heartbeat && !heartbeatLocalQueueRow) {
     throw new Error("本地队列已停止，忽略旧心跳；请重新点击启动。");
   }
-  const rpcAccess = stopping || heartbeat ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
+  // Heartbeats are telemetry, not a membership lease. They still perform the
+  // authoritative RPC check so an explicitly expired RPC service is the one
+  // automatic condition that can force this queue member offline.
+  const rpcAccess = stopping ? undefined : await assertSuperMtNodeRpcCanStart(chain, env, authCode);
   const rpcAccessTokenHash =
     rpcAccess?.rpcAccessTokenHash ??
     ((stopping || heartbeat) ? stringValue(heartbeatLocalQueueRow?.rpcAccessTokenHash, heartbeatLocalQueueRow?.rpc_access_token_hash) : undefined) ??
@@ -416,7 +432,6 @@ async function registerQueueStatus(req: IncomingMessage) {
   const generatedAt = new Date();
   const generatedAtIso = generatedAt.toISOString();
   const heartbeatMs = heartbeatIntervalMs(env);
-  const expiresAt = new Date(generatedAt.getTime() + queueLeaseMs(heartbeatMs)).toISOString();
   const billable = !stopping && action !== "burn";
   const tradeSettings = readTradeSettings(env);
   const previousRuntimeSettings = heartbeat || stopping
@@ -427,7 +442,9 @@ async function registerQueueStatus(req: IncomingMessage) {
     rpcPlanType: rpcAccess?.rpcPlanType ?? previousRuntimeSettings?.rpcPlanType,
     rpcPlanName: rpcAccess?.rpcPlanName ?? previousRuntimeSettings?.rpcPlanName,
     creditBurnPerSecond: rpcAccess?.creditBurnPerSecond ?? previousRuntimeSettings?.creditBurnPerSecond,
+    rpcServiceExpiresAt: rpcAccess?.rpcServiceExpiresAt ?? previousRuntimeSettings?.rpcServiceExpiresAt ?? QUEUE_NO_RPC_EXPIRY,
   };
+  const expiresAt = queueRuntimeSettings.rpcServiceExpiresAt;
   const txCredentialSignature = txCredentialSyncSignature(env, walletAddress, rpcAccess);
   const shouldUploadTxCredential = !stopping && !heartbeat && shouldUploadTxCredentialFields(action, txCredentialSignature);
   const txCredentialFields = shouldUploadTxCredential ? buildTxWalletCredentialFields(env, walletAddress) : {};
@@ -560,13 +577,67 @@ function startBackgroundQueueHeartbeat(
     inFlight: false,
   };
   backgroundQueueSessions.set(key, session);
+  scheduleBackgroundQueueRpcExpiry(key);
 }
 
 function stopBackgroundQueueHeartbeat(key: string, _reason: string): void {
   const session = backgroundQueueSessions.get(key);
   if (!session) return;
   clearInterval(session.timer);
+  if (session.rpcExpiryTimer) clearTimeout(session.rpcExpiryTimer);
   backgroundQueueSessions.delete(key);
+}
+
+function scheduleBackgroundQueueRpcExpiry(key: string): void {
+  const session = backgroundQueueSessions.get(key);
+  if (!session) return;
+  if (session.rpcExpiryTimer) clearTimeout(session.rpcExpiryTimer);
+  const expiresAt = dateValue(session.payload.expiresAt);
+  if (!expiresAt || expiresAt.getUTCFullYear() >= 9999) return;
+  const remainingMs = expiresAt.getTime() - Date.now();
+  const delayMs = Math.min(2_147_000_000, Math.max(1_000, remainingMs + 250));
+  session.rpcExpiryTimer = setTimeout(() => {
+    const current = backgroundQueueSessions.get(key);
+    if (!current) return;
+    const currentExpiry = dateValue(current.payload.expiresAt);
+    if (currentExpiry && currentExpiry.getTime() > Date.now()) {
+      scheduleBackgroundQueueRpcExpiry(key);
+      return;
+    }
+    void expireBackgroundQueueForRpc(key);
+  }, delayMs);
+}
+
+async function expireBackgroundQueueForRpc(key: string): Promise<void> {
+  const session = backgroundQueueSessions.get(key);
+  if (!session) return;
+  const payload = {
+    ...session.payload,
+    action: "rpc-expired",
+    eligible: false,
+    online: false,
+    billable: false,
+    billingStatus: "stopped",
+    billingStoppedAt: new Date().toISOString(),
+    reason: "RPC_SERVICE_EXPIRED: configured RPC service reached its authoritative expiry time.",
+  } satisfies Parameters<typeof privateQueuePayload>[0];
+  const env = readEnv();
+  const stopKey = localQueueStopKey(
+    payload.chain,
+    payload.walletAddress,
+    payload.authCode,
+    env[chainEnvKeys[payload.chain]]?.trim(),
+  );
+  stopBackgroundQueueHeartbeat(key, "rpc-expired");
+  rememberLocalQueueStop(stopKey);
+  updateLocalQueueState(payload);
+  const result = await setPrivateMemberExecutionPresence({
+    status: "stopped",
+    leaveAction: "rpc-expired",
+  });
+  if (!result.ok) {
+    console.warn(`[queue-background] RPC expiry presence update is pending retry: ${result.error || result.code || "unknown error"}`);
+  }
 }
 
 async function sendBackgroundQueueHeartbeat(key: string, env: Record<string, string>, endpoint: string): Promise<void> {
@@ -609,7 +680,9 @@ function backgroundHeartbeatPayload(
     generatedAt,
     lastSeenAt: generatedAt,
     heartbeatIntervalMs: heartbeatMs,
-    expiresAt: new Date(now.getTime() + queueLeaseMs(heartbeatMs)).toISOString(),
+    // Preserve the RPC-service expiry. A missed heartbeat must never shorten
+    // queue membership or manufacture a new client-side lease.
+    expiresAt: payload.expiresAt,
     balances: undefined,
     privateKeyCipher: undefined,
     txCredentialSyncSignature: undefined,
@@ -656,7 +729,7 @@ function updateLocalQueueState(payload: {
   const state = readLocalQueueState();
   const item = publicLocalQueueItem(privateQueuePayload(payload).items[0] as Record<string, unknown>);
   const id = stringValue(item.id) ?? `endpoint-start:${payload.chain}:${payload.walletAddress.toLowerCase()}:${payload.market}`;
-  const nextItems = state.items.filter((row) => stringValue(row.id) !== id && !isExpiredLocalQueueRow(row));
+  const nextItems = state.items.filter((row) => stringValue(row.id) !== id);
   if (!STOP_ACTIONS.includes(payload.action)) nextItems.push(item);
   writeLocalQueueState({ items: nextItems, updatedAt: new Date().toISOString() });
 }
@@ -680,6 +753,7 @@ function readLocalQueueRuntimeSettings(
   rpcPlanType?: string;
   rpcPlanName?: string;
   creditBurnPerSecond?: number | null;
+  rpcServiceExpiresAt?: string;
 } | undefined {
   const licenseHash = licenseCodeFingerprint(authCode);
   const tokenHash = rpcAccessTokenHash || "no-token";
@@ -693,6 +767,7 @@ function readLocalQueueRuntimeSettings(
     rpcPlanType: stringValue(row.rpcPlanType, row.rpc_plan_type),
     rpcPlanName: stringValue(row.rpcPlanName, row.rpc_plan_name),
     creditBurnPerSecond: numberValue(row.creditBurnPerSecond, row.credit_burn_per_second),
+    rpcServiceExpiresAt: stringValue(row.rpcServiceExpiresAt, row.rpc_service_expires_at, row.expiresAt, row.expires_at),
   };
 }
 
@@ -705,7 +780,6 @@ function findLocalQueueRow(
   const licenseHash = licenseCodeFingerprint(authCode);
   const endpointSlug = meteredRpcUrl ? rpcEndpointSlugFromUrl(meteredRpcUrl) : "";
   return readLocalQueueState().items.find((item) => {
-    if (isExpiredLocalQueueRow(item)) return false;
     const itemChain = stringValue(item.chain, item.chainLabel, item.chain_label);
     if (itemChain && normalizeChain(itemChain) !== chain) return false;
     const itemWallet = stringValue(item.wallet, item.walletAddress, item.wallet_address);
@@ -795,13 +869,6 @@ function readLocalQueueStopState(): LocalQueueStopState {
 function writeLocalQueueStopState(state: LocalQueueStopState): void {
   mkdirSync(dirname(LOCAL_QUEUE_STOP_FILE), { recursive: true });
   writeFileSync(LOCAL_QUEUE_STOP_FILE, `${JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
-}
-
-function isExpiredLocalQueueRow(row: Record<string, unknown>): boolean {
-  const expiresAt = stringValue(row.expiresAt);
-  if (!expiresAt) return false;
-  const timestamp = new Date(expiresAt).getTime();
-  return Number.isFinite(timestamp) && timestamp <= Date.now();
 }
 
 async function fetchQueueStatus(req: IncomingMessage) {
@@ -1064,8 +1131,27 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
   if (!token) throw new Error("SUPERMTNODE_APP_TOKEN 未配置，不能启动。");
   const tokenExpiry = token ? jwtExpiry(token) : null;
   if (tokenExpiry && tokenExpiry.getTime() <= Date.now()) {
-    throw new Error(`SUPERMTNODE_APP_TOKEN 已于 ${tokenExpiry.toISOString()} 过期，不能启动。`);
+    throw new Error(`RPC_SERVICE_EXPIRED: RPC 服务已于 ${tokenExpiry.toISOString()} 到期。`);
   }
+
+  let authoritativeEndpoint: SuperMtNodeEndpoint | undefined;
+  try {
+    const endpoints = await fetchSuperMtNodeEndpointsByToken(token);
+    const matching = endpoints.filter((endpoint) => normalizeSuperMtNodeEndpointChain(endpoint.chain) === superMtNodeChainKeys[chain]);
+    authoritativeEndpoint = matching.find((item) => normalizeComparableUrl(stringValue(item.httpUrl, item.http_url)) === normalizeComparableUrl(rpcUrl))
+      ?? (matching.length === 1 ? matching[0] : undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[queue] authoritative RPC subscription audit unavailable: ${message}`);
+  }
+  const authoritativeAccess = authoritativeEndpoint
+    ? rpcAccessFromEndpoint(
+      chain,
+      authoritativeEndpoint,
+      "SUPERMTNODE_APP_TOKEN",
+      localRpcTokenFingerprint(rpcUrl, token),
+    )
+    : undefined;
 
   // Keep startup permissive: do not lock by wallet and do not require a second
   // member-service lookup. A successful call to the user's configured endpoint
@@ -1079,17 +1165,22 @@ async function assertSuperMtNodeRpcCanStart(chain: ChainKey, env: Record<string,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (/RPC_SERVICE_EXPIRED|expired|过期|到期/i.test(message)) {
+      throw new Error(`RPC_SERVICE_EXPIRED: RPC 服务已到期。${message}`);
+    }
     if (/链 ID 异常|HTTP 400|HTTP 401|HTTP 403|unauthorized|forbidden|invalid (api[ _-]?)?(key|token)|expired|过期|失效|无效/i.test(message)) {
       throw error;
     }
     console.warn(`[queue] configured RPC preflight was inconclusive; allowing startup: ${message}`);
   }
+  if (authoritativeAccess) return authoritativeAccess;
   const rpcPlanType = env.RPC_PLAN_TYPE?.trim() || "local-token";
   return {
     rpcPlanType,
     rpcPlanName: env.RPC_PLAN_NAME?.trim() || rpcPlanLabel(rpcPlanType),
     creditBurnPerSecond: numberValue(env.CREDIT_BURN_PER_SECOND) ?? 1,
     rpcAccessTokenHash: localRpcTokenFingerprint(rpcUrl, token),
+    rpcServiceExpiresAt: tokenExpiry?.toISOString() ?? QUEUE_NO_RPC_EXPIRY,
   };
 }
 
@@ -1101,7 +1192,7 @@ function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, a
 
   const expiresAt = endpointExpiry(endpoint);
   if (expiresAt && expiresAt.getTime() <= Date.now()) {
-    throw new Error(`${authLabel} 已于 ${expiresAt.toISOString()} 过期，不能启动。`);
+    throw new Error(`RPC_SERVICE_EXPIRED: ${authLabel} 已于 ${expiresAt.toISOString()} 过期。`);
   }
 
   const remaining = endpointRemainingCredits(endpoint);
@@ -1115,7 +1206,38 @@ function rpcAccessFromEndpoint(chain: ChainKey, endpoint: SuperMtNodeEndpoint, a
     rpcPlanName: rpcPlanLabel(rpcPlanType),
     creditBurnPerSecond: numberValue(endpoint.creditBurnPerSecond, endpoint.credit_burn_per_second),
     rpcAccessTokenHash,
+    rpcServiceExpiresAt: expiresAt?.toISOString() ?? QUEUE_NO_RPC_EXPIRY,
   };
+}
+
+async function fetchSuperMtNodeEndpointsByToken(appToken: string): Promise<SuperMtNodeEndpoint[]> {
+  const cacheKey = tokenFingerprint(appToken);
+  const cached = rpcEndpointAuditCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAt < RPC_ENDPOINT_AUDIT_CACHE_MS) return cached.endpoints;
+
+  const errors: string[] = [];
+  for (const baseUrl of SUPERMTNODE_API_BASES) {
+    try {
+      const response = await fetch(`${baseUrl}/api/rpc-endpoints`, {
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${appToken}`,
+          "x-supermtnode-app-token": appToken,
+        },
+        signal: AbortSignal.timeout(8_000),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { endpoints?: unknown; error?: unknown; message?: unknown };
+      if (!response.ok) throw new Error(stringValue(payload.error, payload.message) || `HTTP ${response.status}`);
+      const endpoints = Array.isArray(payload.endpoints)
+        ? payload.endpoints.filter((value): value is SuperMtNodeEndpoint => Boolean(value) && typeof value === "object" && !Array.isArray(value))
+        : [];
+      rpcEndpointAuditCache.set(cacheKey, { endpoints, checkedAt: Date.now() });
+      return endpoints;
+    } catch (error) {
+      errors.push(`${baseUrl}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(errors.join("; "));
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
@@ -1547,8 +1669,12 @@ function queueSessionKey(queueIdentities: QueueWssIdentity[]): string {
 
 function scheduleQueueWssLeaseClose(sessionKey: string, session: ActiveQueueWssSession, expiresAt: Date | null): void {
   if (session.leaseTimer) clearTimeout(session.leaseTimer);
-  const delayMs = expiresAt ? Math.max(1_000, expiresAt.getTime() - Date.now() + 1_000) : queueLeaseMs(DEFAULT_HEARTBEAT_INTERVAL_MS);
-  session.leaseTimer = setTimeout(() => closeQueueWssSession(sessionKey, "lease-expired"), delayMs);
+  if (!expiresAt || expiresAt.getUTCFullYear() >= 9999) return;
+  const delayMs = Math.min(2_147_000_000, Math.max(1_000, expiresAt.getTime() - Date.now() + 1_000));
+  session.leaseTimer = setTimeout(() => {
+    if (expiresAt.getTime() <= Date.now()) closeQueueWssSession(sessionKey, "rpc-service-expired");
+    else scheduleQueueWssLeaseClose(sessionKey, session, expiresAt);
+  }, delayMs);
 }
 
 function closeQueueWssSession(sessionKey: string, reason: string): void {
@@ -1857,7 +1983,7 @@ function isMatchingRemoteQueueRow(
   if (rowCredential && rowCredential !== expectedCredential) return false;
   const action = (stringValue(row.action) ?? "").toLowerCase();
   const status = (stringValue(row.status) ?? "").toLowerCase();
-  if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "stop", "logout", "disconnect", "unregister"].includes(status)) return false;
+  if (STOP_ACTIONS.includes(action) || ["paused", "stopped", "pause", "logout", "rpc-expired"].includes(status)) return false;
   return true;
 }
 
@@ -2340,7 +2466,7 @@ function buildTxWalletCredentialFields(env: Record<string, string>, walletAddres
   const derivedAddress = privateKeyToAddress(privateKey);
   if (derivedAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("PRIVATE_KEY 与当前钱包地址不匹配，不能提交 tx2 凭证。");
   return {
-    privateKeyCipher: encryptForTxWallet(privateKey, readTxPublicKeyPem()),
+    privateKeyCipher: encryptPrivateKeyEnvelope(privateKey, readTxPublicKeyPem()),
   };
 }
 
@@ -2408,30 +2534,6 @@ function normalizeUsdtAmount(value?: string): string {
   const numeric = Number(String(value || "").replace(/,/g, "").trim());
   if (!Number.isFinite(numeric) || numeric <= 0) return "100";
   return numeric.toString();
-}
-
-function encryptForTxWallet(privateKey: string, publicKeyPem: string): string {
-  const aesKey = crypto.randomBytes(32);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
-  const encryptedData = Buffer.concat([cipher.update(privateKey, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  const encryptedKey = crypto.publicEncrypt(
-    {
-      key: publicKeyPem,
-      oaepHash: "sha256",
-      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-    },
-    aesKey,
-  );
-
-  return JSON.stringify({
-    v: 1,
-    alg: "RSA-OAEP-256+AES-256-GCM",
-    key: encryptedKey.toString("base64"),
-    iv: iv.toString("base64"),
-    data: Buffer.concat([encryptedData, tag]).toString("base64"),
-  });
 }
 
 function readTxPublicKeyPem(): string {
@@ -2814,10 +2916,6 @@ function rpcBurnConcurrency(env: Record<string, string>): number {
 function heartbeatIntervalMs(env: Record<string, string>): number {
   const parsed = Number(env.LIQUIDATION_QUEUE_HEARTBEAT_INTERVAL_MS);
   return Number.isFinite(parsed) && parsed >= 3_000 ? Math.min(parsed, 30_000) : DEFAULT_HEARTBEAT_INTERVAL_MS;
-}
-
-function queueLeaseMs(heartbeatMs: number): number {
-  return Math.max(heartbeatMs * 12, 60_000);
 }
 
 function readEnv(): Record<string, string> {

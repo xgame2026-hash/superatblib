@@ -6,8 +6,10 @@ const DEFAULT_DASHBOARD_PORT = 4311;
 const RUNTIME_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 const cwd = process.cwd();
-const envPath = resolve(cwd, ".env");
-const runtimePath = resolve(cwd, ".superarb/dashboard-runtime.json");
+const profile = normalizeProfile(process.env.LIQ2_PROFILE);
+const envPath = resolve(cwd, process.env.LIQ2_ENV_FILE || (profile ? `.env.${profile}` : ".env"));
+const stateDirectory = resolve(cwd, process.env.LIQ2_STATE_DIR || (profile ? `.superarb/${profile}` : ".superarb"));
+const runtimePath = resolve(stateDirectory, "dashboard-runtime.json");
 const env = existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf8")) : {};
 const runtime = readRuntimeUrl(runtimePath);
 const configuredPort = normalizePort(process.env.DASHBOARD_PORT || env.DASHBOARD_PORT, DEFAULT_DASHBOARD_PORT);
@@ -31,6 +33,15 @@ function parseEnv(source) {
     env[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
   }
   return env;
+}
+
+function normalizeProfile(value) {
+  const profile = String(value ?? "").trim();
+  if (!profile) return "";
+  if (!/^[a-zA-Z0-9_-]{1,32}$/.test(profile)) {
+    throw new Error("LIQ2_PROFILE must contain only letters, numbers, underscores, or hyphens (max 32 characters)");
+  }
+  return profile;
 }
 
 function normalizePort(value, fallback) {

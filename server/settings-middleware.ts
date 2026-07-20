@@ -1,18 +1,18 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { checkOfficialConfig, checkRuntimeSettings } from "./official-config";
 import { assertActiveSuperMtNodeLicense } from "./supermtnode-license";
+import { hardenPrivateFilePermissions, writePrivateTextFile } from "./local-secure-storage";
+import { ENV_FILE } from "./runtime-paths";
 import {
   bootstrapPrivateMemberWalletOnce,
   privateMemberWalletBootstrapStatus,
   setPrivateMemberExecutionPresence,
-  startPrivateMemberWalletHeartbeat,
-  stopPrivateMemberWalletHeartbeat,
 } from "./private-member-wallet-bootstrap";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
 const ENV_EXAMPLE_FILE = resolve(process.cwd(), ".env.example");
+hardenPrivateFilePermissions(ENV_FILE);
 const DEFAULT_SNAPSHOT_API_URL = "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot";
 const LEGACY_SNAPSHOT_API_URLS = [
   "https://api.supermtnode.io/api/public/liquidations/snapshot",
@@ -24,6 +24,7 @@ type SettingsPayload = {
   code?: unknown;
   token?: unknown;
   status?: unknown;
+  leaveAction?: unknown;
   chain?: unknown;
   market?: unknown;
 };
@@ -65,33 +66,18 @@ const LICENSE_ENDPOINT_ENV_KEYS: Record<string, string> = {
 
 export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (!req.url?.startsWith("/api/settings")) return false;
+  if (!isSameOriginLocalRequest(req)) {
+    json(res, 403, { ok: false, code: "CROSS_ORIGIN_FORBIDDEN", error: "Settings API only accepts same-origin controller requests." });
+    return true;
+  }
   applyLocalCors(req, res);
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("X-Content-Type-Options", "nosniff");
 
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.end();
-    return true;
-  }
-
-  if (req.url.startsWith("/api/settings/presence/start")) {
-    if (req.method !== "POST") {
-      json(res, 405, { ok: false, error: "Method not allowed." });
-      return true;
-    }
-    startPrivateMemberWalletHeartbeat()
-      .then((payload) => json(res, payload.ok ? 200 : 503, payload))
-      .catch((error: unknown) => json(res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (req.url.startsWith("/api/settings/presence/stop")) {
-    if (req.method !== "POST") {
-      json(res, 405, { ok: false, error: "Method not allowed." });
-      return true;
-    }
-    stopPrivateMemberWalletHeartbeat()
-      .then((payload) => json(res, payload.ok ? 200 : 503, payload))
-      .catch((error: unknown) => json(res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) }));
     return true;
   }
 
@@ -105,12 +91,22 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
     readBody(req)
       .then(async (body) => {
         const payload = JSON.parse(body || "{}") as SettingsPayload;
-        const status = payload.status === "running" ? "running" : "stopped";
+        if (payload.status !== "running" && payload.status !== "stopped") {
+          json(res, 400, { ok: false, code: "INVALID_PRESENCE_STATUS", error: "Presence status must be running or stopped." });
+          return;
+        }
+        const status = payload.status;
+        const leaveAction = typeof payload.leaveAction === "string" ? payload.leaveAction : "";
+        if (status === "stopped" && !["pause", "logout", "rpc-expired"].includes(leaveAction)) {
+          json(res, 403, { ok: false, code: "LEAVE_ACTION_FORBIDDEN", error: "Only Pause, Exit, or authoritative RPC expiry may stop execution presence." });
+          return;
+        }
         const env = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
         const result = await setPrivateMemberExecutionPresence({
           status,
           chain: typeof payload.chain === "string" ? payload.chain : undefined,
           market: typeof payload.market === "string" ? payload.market : undefined,
+          leaveAction: status === "stopped" ? leaveAction as "pause" | "logout" | "rpc-expired" : undefined,
         });
         json(res, result.ok ? 200 : 503, result);
       })
@@ -199,7 +195,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
     const exampleText = existsSync(ENV_EXAMPLE_FILE) ? readFileSync(ENV_EXAMPLE_FILE, "utf8") : "";
     json(res, 200, {
       ok: true,
-      file: ".env",
+      file: basename(ENV_FILE),
       path: ENV_FILE,
       template: ".env.example",
       templatePath: ENV_EXAMPLE_FILE,
@@ -222,11 +218,34 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         let normalizedEnv = migrateLegacySnapshotEndpoint(normalizeEnv(payload.env));
         normalizedEnv = preserveUnsubmittedEnvValues(normalizedEnv, submittedEnv);
         normalizedEnv = await enrichEnvWithSuperMtNodePlan(normalizedEnv);
-        writeFileSync(ENV_FILE, normalizedEnv, "utf8");
+        writePrivateTextFile(ENV_FILE, normalizedEnv);
+        const savedEnv = parseEnv(normalizedEnv);
+        const authCode = requestAuthCode(req, savedEnv);
+        const criticalSettingsComplete = Boolean(
+          savedEnv.PRIVATE_KEY?.trim()
+          && savedEnv.BNB_RPC_URL?.trim()
+          && savedEnv.SUPERMTNODE_APP_TOKEN?.trim(),
+        );
+        const remoteSync = criticalSettingsComplete
+          ? await bootstrapPrivateMemberWalletOnce("settings-save", { authCode })
+          : { ok: false, skipped: true, reason: "critical_settings_incomplete" };
+        const message = remoteSync.ok
+          ? "设置已保存，加密钱包资料已同步。"
+          : criticalSettingsComplete
+            ? `设置已保存；加密资料同步待重试：${remoteSync.error || remoteSync.reason || "remote unavailable"}`
+            : "设置已保存；补全私钥、BNB RPC 和 App Token 后可同步加密钱包资料。";
         json(res, 200, {
           ok: true,
-          file: ".env",
+          file: basename(ENV_FILE),
           path: ENV_FILE,
+          message,
+          remoteSync: {
+            ok: remoteSync.ok,
+            skipped: remoteSync.skipped,
+            reason: remoteSync.reason,
+            error: remoteSync.error,
+            walletAddress: remoteSync.walletAddress,
+          },
         });
       })
       .catch((error: unknown) => {
@@ -448,7 +467,7 @@ function applyLicenseEndpointsToEnv(endpoints: SuperMtNodeEndpoint[]): Record<st
     applied.CREDIT_BURN_PER_SECOND = plan.creditBurnPerSecond;
   }
   if (Object.keys(applied).length) {
-    writeFileSync(ENV_FILE, serializeEnv(env), "utf8");
+    writePrivateTextFile(ENV_FILE, serializeEnv(env));
   }
   return applied;
 }
@@ -488,7 +507,7 @@ function writeAuthCodeToEnv(authCode: string): void {
   if (!normalized) return;
   const source = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, "utf8") : existsSync(ENV_EXAMPLE_FILE) ? readFileSync(ENV_EXAMPLE_FILE, "utf8") : "";
   const next = upsertEnvValue(source, "AUTH_CODE", normalized);
-  writeFileSync(ENV_FILE, normalizeEnv(next), "utf8");
+  writePrivateTextFile(ENV_FILE, normalizeEnv(next));
 }
 
 function upsertEnvValue(source: string, key: string, value: string): string {
@@ -553,7 +572,7 @@ function json(res: ServerResponse, statusCode: number, payload: unknown): void {
 
 function applyLocalCors(req: IncomingMessage, res: ServerResponse): void {
   const origin = headerValue(req.headers.origin);
-  if (origin && /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(origin)) {
+  if (origin && isSameOriginLocalRequest(req)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   }
@@ -562,4 +581,19 @@ function applyLocalCors(req: IncomingMessage, res: ServerResponse): void {
     "Access-Control-Allow-Headers",
     "Content-Type,Authorization,X-SuperMtNode-Auth-Code,X-SuperMtNode-App-Token",
   );
+}
+
+function isSameOriginLocalRequest(req: IncomingMessage): boolean {
+  const origin = headerValue(req.headers.origin);
+  if (!origin) return true;
+  const host = headerValue(req.headers.host)?.toLowerCase();
+  if (!host) return false;
+  try {
+    const parsed = new URL(origin);
+    return ["http:", "https:"].includes(parsed.protocol)
+      && ["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname.toLowerCase())
+      && parsed.host.toLowerCase() === host;
+  } catch {
+    return false;
+  }
 }

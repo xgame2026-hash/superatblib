@@ -190,6 +190,14 @@
           <SwapView />
         </template>
 
+        <template v-else-if="activeView === 'polymarket'">
+          <PolymarketView />
+        </template>
+
+        <template v-else-if="activeView === 'crossExchange'">
+          <CrossExchangeArbitrageView />
+        </template>
+
         <template v-else-if="activeView === 'slots'">
           <SlotsView :configured="privateDataReady" />
         </template>
@@ -229,7 +237,11 @@
         <span>{{ t("app.local") }}: http://127.0.0.1:{{ runningDashboardPort }}</span>
       </footer>
 
-      <AlertSoundMonitor v-if="privateDataReady" :alert-sounds="settingsForm.alertSounds" />
+      <AlertSoundMonitor
+        v-if="privateDataReady"
+        :alert-sounds="settingsForm.alertSounds"
+        :sound-enabled="launchSoundEnabled"
+      />
     </section>
 
     <el-dialog
@@ -322,15 +334,25 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, r
 import { ElMessage } from "element-plus";
 import { Hide, Key, View } from "@element-plus/icons-vue";
 import { useNews } from "./composables/useNews";
-import { ALERT_SOUND_IDS, normalizeAlertSoundId, playAlertSound, setAlertSoundsEnabled, type AlertSoundKey } from "./audio/alert-sounds";
 import {
-  commitsMatch,
-  compareVersionLabels,
+  ALERT_SOUND_IDS,
+  confirmAlertSoundPlayback,
+  normalizeAlertSoundId,
+  playAlertSound,
+  setAlertSoundsEnabled,
+  type AlertSoundKey,
+} from "./audio/alert-sounds";
+import {
   isBuildCurrentOrNewer,
   normalizeCommit,
   normalizeVersionLabel,
 } from "./github-version";
 import { currentLocale, getLocale, localeOptions, normalizeLocale, setLocale, t } from "./i18n";
+import {
+  auditAuthorizationCode,
+  CREDENTIAL_AUDIT_INTERVAL_MS,
+  type CredentialAuditResult,
+} from "../server/credential-audit";
 import DashboardView from "./features/dashboard/DashboardView.vue";
 import LatestLiquidationsView from "./features/latest-liquidations/LatestLiquidationsView.vue";
 import LiquidationView from "./features/liquidation/LiquidationView.vue";
@@ -361,6 +383,8 @@ import queryIconUrl from "./img/sarchhash.svg";
 import saveIconUrl from "./img/save.svg";
 import arrowIconUrl from "./img/arrow.svg";
 import swapIconUrl from "./img/swap-line.svg";
+import polymarketIconUrl from "./img/polymarket.svg";
+import crossExchangeIconUrl from "./img/crosswap.svg";
 import footerLogoUrl from "./img/SuperARB_logo.png";
 import githubIconUrl from "./img/github.svg";
 import homeIconUrl from "./img/home.svg";
@@ -372,7 +396,9 @@ type AuthMessageType = "success" | "warning" | "info" | "error";
 type SettingsSaveState = "saving" | "done" | "error";
 type GithubVersionState = "checking" | "latest" | "update" | "unconfigured" | "error";
 type GithubUpdateTarget = { version: string; commit: string };
-type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "swap" | "slots" | "settings";
+type PendingUpdateCompletion = { receiptId: string; played: boolean };
+type AutomaticUpdateStatus = { status?: string; message?: string; workerPid?: number };
+type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "swap" | "polymarket" | "crossExchange" | "slots" | "settings";
 type SettingsSectionKey = "general" | "profile" | "credentials" | "rpc" | "feeds" | "alerts";
 type RpcKey = "ethereum" | "bnb" | "arbitrum" | "base" | "polygon";
 type FeedKey =
@@ -389,21 +415,24 @@ type QueueKey =
 const AUTH_STORAGE_KEY = "superarb-auth-session-v1.6.5";
 const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
 const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
-// Fixed by protocol: authorization-code verification must use this endpoint.
-const LICENSE_CHECK_URL = "https://api.supermtnode.io/license/check";
 const ACTIVE_VIEW_KEY = "liq2-active-view";
 const SETTINGS_SECTION_KEY = "liq2-settings-section";
 const LAUNCH_SOUND_KEY = "liq2-launch-sound-enabled";
-const GITHUB_UPDATE_PENDING_KEY = "liq2-github-update-pending";
-const GITHUB_UPDATE_ANNOUNCED_KEY = "liq2-github-update-announced";
+// v2 records only playback that the browser confirmed; v1 could be written
+// even when autoplay was blocked, so it is intentionally not reused.
+const GITHUB_UPDATE_ANNOUNCED_KEY = "liq2-github-update-announced-v2";
+const AUTOMATIC_UPDATE_ATTEMPTED_KEY = "liq2-automatic-update-attempted-v1";
 const GITHUB_VERSION_REFRESH_MS = 5 * 60 * 1000;
+const AUTOMATIC_UPDATE_POLL_MS = 2_000;
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.6.5";
+const appVersion = "1.6.6";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
 const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
-const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "swap", "slots", "settings"] satisfies ViewKey[];
+const PolymarketView = defineAsyncComponent(() => import("./features/polymarket/PolymarketView.vue"));
+const CrossExchangeArbitrageView = defineAsyncComponent(() => import("./features/cross-exchange/CrossExchangeArbitrageView.vue"));
+const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "swap", "polymarket", "crossExchange", "slots", "settings"] satisfies ViewKey[];
 const settingsSectionKeys = ["general", "profile", "credentials", "rpc", "feeds", "alerts"] satisfies SettingsSectionKey[];
 const authCode = ref("");
 const showAuthCode = ref(false);
@@ -445,6 +474,8 @@ const navItems = computed(() => [
   { key: "news" as const, label: t("nav.news"), iconUrl: infoIconUrl },
   { key: "txgraph" as const, label: t("nav.txgraph"), iconUrl: queryIconUrl },
   { key: "swap" as const, label: t("nav.swap"), iconUrl: swapIconUrl },
+  { key: "polymarket" as const, label: t("nav.polymarket"), iconUrl: polymarketIconUrl },
+  { key: "crossExchange" as const, label: t("nav.crossExchange"), iconUrl: crossExchangeIconUrl },
   { key: "slots" as const, label: t("nav.slots"), iconUrl: compontIconUrl },
   { key: "settings" as const, label: t("nav.settings"), iconUrl: setupIconUrl },
 ]);
@@ -505,6 +536,7 @@ const settingsForm = reactive({
   credentialAuthMode: "single",
   singleTradeAuthAmountUsdt: "100",
   startupDetectionMode: "manual",
+  updateMode: "automatic",
   wssCorrectionMode: "enabled",
   dashboardPort: "4311",
   launchSoundMode: readStoredValue(LAUNCH_SOUND_KEY, ["enabled", "disabled"], "enabled"),
@@ -550,6 +582,8 @@ const pageEyebrow = computed(() => {
   if (activeView.value === "news") return t("hero.news");
   if (activeView.value === "txgraph") return t("hero.txgraph");
   if (activeView.value === "swap") return t("hero.swap");
+  if (activeView.value === "polymarket") return t("hero.polymarket");
+  if (activeView.value === "crossExchange") return t("hero.crossExchange");
   if (activeView.value === "slots") return t("hero.slots");
   if (activeView.value === "execution") return t("hero.execution");
   if (activeView.value === "analytics") return t("hero.analytics");
@@ -617,20 +651,37 @@ const metrics = ref([
 
 let notLaunchedReminderTimer = 0;
 let githubVersionRefreshTimer = 0;
+let pendingUpgradeAnnouncementTarget = "";
+let upgradeAnnouncementInFlight = false;
+let pendingUpdateCompletion: PendingUpdateCompletion | null = null;
+let updateCompletionInFlight = false;
+let automaticUpdateMonitorTimer = 0;
+let automaticUpdateRequestInFlight = false;
+let automaticUpdateTarget: GithubUpdateTarget | null = null;
+let authorizationAuditTimer = 0;
 const activeLaunchAudios = new Set<HTMLAudioElement>();
 
 onMounted(() => {
   clearLegacyAuthCache();
   authCode.value = sessionStorage.getItem(AUTH_CODE_SESSION_KEY) ?? localStorage.getItem(AUTH_CODE_KEY) ?? "";
-  isAuthenticated.value = sessionStorage.getItem(AUTH_STORAGE_KEY) === "authorized";
+  isAuthenticated.value = false;
+  if (sessionStorage.getItem(AUTH_STORAGE_KEY) === "authorized" && authCode.value) {
+    void restoreAuthorizedSession(authCode.value);
+  }
   applyViewFromUrl();
   syncViewHash(activeView.value);
   void loadSettings({ syncRuntimePort: true }).finally(() => {
     settingsLoaded.value = true;
     void loadGithubVersion();
+    void loadUpdateCompletion();
   });
   githubVersionRefreshTimer = window.setInterval(() => void loadGithubVersion(), GITHUB_VERSION_REFRESH_MS);
+  authorizationAuditTimer = window.setInterval(() => void auditAuthorizationSession(), CREDENTIAL_AUDIT_INTERVAL_MS);
   document.addEventListener("pointerdown", closeGithubMenuOnOutside);
+  document.addEventListener("pointerdown", retryPendingUpgradeAnnouncement);
+  document.addEventListener("keydown", retryPendingUpgradeAnnouncement);
+  document.addEventListener("pointerdown", retryPendingUpdateCompletion);
+  document.addEventListener("keydown", retryPendingUpdateCompletion);
   window.addEventListener("hashchange", applyViewFromUrl);
   if (isAuthenticated.value) {
     void loadNews();
@@ -641,14 +692,26 @@ onBeforeUnmount(() => {
   stopNotLaunchedReminder();
   stopLaunchAudios();
   if (githubVersionRefreshTimer) window.clearInterval(githubVersionRefreshTimer);
+  if (automaticUpdateMonitorTimer) window.clearInterval(automaticUpdateMonitorTimer);
+  if (authorizationAuditTimer) window.clearInterval(authorizationAuditTimer);
   document.removeEventListener("pointerdown", closeGithubMenuOnOutside);
+  document.removeEventListener("pointerdown", retryPendingUpgradeAnnouncement);
+  document.removeEventListener("keydown", retryPendingUpgradeAnnouncement);
+  document.removeEventListener("pointerdown", retryPendingUpdateCompletion);
+  document.removeEventListener("keydown", retryPendingUpdateCompletion);
   window.removeEventListener("hashchange", applyViewFromUrl);
 });
 
 watch(launchSoundEnabled, (enabled) => {
   localStorage.setItem(LAUNCH_SOUND_KEY, enabled ? "enabled" : "disabled");
   setAlertSoundsEnabled(enabled);
+  if (enabled) window.setTimeout(() => {
+    retryPendingUpgradeAnnouncement();
+    retryPendingUpdateCompletion();
+  }, 0);
   if (!enabled) {
+    const target = parseGithubUpdateTarget(pendingUpgradeAnnouncementTarget);
+    if (target) void startAutomaticUpdate(target, pendingUpgradeAnnouncementTarget);
     stopNotLaunchedReminder();
     stopLaunchAudios();
   }
@@ -706,6 +769,8 @@ function normalizeViewAlias(value: string | null): string {
   if (["leaderboard", "ranking", "rank", "latest", "liquidations", "latest-liquidations"].includes(normalized)) return "execution";
   if (["control", "dashboard", "analytics"].includes(normalized)) return "analytics";
   if (["exchange", "swap", "兑换"].includes(normalized)) return "swap";
+  if (["polymarket", "prediction", "prediction-market", "预测市场"].includes(normalized)) return "polymarket";
+  if (["cross-exchange", "crossexchange", "arbitrage", "跨交易所套利"].includes(normalized)) return "crossExchange";
   if (["slots", "slot", "orders", "order", "卡槽", "订单"].includes(normalized)) return "slots";
   return normalized;
 }
@@ -748,23 +813,7 @@ async function submitLogin() {
 
   loginLoading.value = true;
   try {
-    const response = await fetch(LICENSE_CHECK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    const payload = (await response.json().catch(() => ({}))) as {
-      ok?: boolean;
-      valid?: boolean;
-      status?: string;
-      error?: string;
-    };
-
-    if (!response.ok || payload.ok !== true || payload.valid !== true || payload.status !== "active") {
-      throw new Error(mapAuthError(payload.error ?? payload.status ?? `HTTP ${response.status}`));
-    }
-
-
+    await validateAuthorizationCode(code);
     if (rememberCode.value) {
       localStorage.setItem(AUTH_CODE_KEY, code);
     } else {
@@ -782,52 +831,75 @@ async function submitLogin() {
   }
 }
 
-function logout() {
-  void stopPresenceHeartbeat();
+async function validateAuthorizationCode(code: string): Promise<void> {
+  const result = await auditAuthorizationCode(code);
+  if (result.state === "valid") return;
+  throw new Error(authorizationAuditMessage(result));
+}
+
+async function restoreAuthorizedSession(code: string) {
+  try {
+    await validateAuthorizationCode(code.trim().toUpperCase());
+    isAuthenticated.value = true;
+  } catch {
+    clearAuthorizationSession();
+  }
+}
+
+async function auditAuthorizationSession() {
+  if (!isAuthenticated.value) return;
+  const code = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim().toUpperCase();
+  if (!code) {
+    clearAuthorizationSession();
+    return;
+  }
+  const result = await auditAuthorizationCode(code);
+  if (result.state === "valid") {
+    if (authMessageType.value === "warning") authMessage.value = "";
+    return;
+  }
+  if (result.state === "unknown") {
+    // A temporary network/service outage changes connection confidence, not
+    // the already-established login decision. Retry at the next audit tick.
+    authMessage.value = authorizationAuditMessage(result);
+    authMessageType.value = "warning";
+    return;
+  }
+  if (result.state === "invalid") {
+    clearAuthorizationSession();
+    authMessage.value = authorizationAuditMessage(result);
+    authMessageType.value = "error";
+  }
+}
+
+function authorizationAuditMessage(result: CredentialAuditResult["authorization"]): string {
+  const reason = result.reason.trim();
+  if (reason) return reason;
+  return result.state === "unknown" ? t("auth.serviceUnavailable") : t("auth.invalidCode");
+}
+
+function clearAuthorizationSession() {
+  sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  sessionStorage.removeItem(AUTH_CODE_SESSION_KEY);
+  isAuthenticated.value = false;
+}
+
+let logoutInProgress = false;
+
+async function logout() {
+  if (logoutInProgress) return;
+  logoutInProgress = true;
+  try {
+    await liquidationViewRef.value?.leaveQueueForLogout();
+  } finally {
+    logoutInProgress = false;
+  }
   localStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(AUTH_CODE_SESSION_KEY);
   isAuthenticated.value = false;
   githubMenuOpen.value = false;
   ElMessage.success(t("auth.loggedOut"));
-}
-
-async function startPresenceHeartbeat() {
-  try {
-    const response = await fetchSettingsApi("/api/settings/presence/start", { method: "POST" });
-    if (!response.ok) console.warn("[liq2] privateapi presence heartbeat did not start", response.status);
-  } catch (error) {
-    console.warn("[liq2] privateapi presence heartbeat unavailable", error);
-  }
-}
-
-async function stopPresenceHeartbeat() {
-  try {
-    await fetchSettingsApi("/api/settings/presence/stop", { method: "POST", keepalive: true });
-  } catch {
-    // The server-side 90-second timeout is the fallback when logout cannot reach the local API.
-  }
-}
-
-function mapAuthError(error: string) {
-  const normalized = error.toLowerCase();
-  if (
-    normalized.includes("license_service_unavailable") ||
-    normalized.includes("bad gateway") ||
-    /\bhttp\s+(?:5\d\d)\b/.test(normalized)
-  ) {
-    return t("auth.serviceUnavailable");
-  }
-  if (normalized.includes("expired") || normalized.includes("inactive") || normalized.includes("revoked")) {
-    return t("auth.expired");
-  }
-  if (normalized.includes("missing") || normalized.includes("not_found") || normalized.includes("not found")) {
-    return t("auth.notFound");
-  }
-  if (normalized.includes("http 404")) {
-    return t("auth.serviceNotFound");
-  }
-  return t("auth.invalidCode");
 }
 
 function marketIcon(chain: string) {
@@ -933,29 +1005,107 @@ async function loadGithubVersion() {
     const nextState: GithubVersionState = payload.configured === false ? "unconfigured" : isLatest ? "latest" : "update";
     const latestTarget = githubUpdateTarget(githubLatestVersion.value, githubLatestCommit.value);
     const serializedTarget = JSON.stringify(latestTarget);
-    const pendingTarget = readPendingGithubUpdate();
     const updateJustFound = nextState === "update"
       && localStorage.getItem(GITHUB_UPDATE_ANNOUNCED_KEY) !== serializedTarget;
-    const updateJustCompleted = nextState === "latest"
-      && pendingTarget !== null
-      && buildMatchesTarget(appVersion, currentCommit, pendingTarget);
     githubVersionState.value = nextState;
     githubVersionMessage.value = payload.message ?? "";
-    if (nextState === "update") {
-      localStorage.setItem(GITHUB_UPDATE_PENDING_KEY, serializedTarget);
-      if (updateJustFound) localStorage.setItem(GITHUB_UPDATE_ANNOUNCED_KEY, serializedTarget);
+    if (updateJustFound) void announceGithubUpdate(serializedTarget);
+    if (nextState === "update" && (!launchSoundEnabled.value || !updateJustFound)) {
+      void startAutomaticUpdate(latestTarget, serializedTarget);
     }
-    if (nextState === "latest") {
-      localStorage.removeItem(GITHUB_UPDATE_PENDING_KEY);
-      if (updateJustCompleted) localStorage.removeItem(GITHUB_UPDATE_ANNOUNCED_KEY);
-    }
-    if (updateJustFound) playConfiguredAlertSound("upgradeRequired");
-    if (updateJustCompleted) playConfiguredAlertSound("upgradeCompleted");
   } catch (error) {
     githubLatestVersion.value = appVersion;
     githubLatestCommit.value = "";
     githubVersionState.value = "error";
     githubVersionMessage.value = error instanceof Error ? error.message : t("github.checkFailed");
+  }
+}
+
+async function startAutomaticUpdate(target: GithubUpdateTarget, serializedTarget: string) {
+  if (settingsForm.updateMode !== "automatic") {
+    githubVersionMessage.value = "已发现新版本；当前为手动更新，请在控制器运行 npm run update。";
+    return;
+  }
+  automaticUpdateTarget = target;
+  if (automaticUpdateRequestInFlight) return;
+  if (sessionStorage.getItem(AUTOMATIC_UPDATE_ATTEMPTED_KEY) === serializedTarget) {
+    startAutomaticUpdateMonitor();
+    return;
+  }
+  automaticUpdateRequestInFlight = true;
+  try {
+    const response = await fetch("/api/automatic-update", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(target),
+    });
+    const payload = await response.json().catch(() => ({})) as AutomaticUpdateStatus & { error?: string };
+    if (!response.ok) throw new Error(payload.error || `automatic update returned HTTP ${response.status}`);
+    sessionStorage.setItem(AUTOMATIC_UPDATE_ATTEMPTED_KEY, serializedTarget);
+    githubVersionMessage.value = payload.message || "发现新版本，正在自动拉取、安装并构建。";
+    startAutomaticUpdateMonitor();
+  } catch (error) {
+    githubVersionMessage.value = error instanceof Error ? error.message : "自动升级启动失败。";
+  } finally {
+    automaticUpdateRequestInFlight = false;
+  }
+}
+
+function startAutomaticUpdateMonitor() {
+  if (automaticUpdateMonitorTimer) return;
+  void pollAutomaticUpdateStatus();
+  automaticUpdateMonitorTimer = window.setInterval(() => void pollAutomaticUpdateStatus(), AUTOMATIC_UPDATE_POLL_MS);
+}
+
+async function pollAutomaticUpdateStatus() {
+  try {
+    const response = await fetch("/api/automatic-update/status", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({})) as AutomaticUpdateStatus;
+    if (!response.ok) throw new Error(payload.message || `automatic update status HTTP ${response.status}`);
+    const status = payload.status || "idle";
+    if (payload.message) githubVersionMessage.value = payload.message;
+    if (status === "failed") {
+      stopAutomaticUpdateMonitor();
+      return;
+    }
+    if (status === "up_to_date") {
+      stopAutomaticUpdateMonitor();
+      sessionStorage.removeItem(AUTOMATIC_UPDATE_ATTEMPTED_KEY);
+      void loadGithubVersion();
+      return;
+    }
+    if (status === "restarting" || status === "restart_required") {
+      stopAutomaticUpdateMonitor();
+      void waitForUpdatedDashboard();
+    }
+  } catch {
+    // The expected outage begins when the old dashboard exits. Keep probing
+    // until the new process serves the target build.
+    stopAutomaticUpdateMonitor();
+    void waitForUpdatedDashboard();
+  }
+}
+
+function stopAutomaticUpdateMonitor() {
+  if (automaticUpdateMonitorTimer) window.clearInterval(automaticUpdateMonitorTimer);
+  automaticUpdateMonitorTimer = 0;
+}
+
+async function waitForUpdatedDashboard() {
+  for (;;) {
+    await new Promise((resolveWait) => window.setTimeout(resolveWait, 1_000));
+    try {
+      const response = await fetch(`/api/github-version?restart=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) continue;
+      const payload = await response.json() as { currentVersion?: string; currentCommit?: string };
+      const target = automaticUpdateTarget;
+      if (!target || isBuildCurrentOrNewer(payload.currentVersion || "", target.version, payload.currentCommit || "", target.commit)) {
+        window.location.reload();
+        return;
+      }
+    } catch {
+      // The replacement dashboard is not listening yet.
+    }
   }
 }
 
@@ -966,28 +1116,91 @@ function githubUpdateTarget(version: string, commit: string): GithubUpdateTarget
   };
 }
 
-function readPendingGithubUpdate(): GithubUpdateTarget | null {
-  const raw = localStorage.getItem(GITHUB_UPDATE_PENDING_KEY);
-  if (!raw) return null;
+function playConfiguredAlertSound(key: AlertSoundKey) {
+  playAlertSound(key, settingsForm.alertSounds[key]);
+}
+
+async function announceGithubUpdate(serializedTarget: string, retry = false) {
+  if (localStorage.getItem(GITHUB_UPDATE_ANNOUNCED_KEY) === serializedTarget) {
+    if (pendingUpgradeAnnouncementTarget === serializedTarget) pendingUpgradeAnnouncementTarget = "";
+    return;
+  }
+  if (!retry && pendingUpgradeAnnouncementTarget === serializedTarget) return;
+  pendingUpgradeAnnouncementTarget = serializedTarget;
+  if (upgradeAnnouncementInFlight) return;
+
+  upgradeAnnouncementInFlight = true;
   try {
-    const parsed = JSON.parse(raw) as Partial<GithubUpdateTarget>;
-    if (typeof parsed.version !== "string" || !parsed.version.trim()) throw new Error("Invalid update target");
-    return githubUpdateTarget(parsed.version, typeof parsed.commit === "string" ? parsed.commit : "");
+    const played = await confirmAlertSoundPlayback("upgradeRequired", settingsForm.alertSounds.upgradeRequired);
+    if (!played) return;
+    localStorage.setItem(GITHUB_UPDATE_ANNOUNCED_KEY, serializedTarget);
+    if (pendingUpgradeAnnouncementTarget === serializedTarget) pendingUpgradeAnnouncementTarget = "";
+    const target = parseGithubUpdateTarget(serializedTarget);
+    if (target) void startAutomaticUpdate(target, serializedTarget);
+  } finally {
+    upgradeAnnouncementInFlight = false;
+  }
+}
+
+function parseGithubUpdateTarget(value: string): GithubUpdateTarget | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<GithubUpdateTarget>;
+    return typeof parsed.version === "string" && typeof parsed.commit === "string"
+      ? { version: parsed.version, commit: parsed.commit }
+      : null;
   } catch {
-    // Old releases stored the boolean string "true" here. It may represent a
-    // false positive, so it must never trigger an "upgrade completed" voice.
-    localStorage.removeItem(GITHUB_UPDATE_PENDING_KEY);
     return null;
   }
 }
 
-function buildMatchesTarget(currentVersion: string, currentCommit: string, target: GithubUpdateTarget): boolean {
-  if (compareVersionLabels(currentVersion, target.version) !== 0) return false;
-  return !target.commit || commitsMatch(currentCommit, target.commit);
+function retryPendingUpgradeAnnouncement() {
+  if (!pendingUpgradeAnnouncementTarget || upgradeAnnouncementInFlight) return;
+  void announceGithubUpdate(pendingUpgradeAnnouncementTarget, true);
 }
 
-function playConfiguredAlertSound(key: AlertSoundKey) {
-  playAlertSound(key, settingsForm.alertSounds[key]);
+async function loadUpdateCompletion() {
+  try {
+    const response = await fetch("/api/update-completion", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({})) as {
+      ok?: boolean;
+      pending?: boolean;
+      receipt?: { receiptId?: unknown } | null;
+    };
+    const receiptId = typeof payload.receipt?.receiptId === "string" ? payload.receipt.receiptId : "";
+    if (!response.ok || payload.ok === false || !payload.pending || !receiptId) return;
+    pendingUpdateCompletion = { receiptId, played: false };
+    void announceUpdateCompletion();
+  } catch {
+    // A completion receipt remains on disk and will be checked on next startup.
+  }
+}
+
+async function announceUpdateCompletion() {
+  const pending = pendingUpdateCompletion;
+  if (!pending || updateCompletionInFlight) return;
+  updateCompletionInFlight = true;
+  try {
+    if (!pending.played) {
+      const played = await confirmAlertSoundPlayback("upgradeCompleted", settingsForm.alertSounds.upgradeCompleted);
+      if (!played) return;
+      pending.played = true;
+    }
+    const response = await fetch("/api/update-completion/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ receiptId: pending.receiptId }),
+    });
+    if (response.ok && pendingUpdateCompletion?.receiptId === pending.receiptId) pendingUpdateCompletion = null;
+  } catch {
+    // Playback is not repeated after it starts; only the durable acknowledgement is retried.
+  } finally {
+    updateCompletionInFlight = false;
+  }
+}
+
+function retryPendingUpdateCompletion() {
+  if (!pendingUpdateCompletion || updateCompletionInFlight) return;
+  void announceUpdateCompletion();
 }
 
 async function saveSettings() {
@@ -998,7 +1211,7 @@ async function saveSettings() {
   try {
     const response = await fetchSettingsApi("/api/settings", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeadersForSettings() },
       body: JSON.stringify({ env: generateEnvText() }),
     });
     if (!response.ok) {
@@ -1211,7 +1424,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.6.5 internal settings.",
+    "# Generated from SuperARB 1.6.6 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",
@@ -1229,6 +1442,7 @@ function generateEnvText() {
     `SINGLE_TRADE_AUTH_AMOUNT_USDT=${settingsForm.singleTradeAuthAmountUsdt}`,
     `CREDENTIAL_AUTH_MODE=${settingsForm.credentialAuthMode}`,
     `STARTUP_DETECTION_MODE=${settingsForm.startupDetectionMode}`,
+    `UPDATE_MODE=${settingsForm.updateMode}`,
     "",
     "# -----------------------------------------------------------------------------",
     "# 3. Dashboard",
@@ -1282,6 +1496,7 @@ function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePor
   settingsForm.credentialAuthMode = normalizeCredentialAuthMode(env.CREDENTIAL_AUTH_MODE ?? settingsForm.credentialAuthMode);
   settingsForm.singleTradeAuthAmountUsdt = env.SINGLE_TRADE_AUTH_AMOUNT_USDT ?? settingsForm.singleTradeAuthAmountUsdt;
   settingsForm.startupDetectionMode = normalizeStartupDetectionMode(env.STARTUP_DETECTION_MODE ?? settingsForm.startupDetectionMode);
+  settingsForm.updateMode = env.UPDATE_MODE === "manual" ? "manual" : "automatic";
   settingsForm.wssCorrectionMode = normalizeWssCorrectionMode(settingsForm.wssCorrectionMode);
   const envDashboardPort = normalizeDashboardPort(env.DASHBOARD_PORT ?? settingsForm.dashboardPort);
   settingsForm.dashboardPort = options.syncRuntimePort ? runtimeDashboardPort(envDashboardPort) : envDashboardPort;

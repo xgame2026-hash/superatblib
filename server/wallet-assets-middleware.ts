@@ -1,11 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
+import { ENV_FILE } from "./runtime-paths";
 
-const ENV_FILE = resolve(process.cwd(), ".env");
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const RPC_TIMEOUT_MS = 8_000;
 
