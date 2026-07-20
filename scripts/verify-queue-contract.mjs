@@ -45,6 +45,8 @@ async function checkPrivateService() {
 }
 
 function checkClientContract() {
+  const readme = read("README.md");
+  const envExample = read(".env.example");
   const app = read("src/App.vue");
   const liquidationView = read("src/features/liquidation/LiquidationView.vue");
   const allMarketSnapshot = read("src/features/liquidation/AllMarketSnapshot.vue");
@@ -235,6 +237,9 @@ function checkClientContract() {
   }
   if (!privateBootstrap.includes('return value === "pause" || value === "logout" || value === "rpc-expired"')) {
     fail("only Pause, Settings Exit, or authoritative RPC expiry may stop private-member presence");
+  }
+  if (!readme.includes("连续 6 小时没有任何成功心跳") || !envExample.includes("six continuous hours without a successful heartbeat")) {
+    fail("the documented server heartbeat lease must be exactly six continuous hours");
   }
   if (!settingsMiddleware.includes('bootstrapPrivateMemberWalletOnce("settings-save"')) {
     fail("saving complete private-key, BNB RPC, and app-token settings must submit the encrypted wallet profile");
