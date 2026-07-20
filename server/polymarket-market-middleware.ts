@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-const POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com/markets";
+const POLYMARKET_MARKET_DATA_URL = "https://privateapi.superarb.ai/polymarket/markets";
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_LIMIT = 100;
 
@@ -18,7 +18,7 @@ export function handlePolymarketMarketRequest(req: IncomingMessage, res: ServerR
     .then((payload) => sendJson(res, 200, payload))
     .catch((error: unknown) => sendJson(res, 502, {
       ok: false,
-      source: POLYMARKET_GAMMA_URL,
+      source: POLYMARKET_MARKET_DATA_URL,
       error: error instanceof Error ? error.message : "Polymarket data source unavailable.",
     }));
   return true;
@@ -27,7 +27,7 @@ export function handlePolymarketMarketRequest(req: IncomingMessage, res: ServerR
 async function fetchMarkets(incoming: URL) {
   const requestedLimit = Number(incoming.searchParams.get("limit"));
   const limit = Number.isSafeInteger(requestedLimit) ? Math.min(MAX_LIMIT, Math.max(1, requestedLimit)) : 50;
-  const upstream = new URL(POLYMARKET_GAMMA_URL);
+  const upstream = new URL(POLYMARKET_MARKET_DATA_URL);
   upstream.searchParams.set("active", "true");
   upstream.searchParams.set("closed", "false");
   upstream.searchParams.set("order", "volume24hr");
@@ -39,9 +39,14 @@ async function fetchMarkets(incoming: URL) {
     headers: { accept: "application/json", "user-agent": "SuperARB/1.6 market-data" },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!response.ok) throw new Error(`Polymarket Gamma API returned HTTP ${response.status}.`);
-  const raw = await response.json();
-  if (!Array.isArray(raw)) throw new Error("Polymarket Gamma API returned an invalid payload.");
+  if (!response.ok) throw new Error(`Polymarket market-data proxy returned HTTP ${response.status}.`);
+  const payload: unknown = await response.json();
+  const raw = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.markets)
+      ? payload.markets
+      : null;
+  if (!raw) throw new Error("Polymarket market-data proxy returned an invalid payload.");
 
   const now = Date.now();
   const markets = raw.map(normalizeMarket).filter((market) => {
@@ -51,11 +56,13 @@ async function fetchMarkets(incoming: URL) {
       && Number.isFinite(endTime)
       && endTime > now;
   });
-  const fetchedAt = new Date().toISOString();
+  const fetchedAt = isRecord(payload) && isoValue(payload.fetchedAt)
+    ? isoValue(payload.fetchedAt)
+    : new Date().toISOString();
   return {
     ok: true,
-    source: POLYMARKET_GAMMA_URL,
-    sourceLabel: "Polymarket Gamma API",
+    source: POLYMARKET_MARKET_DATA_URL,
+    sourceLabel: "SuperARB Polymarket Proxy · Gamma API",
     fetchedAt,
     latencyMs: Date.now() - startedAt,
     count: markets.length,
