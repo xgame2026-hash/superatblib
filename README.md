@@ -220,7 +220,7 @@ cp .env.example .env
 
 每个钱包必须使用独立 profile。默认钱包使用 `.env` 和 `.superarb/`；第二钱包使用 `.env.wallet2` 和 `.superarb/wallet2/`，因此订单、心跳、队列状态和扣费身份不会互相覆盖。
 
-启动排队后，LIQ2 每 5 分钟向 `https://privateapi.superarb.ai/heartbeat` 上报一次在线状态。服务端以最后一次成功心跳为准，连续 6 小时未成功才标记为离线并从 `/online-users` 排队列表排除；用户及钱包记录不会删除。主动暂停、退出或 RPC 到期仍会立即离队。
+启动排队后，LIQ2 每 5 分钟向 `https://privateapi.superarb.ai/heartbeat` 上报一次连接状态。心跳只用于连接遥测，临时失败不会撤销排队资格；用户保持在线，直到主动暂停、在系统设置中退出，或套餐/RPC 服务到期。以上三种明确状态会立即从 `https://privateapi.superarb.ai/online-users` 排行榜移除，用户及钱包历史记录不会删除。
 
 在本机创建第二钱包配置（不要在聊天、截图或 Git 中发送私钥）：
 

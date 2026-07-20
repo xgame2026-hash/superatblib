@@ -41,7 +41,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(row, index) in pagedQueuedWalletRows" :key="row.id" :class="{ 'is-queue-active': rowGlobalIndex(index) === activeQueueGlobalIndex }">
+            <tr v-for="row in pagedQueuedWalletRows" :key="row.id">
               <td>{{ formatChainLabel(row) }}</td>
               <td class="latest-queue-id" :title="row.id">{{ formatQueueId(row) }}</td>
               <td>
@@ -54,7 +54,6 @@
                     aria-hidden="true"
                   />
                   {{ formatFullWallet(row) }}
-                  <span v-if="rowGlobalIndex(index) === activeQueueGlobalIndex" class="latest-queue-spinner" aria-hidden="true"></span>
                 </span>
               </td>
               <td class="latest-asset-summary">{{ formatUsdtAsset(row) }}</td>
@@ -170,10 +169,10 @@ const pageSize = 15;
 const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
 const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
 let latestRefreshTimer = 0;
-let activeQueueTimer = 0;
 let latestLoadedAt = 0;
-const LATEST_REFRESH_INTERVAL_MS = 10_000;
-const ACTIVE_QUEUE_INTERVAL_MS = 5_000;
+// The ranking is operational state, not a live ticker. Refreshing every
+// 30 seconds keeps the USDT ordering current without making the table flicker.
+const LATEST_REFRESH_INTERVAL_MS = 30_000;
 const WSS_STALE_MS = 45_000;
 const PAID_PROFIT_REFRESH_INTERVAL_MS = 10_000;
 // Settings and every LIQ2 display read the same wallet-to-uploaded-image
@@ -221,7 +220,6 @@ const paidProfitPulseClass = computed(() => ({
   "is-down": paidProfitPulseTone.value === "down",
 }));
 const queueTransport = ref("");
-const activeQueueGlobalIndex = ref(0);
 const queueParticipantCount = ref(0);
 const queueSubscribers = ref(0);
 const queueUpdatedAt = ref("");
@@ -251,17 +249,13 @@ watch(paidProfitUsdt, (value, oldValue) => {
   paidProfitPulseTimer = triggerNumberPulse(paidProfitPulse, paidProfitPulseTimer);
 });
 
-watch([filteredQueuedWalletRows, totalPages], ([rows]) => {
-  const activeKey = rows[activeQueueGlobalIndex.value] ? queueDedupKey(rows[activeQueueGlobalIndex.value]) : "";
+watch(totalPages, () => {
   if (currentPage.value > totalPages.value) currentPage.value = totalPages.value;
   if (currentPage.value < 1) currentPage.value = 1;
-  const nextIndex = activeKey ? rows.findIndex((row) => queueDedupKey(row) === activeKey) : -1;
-  activeQueueGlobalIndex.value = nextIndex >= 0 ? nextIndex : Math.min(activeQueueGlobalIndex.value, Math.max(0, rows.length - 1));
 });
 
 watch(walletSearchQuery, () => {
   currentPage.value = 1;
-  activeQueueGlobalIndex.value = 0;
 });
 
 watch(
@@ -304,7 +298,6 @@ function startLatestLiquidationsView(): void {
     return;
   }
   if (!latestRefreshTimer) latestRefreshTimer = window.setInterval(loadLatestLiquidations, LATEST_REFRESH_INTERVAL_MS);
-  if (!activeQueueTimer) activeQueueTimer = window.setInterval(advanceActiveQueueRow, ACTIVE_QUEUE_INTERVAL_MS);
   if (!paidProfitRefreshTimer) paidProfitRefreshTimer = window.setInterval(loadPaidProfitSummary, PAID_PROFIT_REFRESH_INTERVAL_MS);
   if (!latestLoadedAt) {
     void loadLatestLiquidations();
@@ -314,10 +307,8 @@ function startLatestLiquidationsView(): void {
 
 function stopLatestLiquidationsView(): void {
   if (latestRefreshTimer) window.clearInterval(latestRefreshTimer);
-  if (activeQueueTimer) window.clearInterval(activeQueueTimer);
   if (paidProfitRefreshTimer) window.clearInterval(paidProfitRefreshTimer);
   latestRefreshTimer = 0;
-  activeQueueTimer = 0;
   paidProfitRefreshTimer = 0;
 }
 
@@ -482,21 +473,6 @@ function sortQueueRowsByUsdtDesc(left: QueueRow, right: QueueRow) {
 
 function walletSearchText(row: QueueRow) {
   return [rowWallet(row), row.walletShort].filter(Boolean).join(" ").toLowerCase();
-}
-
-function rowGlobalIndex(pageIndex: number) {
-  return (currentPage.value - 1) * pageSize + pageIndex;
-}
-
-function advanceActiveQueueRow() {
-  const rowCount = filteredQueuedWalletRows.value.length;
-  if (rowCount <= 1) {
-    activeQueueGlobalIndex.value = 0;
-    currentPage.value = 1;
-    return;
-  }
-  activeQueueGlobalIndex.value = (activeQueueGlobalIndex.value + 1) % rowCount;
-  currentPage.value = Math.floor(activeQueueGlobalIndex.value / pageSize) + 1;
 }
 
 function toOptionalTimestamp(value?: string) {

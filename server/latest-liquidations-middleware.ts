@@ -21,6 +21,11 @@ const ASSET_CHANGE_CACHE_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_REFRESH_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_ERROR_RETRY_MS = 2 * 60 * 1000;
 const QUEUE_BALANCE_CACHE_MS = 10 * 1000;
+// privateapi is authoritative for explicit offline states. A row that is
+// merely absent from one response is retained briefly so a partial read does
+// not make the public ranking jump. Three 30-second refresh windows are enough
+// to bridge transient reads without turning this into another presence store.
+const ONLINE_RANKING_MISSING_GRACE_MS = 90 * 1000;
 const DEFAULT_TX2_CONTRACT_EVENTS_API_PATH = "/api/liquidation-queue/contract-events/today";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
@@ -266,6 +271,7 @@ const queueBalanceCache = new Map<string, QueueBalanceCacheEntry>();
 const sevenDayBlockCache = new Map<ChainKey, BlockCacheEntry>();
 const blockAtTimestampCache = new Map<string, BlockCacheEntry>();
 const assetChangeRefreshInFlight = new Set<string>();
+const stableOnlineRankingRows = new Map<string, { row: SnapshotQueueRow; lastSeenAt: number }>();
 
 export function handleLatestLiquidationsRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const pathname = new URL(req.url || "/", "http://127.0.0.1").pathname;
@@ -342,8 +348,11 @@ async function fetchLiq2OnlineWallets(req: IncomingMessage) {
       queuedWallets: [],
     };
   }
-  const online = await fetchPrivateOnlineUsers(env, req);
-  const onlineWallets = dedupeAndSortStateRows(online.rows.filter(isLiq2SubmittedOnlineUser));
+  // scope=all lets an explicit Pause / Exit / RPC expiry remove a cached row
+  // immediately. Missing online rows, in contrast, receive a short grace
+  // period in stabilizeOnlineRankingRows.
+  const online = await fetchPrivateOnlineUsers(env, req, true);
+  const onlineWallets = stabilizeOnlineRankingRows(online.rows);
   const queuedWallets = sortQueueRowsByRealtimeUsdtDesc(await enrichQueuedWalletBalances(onlineWallets, env));
   const updatedAt = stringValue(online.status.updatedAt, online.status.updated_at) ?? new Date().toISOString();
   return {
@@ -409,6 +418,34 @@ function dedupeAndSortStateRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
   return sortQueueRowsByRealtimeUsdtDesc([...merged.values()]);
 }
 
+function stabilizeOnlineRankingRows(rows: SnapshotQueueRow[], now = Date.now()): SnapshotQueueRow[] {
+  for (const row of rows) {
+    if (!isLiq2SubmittedUser(row)) continue;
+    const key = onlineRankingKey(row);
+
+    // Explicit user actions and authoritative package/RPC expiry always win
+    // over display stabilization.
+    if (!isLiq2SubmittedOnlineUser(row) || isExpiredQueueRow(row)) {
+      stableOnlineRankingRows.delete(key);
+      continue;
+    }
+    stableOnlineRankingRows.set(key, { row, lastSeenAt: now });
+  }
+
+  for (const [key, cached] of stableOnlineRankingRows) {
+    if (isExpiredQueueRow(cached.row) || now - cached.lastSeenAt > ONLINE_RANKING_MISSING_GRACE_MS) {
+      stableOnlineRankingRows.delete(key);
+      continue;
+    }
+  }
+
+  return dedupeAndSortStateRows([...stableOnlineRankingRows.values()].map((entry) => entry.row));
+}
+
+function onlineRankingKey(row: SnapshotQueueRow): string {
+  return `${row.chain}:${row.wallet.toLowerCase()}`;
+}
+
 function sortQueueRowsByRealtimeUsdtDesc(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
   return [...rows].sort((left, right) => {
     const usdtDelta = queueUsdtNumber(right) - queueUsdtNumber(left);
@@ -471,6 +508,15 @@ async function fetchPrivateOnlineUsers(env: Record<string, string>, req: Incomin
 }
 
 function isLiq2SubmittedOnlineUser(row: SnapshotQueueRow): boolean {
+  if (!isLiq2SubmittedUser(row)) return false;
+  const record = row as Record<string, unknown>;
+  const online = onlineBooleanValue(record.online, record.isOnline, record.is_online);
+  const status = (stringValue(record.status, record.presenceStatus, record.presence_status) ?? "").toLowerCase();
+  if (online === false || ["offline", "stopped", "paused", "logout", "rpc-expired", "expired"].includes(status)) return false;
+  return true;
+}
+
+function isLiq2SubmittedUser(row: SnapshotQueueRow): boolean {
   const record = row as Record<string, unknown>;
   const submissionSource = stringValue(
     record.submissionSource,
@@ -481,9 +527,6 @@ function isLiq2SubmittedOnlineUser(row: SnapshotQueueRow): boolean {
     record.submitted_by,
   );
   if (submissionSource && submissionSource.toLowerCase() !== "liq2") return false;
-  const online = onlineBooleanValue(record.online, record.isOnline, record.is_online);
-  const status = (stringValue(record.status, record.presenceStatus, record.presence_status) ?? "").toLowerCase();
-  if (online === false || ["offline", "stopped", "paused", "logout"].includes(status)) return false;
   return true;
 }
 
@@ -748,7 +791,20 @@ function normalizeQueue(row: Record<string, unknown>, index: number): SnapshotQu
     registeredAt: stringValue(row.registeredAt, row.registered_at),
     joinedAt: stringValue(row.joinedAt, row.joined_at),
     startedAt: stringValue(row.startedAt, row.started_at),
-    expiresAt: stringValue(row.expiresAt, row.expires_at),
+    // This is the authoritative service/package expiry. It is intentionally
+    // not a heartbeat lease: temporary heartbeat gaps must not shorten it.
+    expiresAt: stringValue(
+      row.rpcServiceExpiresAt,
+      row.rpc_service_expires_at,
+      row.subscriptionExpiresAt,
+      row.subscription_expires_at,
+      row.licenseExpiresAt,
+      row.license_expires_at,
+      row.tokenExpiresAt,
+      row.token_expires_at,
+      row.expiresAt,
+      row.expires_at,
+    ),
     updatedAt: stringValue(row.updatedAt, row.updated_at, row.timestamp) ?? new Date().toISOString(),
   };
 }

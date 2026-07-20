@@ -289,16 +289,31 @@ function checkClientContract() {
   if (!latestMiddleware.includes('pathname === "/api/liq2/online-wallets"') || !latestMiddleware.includes("DEFAULT_ONLINE_USERS_API_URL")) {
     fail("LIQ2 online display must read privateapi.superarb.ai/online-users through its dedicated local route");
   }
-  if (!latestMiddleware.includes("const queueUrl = new URL(DEFAULT_ONLINE_USERS_API_URL)")) {
-    fail("LIQ2 online display endpoint must not be redirected to a legacy/custom queue source");
-  }
-  if (!queueMiddleware.includes("return DEFAULT_QUEUE_STATUS_API_URL") || queueMiddleware.includes("env.LIQ2_ONLINE_USERS_API_URL")) {
-    fail("queue status reads must use only privateapi.superarb.ai/online-users");
-  }
   const liq2OnlineHandler = latestMiddleware.slice(
     latestMiddleware.indexOf("async function fetchLiq2OnlineWallets"),
     latestMiddleware.indexOf("async function fetchMarketSnapshot"),
   );
+  if (!latestMiddleware.includes("const queueUrl = new URL(DEFAULT_ONLINE_USERS_API_URL)")) {
+    fail("LIQ2 online display endpoint must not be redirected to a legacy/custom queue source");
+  }
+  if (!liq2OnlineHandler.includes("fetchPrivateOnlineUsers(env, req, true)") || !latestMiddleware.includes('queueUrl.searchParams.set("scope", "all")')) {
+    fail("LIQ2 ranking must read full privateapi online-user state so Pause, Exit, and expiry are immediate");
+  }
+  if (!latestMiddleware.includes("stabilizeOnlineRankingRows(online.rows)") || !latestMiddleware.includes("ONLINE_RANKING_MISSING_GRACE_MS = 90 * 1000")) {
+    fail("LIQ2 ranking must tolerate transient partial online-users responses");
+  }
+  if (!latestMiddleware.includes("isExpiredQueueRow(cached.row)") || !latestMiddleware.includes('"rpc-expired", "expired"')) {
+    fail("explicit offline state and authoritative package expiry must bypass ranking stabilization");
+  }
+  if (!latestView.includes("LATEST_REFRESH_INTERVAL_MS = 30_000")) {
+    fail("LIQ2 USDT ranking must refresh every 30 seconds");
+  }
+  if (latestView.includes("advanceActiveQueueRow") || latestView.includes("ACTIVE_QUEUE_INTERVAL_MS")) {
+    fail("LIQ2 ranking must not auto-page or rotate between 30-second sorts");
+  }
+  if (!queueMiddleware.includes("return DEFAULT_QUEUE_STATUS_API_URL") || queueMiddleware.includes("env.LIQ2_ONLINE_USERS_API_URL")) {
+    fail("queue status reads must use only privateapi.superarb.ai/online-users");
+  }
   if (liq2OnlineHandler.includes("readLocalQueuedWallets") || liq2OnlineHandler.includes("LIQUIDATION_QUEUE_WSS_URL")) {
     fail("LIQ2 online display must not merge local or WSS queue rows into privateARB public.users");
   }
