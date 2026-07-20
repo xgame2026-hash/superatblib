@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
@@ -18,6 +18,17 @@ export function writePrivateTextFile(path: string, contents: string): void {
   // because its .env is being saved. Only directories created for private
   // runtime state are owned and hardened by this module.
   if (!directoryAlreadyExists) chmodOwnerOnly(directory, PRIVATE_DIRECTORY_MODE);
+
+  // Vite watches .env and restarts whenever its mtime changes. Several
+  // dashboard startup flows refresh credentials that may already be current;
+  // replacing an identical file would therefore create a restart loop. Keep
+  // the atomic write for real changes, but make identical saves idempotent.
+  if (existsSync(path) && readFileSync(path, "utf8") === contents) {
+    if ((statSync(path).mode & 0o777) !== PRIVATE_FILE_MODE) {
+      chmodOwnerOnly(path, PRIVATE_FILE_MODE);
+    }
+    return;
+  }
 
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
@@ -41,7 +52,9 @@ export function writePrivateTextFile(path: string, contents: string): void {
 
 export function hardenPrivateFilePermissions(path: string): void {
   if (!existsSync(path)) return;
-  chmodOwnerOnly(path, PRIVATE_FILE_MODE);
+  if ((statSync(path).mode & 0o777) !== PRIVATE_FILE_MODE) {
+    chmodOwnerOnly(path, PRIVATE_FILE_MODE);
+  }
 }
 
 function chmodOwnerOnly(path: string, mode: number): void {
