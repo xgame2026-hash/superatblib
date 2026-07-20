@@ -4,8 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Wallet, id } from "ethers";
 import { ENV_FILE } from "./runtime-paths";
 
-const DEFAULT_PRIVATE_ARB_API_URL = "https://privateapi.superarb.ai";
-const DEFAULT_PRIVATE_ARB_WALLET_ACTIVITY_PATH = "/wallet-activity";
+const PRIVATE_ARB_WALLET_ACTIVITY_URL = "https://privateapi.superarb.ai/wallet-activity";
 const DEFAULT_TX2_TREASURY_CONFIG_PATH = "/api/private-member/treasury-compensation-config";
 const UPSTREAM_PAGE_SIZE = 200;
 const MAX_ORDERS = 2_000;
@@ -121,7 +120,7 @@ async function loadSlotsOrders(req: IncomingMessage) {
 
   return {
     ok: true,
-    source: privateArbActivitySource(env),
+    source: privateArbActivitySource(),
     walletAddress,
     summary: summarizeOrders(sorted),
     orders: sorted,
@@ -256,7 +255,7 @@ async function readTx2TreasuryPool(env: Record<string, string>): Promise<Set<str
 function tx2TreasuryConfigEndpoint(env: Record<string, string>): string {
   const configured = env.TX2_TREASURY_COMPENSATION_CONFIG_URL?.trim();
   if (configured) return configured;
-  const activityUrl = new URL(privateArbActivityEndpoint(env));
+  const activityUrl = new URL(privateArbActivityEndpoint());
   activityUrl.pathname = DEFAULT_TX2_TREASURY_CONFIG_PATH;
   activityUrl.search = "";
   activityUrl.hash = "";
@@ -373,7 +372,7 @@ async function fetchActivityPage(
   env: Record<string, string>,
   authCode: string,
 ): Promise<unknown[]> {
-  const endpoint = privateArbActivityEndpoint(env);
+  const endpoint = privateArbActivityEndpoint();
   const url = new URL(endpoint);
   url.searchParams.set("walletAddress", walletAddress);
   url.searchParams.set("limit", String(limit));
@@ -396,16 +395,13 @@ async function fetchActivityPage(
   return rows;
 }
 
-function privateArbActivityEndpoint(env: Record<string, string>): string {
-  const configured = env.PRIVATE_ARB_WALLET_ACTIVITY_URL?.trim();
-  if (configured) return configured;
-  const base = (env.LIQ2_PRIVATE_MEMBER_API_URL?.trim() || DEFAULT_PRIVATE_ARB_API_URL).replace(/\/+$/, "");
-  return `${base}${DEFAULT_PRIVATE_ARB_WALLET_ACTIVITY_PATH}`;
+function privateArbActivityEndpoint(): string {
+  return PRIVATE_ARB_WALLET_ACTIVITY_URL;
 }
 
-function privateArbActivitySource(env: Record<string, string>): string {
+function privateArbActivitySource(): string {
   try {
-    return new URL(privateArbActivityEndpoint(env)).host;
+    return new URL(privateArbActivityEndpoint()).host;
   } catch {
     return "privateARB wallet activity";
   }

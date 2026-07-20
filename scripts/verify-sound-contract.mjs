@@ -49,6 +49,10 @@ requireSource(slotsMiddleware, "COMPENSATION_PAID_OUT_TOPIC", "reward proof must
 requireSource(slotsMiddleware, "readTx2TreasuryPool", "reward proof must load tx2's authoritative Treasury contract pool");
 requireSource(slotsMiddleware, "treasuryPool.has(order.rewardCounterparty.toLowerCase())", "reward payer must belong to tx2's current Treasury pool");
 requireSource(slotsMiddleware, "amount === expectedAmount", "reward proof amount must match the tx2 record exactly");
+requireSource(slotsMiddleware, 'const PRIVATE_ARB_WALLET_ACTIVITY_URL = "https://privateapi.superarb.ai/wallet-activity"', "slots must use the fixed privateAPI wallet activity endpoint");
+if (slotsMiddleware.includes("env.PRIVATE_ARB_WALLET_ACTIVITY_URL") || slotsMiddleware.includes("env.LIQ2_PRIVATE_MEMBER_API_URL")) {
+  failures.push("slot activity endpoint must not be redirectable through deployment configuration");
+}
 requireSource(settings, "if (!props.soundEnabled) return", "alert previews must stay silent while globally muted");
 requireSource(settings, "if (!enabled) stopAlertSoundPreview()", "muting must stop an active alert preview");
 
