@@ -311,6 +311,12 @@ function checkClientContract() {
   if (!latestView.includes("LATEST_REFRESH_INTERVAL_MS = 30_000")) {
     fail("LIQ2 USDT ranking must refresh every 30 seconds");
   }
+  if (!latestView.includes('QUEUE_MEMBERSHIP_REFRESH_EVENT = "liq2-overview-refresh"') || !latestView.includes("handleQueueMembershipRefresh")) {
+    fail("a successful queue start must invalidate and immediately refresh the online-wallet ranking");
+  }
+  if (latestView.includes("if (!latestLoadedAt) {\n    void loadLatestLiquidations();")) {
+    fail("entering the ranking must not reuse a stale online-wallet snapshot");
+  }
   if (latestView.includes("advanceActiveQueueRow") || latestView.includes("ACTIVE_QUEUE_INTERVAL_MS")) {
     fail("LIQ2 ranking must not auto-page or rotate between 30-second sorts");
   }

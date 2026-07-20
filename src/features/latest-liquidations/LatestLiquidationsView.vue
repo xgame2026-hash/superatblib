@@ -168,6 +168,7 @@ const currentPage = ref(1);
 const pageSize = 15;
 const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
 const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
+const QUEUE_MEMBERSHIP_REFRESH_EVENT = "liq2-overview-refresh";
 let latestRefreshTimer = 0;
 let latestLoadedAt = 0;
 // The ranking is operational state, not a live ticker. Refreshing every
@@ -267,6 +268,7 @@ watch(
 );
 
 onMounted(() => {
+  window.addEventListener(QUEUE_MEMBERSHIP_REFRESH_EVENT, handleQueueMembershipRefresh);
   if (props.active) startLatestLiquidationsView();
 });
 
@@ -289,8 +291,14 @@ watch(
 
 onBeforeUnmount(() => {
   stopLatestLiquidationsView();
+  window.removeEventListener(QUEUE_MEMBERSHIP_REFRESH_EVENT, handleQueueMembershipRefresh);
   if (paidProfitPulseTimer) window.clearTimeout(paidProfitPulseTimer);
 });
+
+function handleQueueMembershipRefresh(): void {
+  latestLoadedAt = 0;
+  if (props.active) void loadLatestLiquidations();
+}
 
 function startLatestLiquidationsView(): void {
   if (!props.configured) {
@@ -299,9 +307,9 @@ function startLatestLiquidationsView(): void {
   }
   if (!latestRefreshTimer) latestRefreshTimer = window.setInterval(loadLatestLiquidations, LATEST_REFRESH_INTERVAL_MS);
   if (!paidProfitRefreshTimer) paidProfitRefreshTimer = window.setInterval(loadPaidProfitSummary, PAID_PROFIT_REFRESH_INTERVAL_MS);
-  if (!latestLoadedAt) {
-    void loadLatestLiquidations();
-  }
+  // Entering the ranking always reads the current /online-users state. The
+  // 30-second timer maintains the USDT ordering after this immediate read.
+  void loadLatestLiquidations();
   void loadPaidProfitSummary();
 }
 
