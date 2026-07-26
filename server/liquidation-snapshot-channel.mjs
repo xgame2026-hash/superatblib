@@ -11,6 +11,11 @@ const STORE_FILE = process.env.LIQUIDATION_SNAPSHOT_STORE_FILE || "/opt/supermt-
 const INGEST_TOKEN = (process.env.LIQUIDATION_SNAPSHOT_INGEST_TOKEN || "").trim();
 const UPSTREAM_SNAPSHOT_URL =
   process.env.UPSTREAM_LIQUIDATION_SNAPSHOT_URL || "https://market-snapshot.superarb.ai/api/public/liquidations/snapshot";
+const MORPHO_GRAPHQL_URL = "https://api.morpho.org/graphql";
+const MORPHO_MAX_HEALTH_FACTOR = boundedNumber(process.env.LIQUIDATION_CANDIDATE_MAX_HEALTH_FACTOR, 1.2, 1, 2);
+const MORPHO_MIN_DEBT_USD = boundedNumber(process.env.LIQUIDATION_CANDIDATE_MIN_DEBT_USD, 50, 0, 1_000_000_000);
+const MORPHO_MAX_POSITIONS = Math.trunc(boundedNumber(process.env.MORPHO_SNAPSHOT_MAX_POSITIONS, 1_500, 100, 5_000));
+const MORPHO_ENABLED = process.env.MORPHO_SNAPSHOT_ENABLED?.trim().toLowerCase() !== "false";
 
 const markets = [
   market("eth-aave-v3-monitor", "ethereum", "ETH", "Aave V3", "monitor", "ETHEREUM_RPC_URL"),
@@ -79,14 +84,128 @@ setInterval(() => {
 
 async function refresh() {
   try {
+    let supplementalWarning = "";
     const upstream = await fetchJson(UPSTREAM_SNAPSHOT_URL);
+    const morpho = MORPHO_ENABLED
+      ? await fetchMorphoSnapshot().catch((error) => {
+          supplementalWarning = error instanceof Error ? error.message : String(error);
+          return {};
+        })
+      : {};
     ingestStore = await readStore();
-    cachedSnapshot = buildSnapshot(upstream, ingestStore);
-    lastRefreshError = "";
+    cachedSnapshot = buildSnapshot(upstream, mergeSupplementalStore(ingestStore, morpho), supplementalWarning);
+    lastRefreshError = supplementalWarning;
   } catch (error) {
     lastRefreshError = error instanceof Error ? error.message : String(error);
     cachedSnapshot = buildSnapshot(cachedSnapshot, ingestStore, lastRefreshError);
   }
+}
+
+async function fetchMorphoSnapshot() {
+  const queue = [];
+  const updatedAt = new Date().toISOString();
+  const pageSize = 500;
+
+  for (let skip = 0; skip < MORPHO_MAX_POSITIONS; skip += pageSize) {
+    const first = Math.min(pageSize, MORPHO_MAX_POSITIONS - skip);
+    const response = await fetch(MORPHO_GRAPHQL_URL, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({
+        query: `
+          query LiquidationCandidates($first: Int!, $skip: Int!, $maximumHealthFactor: Float!) {
+            marketPositions(
+              first: $first
+              skip: $skip
+              orderBy: HealthFactor
+              orderDirection: Asc
+              where: {
+                chainId_in: [1, 42161]
+                marketListed: true
+                borrowShares_gte: 1
+                healthFactor_lte: $maximumHealthFactor
+              }
+            ) {
+              items {
+                id
+                healthFactor
+                market {
+                  marketId
+                  chain { id network }
+                  loanAsset { symbol }
+                  collateralAsset { symbol }
+                }
+                user { address }
+                state { collateralUsd borrowAssetsUsd }
+              }
+            }
+          }
+        `,
+        variables: { first, skip, maximumHealthFactor: MORPHO_MAX_HEALTH_FACTOR },
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Morpho upstream returned HTTP ${response.status}`);
+    const payload = await response.json();
+    if (payload.errors?.length) throw new Error(`Morpho query failed: ${stringValue(payload.errors[0]?.message) || "unknown error"}`);
+    const items = arrayFrom(payload.data?.marketPositions?.items);
+    queue.push(...items.map((item) => normalizeMorphoPosition(item, updatedAt)).filter(Boolean));
+    if (items.length < first) break;
+  }
+
+  const filteredQueue = queue.filter((row) => numberValue(row.debt) >= MORPHO_MIN_DEBT_USD);
+  const sources = ["ethereum", "arbitrum"].map((chain) => {
+    const queueCount = filteredQueue.filter((row) => row.chain === chain).length;
+    return {
+      id: `${chain}-morpho-blue-api`,
+      chain,
+      chainLabel: chainLabel(chain),
+      source: "morpho-api-scanner",
+      rpc: chain === "ethereum" ? "ETHEREUM_RPC_URL" : "ARBITRUM_RPC_URL",
+      queueCount,
+      liquidationCount: 0,
+      protocolCount: 1,
+      status: queueCount > 0 ? "有候选" : "API 就绪",
+      updatedAt,
+    };
+  });
+  return { queue: filteredQueue, sources, updatedAt };
+}
+
+function normalizeMorphoPosition(item, updatedAt) {
+  const chainId = numberValue(item?.market?.chain?.id);
+  const chain = chainId === 1 ? "ethereum" : chainId === 42161 ? "arbitrum" : "";
+  const wallet = stringValue(item?.user?.address);
+  const marketId = stringValue(item?.market?.marketId, item?.id);
+  const healthFactor = numberValue(item?.healthFactor);
+  const debt = numberValue(item?.state?.borrowAssetsUsd);
+  if (!chain || !wallet || !marketId || healthFactor === null || healthFactor <= 0 || debt === null || debt <= 0) return null;
+  return {
+    id: `morpho:${chain}:${marketId}:${wallet.toLowerCase()}`,
+    chain,
+    chainLabel: chainLabel(chain),
+    wallet,
+    asset: stringValue(item?.market?.collateralAsset?.symbol) || "--",
+    protocol: "Morpho Blue",
+    rpc: chain === "ethereum" ? "ETHEREUM_RPC_URL" : "ARBITRUM_RPC_URL",
+    healthFactor: formatDecimal(healthFactor, 4),
+    debt: formatDecimal(debt, 2),
+    debtSymbol: `${stringValue(item?.market?.loanAsset?.symbol) || "USD"} / USD`,
+    collateralSymbol: numberValue(item?.state?.collateralUsd) === null ? "--" : formatDecimal(numberValue(item.state.collateralUsd), 2),
+    grossProfit: "--",
+    netProfit: "--",
+    status: healthFactor < 1 ? "可清算" : healthFactor <= 1.05 ? "高风险" : "候选",
+    source: "morpho-api-scanner",
+    updatedAt,
+  };
+}
+
+function mergeSupplementalStore(store, supplemental) {
+  return {
+    ...store,
+    queue: [...arrayFrom(store.queue), ...arrayFrom(supplemental.queue)],
+    sources: [...arrayFrom(store.sources), ...arrayFrom(supplemental.sources)],
+  };
 }
 
 async function fetchJson(url) {
@@ -365,6 +484,15 @@ function numberValue(...values) {
     if (Number.isFinite(number)) return number;
   }
   return null;
+}
+
+function boundedNumber(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+}
+
+function formatDecimal(value, digits) {
+  return Number(value).toFixed(digits).replace(/\.?0+$/, "");
 }
 
 function normalizeChain(value) {

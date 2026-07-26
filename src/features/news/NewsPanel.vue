@@ -61,7 +61,7 @@
           <time>{{ formatDate(selectedItem.time) }}</time>
         </div>
       </div>
-      <div class="news-content">{{ selectedItem.content }}</div>
+      <div class="news-content" v-html="selectedContentHtml"></div>
     </article>
 
     <aside class="panel news-hot-panel">
@@ -92,6 +92,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import DOMPurify from "dompurify";
 import type { NewsItem } from "../../types/news";
 import { getLocale, t } from "../../i18n";
 
@@ -128,6 +129,7 @@ const selectedItem = computed(() => {
   if (!props.selectedId) return null;
   return props.items.find((item) => item.id === props.selectedId) ?? null;
 });
+const selectedContentHtml = computed(() => renderNewsContent(selectedItem.value?.content ?? ""));
 
 watch(
   () => props.items.length,
@@ -138,6 +140,22 @@ watch(
 
 function setPage(page: number) {
   currentPage.value = Math.min(Math.max(1, page), totalPages.value);
+}
+
+function renderNewsContent(content: string): string {
+  const isHtml = /<\/?[a-z][\s\S]*>/i.test(content);
+  if (isHtml) {
+    return DOMPurify.sanitize(content, {
+      ALLOWED_TAGS: ["p", "br", "h2", "h3", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "pre", "code", "hr", "a"],
+      ALLOWED_ATTR: ["href", "target", "rel"],
+    });
+  }
+
+  const safeText = DOMPurify.sanitize(content, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
+  return safeText
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
+    .join("");
 }
 
 function formatDate(value: string) {

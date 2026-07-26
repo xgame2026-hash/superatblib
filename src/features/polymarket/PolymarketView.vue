@@ -2,7 +2,7 @@
   <section class="market-page">
     <header class="market-toolbar">
       <div class="market-title-group">
-        <span class="product-mark" aria-hidden="true">P</span>
+        <span class="product-mark" aria-hidden="true"><img :src="polymarketIconUrl" alt="" /></span>
         <div>
           <div class="title-line"><h2>Polymarket</h2><span class="mode-badge live">OFFICIAL API</span></div>
           <p>官方市场数据 · 仅显示仍在接受订单且尚未到期的市场</p>
@@ -21,6 +21,19 @@
       <article class="stat-card"><span>样本 24h 成交量</span><strong>{{ snapshot ? formatUsd(snapshot.totals.volume24hr) : "--" }}</strong><small class="neutral">当前已载入市场合计</small></article>
       <article class="stat-card"><span>样本可用流动性</span><strong>{{ snapshot ? formatUsd(snapshot.totals.liquidity) : "--" }}</strong><small class="neutral">官方 Gamma 字段</small></article>
       <article class="stat-card"><span>数据源</span><strong class="source-name">Gamma</strong><small :class="error ? 'negative' : 'positive'">{{ error ? "连接异常" : snapshot ? "官方接口已连接" : "等待连接" }}</small></article>
+      <article class="stat-card compute-card">
+        <span>算力</span>
+        <strong>0</strong>
+        <button class="stat-card-action" type="button" @click="showComputeComingSoon">立即充值算力</button>
+      </article>
+      <article class="stat-card managed-ai-card">
+        <span>AI 托管</span>
+        <strong>Aigo2智能体</strong>
+      </article>
+      <article class="stat-card earnings-card">
+        <span>我的收益</span>
+        <strong>0 USDT</strong>
+      </article>
     </div>
 
     <div class="workspace-grid">
@@ -74,6 +87,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { ElMessage } from "element-plus";
+import polymarketIconUrl from "../../img/polymarket.svg";
 
 type Market = { id:string; question:string; slug:string; eventSlug:string; category:string; image:string; endDate:string; updatedAt:string; liquidity:number; volume:number; volume24hr:number; yesPrice:number|null; noPrice:number|null; bestBid:number|null; bestAsk:number|null; spread:number|null; oneDayPriceChange:number|null; acceptingOrders:boolean; minOrderSize:number|null; minTickSize:number|null };
 type Snapshot = { ok:boolean; source:string; sourceLabel:string; fetchedAt:string; latencyMs:number; count:number; totals:{liquidity:number;volume24hr:number}; markets:Market[] };
@@ -115,6 +130,10 @@ async function loadMarkets(silent = false): Promise<void> {
     error.value = reason instanceof Error ? reason.message : "无法读取 Polymarket 官方数据";
     snapshot.value = null;
   } finally { loading.value = false; }
+}
+
+function showComputeComingSoon(): void {
+  ElMessage.info("即将开通");
 }
 
 function formatUsd(value:number):string { return new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",notation:"compact",maximumFractionDigits:2}).format(value || 0); }

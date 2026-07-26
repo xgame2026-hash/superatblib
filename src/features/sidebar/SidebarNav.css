@@ -67,6 +67,11 @@
   transition: opacity 0.18s ease, filter 0.18s ease;
 }
 
+.nav-icon.is-polymarket .nav-icon-img {
+  width: 28px;
+  height: 28px;
+}
+
 .nav-icon:hover,
 .nav-icon.active {
   border-color: rgba(168, 85, 247, 0.72);

@@ -228,7 +228,67 @@
   font-size: 13px;
   font-weight: 650;
   line-height: 1.78;
-  white-space: pre-wrap;
+}
+
+.news-content :deep(p) {
+  margin: 0 0 14px;
+}
+
+.news-content :deep(h2),
+.news-content :deep(h3) {
+  margin: 28px 0 12px;
+  color: white;
+  line-height: 1.35;
+}
+
+.news-content :deep(h2) {
+  font-size: 21px;
+}
+
+.news-content :deep(h3) {
+  font-size: 17px;
+}
+
+.news-content :deep(ul),
+.news-content :deep(ol) {
+  margin: 12px 0 18px;
+  padding-left: 26px;
+}
+
+.news-content :deep(li) {
+  margin: 5px 0;
+}
+
+.news-content :deep(blockquote) {
+  margin: 18px 0;
+  padding: 12px 16px;
+  border-left: 4px solid var(--cyan);
+  background: rgba(62, 222, 255, 0.08);
+  color: #d8f7ff;
+}
+
+.news-content :deep(pre) {
+  overflow-x: auto;
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(4, 8, 20, 0.82);
+  color: #d9e7ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+}
+
+.news-content :deep(a) {
+  color: var(--cyan);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+.news-content :deep(hr) {
+  margin: 26px 0;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
 }
 
 .news-hot-heading {

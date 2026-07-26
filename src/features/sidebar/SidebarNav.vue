@@ -3,7 +3,7 @@
     <el-tooltip v-for="item in items" :key="item.key" :content="item.label" placement="right">
       <button
         class="nav-icon"
-        :class="{ active: activeKey === item.key, 'has-image': item.iconUrl }"
+        :class="{ active: activeKey === item.key, 'has-image': item.iconUrl, 'is-polymarket': item.key === 'polymarket' }"
         :aria-label="item.label"
         type="button"
         @click="emit('select', item.key)"

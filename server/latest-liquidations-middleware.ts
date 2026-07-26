@@ -5,6 +5,7 @@ import { assertOfficialConfig } from "./official-config";
 import { PHASE1_LIQUIDATION_STRATEGIES, type Phase1Strategy } from "./phase1-liquidation-strategies";
 import { queueWssToken } from "./queue-token";
 import { ENV_FILE, stateFile } from "./runtime-paths";
+import { fetchSupplementalLiquidationSnapshot, type SupplementalSnapshot } from "./supplemental-liquidation-sources";
 
 const ASSET_CHANGE_DB_FILE = stateFile("wallet-asset-change-db.json");
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -372,8 +373,11 @@ async function fetchMarketSnapshot(req: IncomingMessage) {
   const env = readEnv();
   assertOfficialConfig("全部市场快照读取", env);
   const snapshotUrl = normalizeSnapshotUrl(env.LIQUIDATION_SNAPSHOT_API_URL?.trim() || DEFAULT_SNAPSHOT_API_URL);
-  const payload = await fetchSnapshotPayload(snapshotUrl, env, req);
-  const response = buildSnapshotResponse(payload, env, [], emptyPrivateOnlineSnapshot());
+  const [payload, supplemental] = await Promise.all([
+    fetchSnapshotPayload(snapshotUrl, env, req),
+    fetchSupplementalLiquidationSnapshot(env).catch(() => emptySupplementalSnapshot()),
+  ]);
+  const response = buildSnapshotResponse(payload, env, [], emptyPrivateOnlineSnapshot(), supplemental);
   response.queueTransport = "snapshot";
   response.queueSource = "liquidation-snapshot-service";
   response.queueParticipantCount = 0;
@@ -391,8 +395,11 @@ async function fetchLiquidationSnapshot(req: IncomingMessage, options: { fast?: 
   const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const privateOnline = options.fast ? emptyPrivateOnlineSnapshot() : await fetchPrivateOnlineUsers(env, req).catch(() => emptyPrivateOnlineSnapshot());
   const privateProfileRows = privateOnline.rows.filter(isLiq2SubmittedOnlineUser);
-  const payload = options.queueOnly ? ({} as SnapshotPayload) : await fetchSnapshotPayload(snapshotUrl, env, req);
-  const response = buildSnapshotResponse(payload, env, privateProfileRows, privateOnline);
+  const [payload, supplemental] = await Promise.all([
+    options.queueOnly ? Promise.resolve({} as SnapshotPayload) : fetchSnapshotPayload(snapshotUrl, env, req),
+    options.queueOnly ? Promise.resolve(emptySupplementalSnapshot()) : fetchSupplementalLiquidationSnapshot(env).catch(() => emptySupplementalSnapshot()),
+  ]);
+  const response = buildSnapshotResponse(payload, env, privateProfileRows, privateOnline, supplemental);
   response.queuedWallets = dedupeAndSortStateRows(privateProfileRows);
   response.queueTransport = privateOnline.ok ? "private-global" : "private-unavailable";
   response.queueSource = "privateapi.superarb.ai/online-users";
@@ -572,13 +579,14 @@ function buildSnapshotResponse(
   env: Record<string, string>,
   queuedWallets: SnapshotQueueRow[],
   wssQueue: { ok: boolean; rows: SnapshotQueueRow[]; status: SnapshotPayload },
+  supplemental: SupplementalSnapshot = emptySupplementalSnapshot(),
 ) {
   const sourcePayload = unwrapPayload(payload);
   const sourceRows = readRows(sourcePayload);
   const rankingRows = readRankingRows(sourcePayload);
   const rankings = normalizeRankingGroups(sourcePayload.rankings, rankingRows.length > 0 ? rankingRows : sourceRows);
   const protocols = readProtocols(sourcePayload.protocols);
-  const snapshotSources = readSources(sourcePayload.sources);
+  const snapshotSources = [...readSources(sourcePayload.sources), ...readSources(supplemental.sources)];
   const rawQueue = readQueue(
     sourcePayload.candidateQueue ??
       sourcePayload.candidate_queue ??
@@ -588,7 +596,8 @@ function buildSnapshotResponse(
       sourcePayload.queue ??
       sourcePayload.queues,
   );
-  const queue = dedupeQueue(rawQueue.filter(isStrategyCandidateQueueRow));
+  const supplementalQueue = readQueue(supplemental.queue);
+  const queue = dedupeQueue([...rawQueue, ...supplementalQueue].filter(isStrategyCandidateQueueRow));
   const sources = normalizeCandidateSources(snapshotSources, queue);
   const updatedAt = stringValue(sourcePayload.updatedAt, sourcePayload.updated_at) ?? new Date().toISOString();
 
@@ -610,6 +619,10 @@ function buildSnapshotResponse(
     strategies: readStrategies(sourcePayload.strategies, sources, queue, updatedAt, env),
     updatedAt,
   };
+}
+
+function emptySupplementalSnapshot(): SupplementalSnapshot {
+  return { queue: [], sources: [] };
 }
 
 function unwrapPayload(payload: SnapshotPayload): SnapshotPayload {
