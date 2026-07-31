@@ -106,6 +106,19 @@
 .vault-status-card dt { color: #8f879e; }
 .vault-status-card dd { margin: 0; color: #ddd6e9; font-weight: 800; text-align: right; }
 .vault-status-note { margin: 11px 0 0; border: 1px solid rgba(96,165,250,.13); border-radius: 7px; background: rgba(37,99,235,.04); color: #8f9db3; padding: 8px; font-size: 9px; line-height: 1.5; }
+.cycle-participation-panel { margin: 0 16px 16px; overflow: hidden; border: 1px solid rgba(96,165,250,.18); border-radius: 10px; background: linear-gradient(100deg,rgba(37,99,235,.045),rgba(139,92,246,.035)); }
+.cycle-participation-panel>header { display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid rgba(96,165,250,.12); padding: 13px 15px; }
+.cycle-participation-panel>header>div:first-child>span { color: #60a5fa; font-size: 8px; font-weight: 900; letter-spacing: .14em; }
+.cycle-participation-panel h4 { margin: 4px 0 0; font-size: 13px; }
+.cycle-participation-panel header p { margin: 4px 0 0; color: #8f9db3; font-size: 9px; }
+.cycle-capital-summary { display: flex; gap: 24px; }
+.cycle-capital-summary span,.cycle-capital-summary small,.cycle-capital-summary strong { display: block; }
+.cycle-capital-summary small { color: #7f8da3; font-size: 8px; }
+.cycle-capital-summary strong { margin-top: 4px; color: #e5e7eb; font-size: 11px; }
+.cycle-participation-actions { display: grid; grid-template-columns:minmax(220px,1fr) auto auto minmax(220px,1.2fr); gap: 10px; align-items: center; padding: 13px 15px; }
+.cycle-participation-actions .vault-amount-field { height: 38px; margin: 0; }
+.cycle-participation-actions>.primary-button,.cycle-participation-actions>.outline-button { min-height: 38px; margin: 0; white-space: nowrap; }
+.cycle-action-note { color: #8491a5; font-size: 9px; line-height: 1.45; text-align: right; }
 .workspace-grid { display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: 14px; align-items: start; }
 .market-panel { min-width: 0; overflow: hidden; border: 1px solid rgba(174,126,255,.16); border-radius: 12px; background: rgba(12,10,23,.88); box-shadow: 0 18px 50px rgba(0,0,0,.18); }
 .panel-header { min-height: 65px; justify-content: space-between; gap: 12px; border-bottom: 1px solid rgba(174,126,255,.12); padding: 13px 16px; }
@@ -181,5 +194,5 @@
 .source-error button { border:1px solid rgba(248,113,113,.3); border-radius:7px; background:transparent; color:#fecaca; cursor:pointer; padding:6px 10px; }
 .market-facts { margin-top:18px; }
 @media(max-width:1200px){.vault-workspace{grid-template-columns:1fr 1fr}.vault-status-card{grid-column:1/-1}.workspace-grid{grid-template-columns:1fr}.detail-panel{max-width:none}.market-row{grid-template-columns:38px minmax(220px,1fr) 76px 124px 50px}}
-@media(max-width:900px){.stat-grid{grid-template-columns:repeat(2,1fr)}.vault-heading{align-items:flex-start;flex-direction:column}.vault-state{width:100%;justify-content:space-between}.vault-workspace{grid-template-columns:1fr}.vault-status-card{grid-column:auto}.market-toolbar{align-items:flex-start;flex-direction:column}.toolbar-actions{width:100%;justify-content:space-between}.filter-bar{grid-template-columns:1fr}.category-tabs{overflow:auto}.market-row{grid-template-columns:34px minmax(180px,1fr) 72px}.price-pair,.edge-cell{display:none}.power-summary{grid-template-columns:1fr 1fr}.payment-methods{grid-template-columns:1fr}}
+@media(max-width:900px){.stat-grid{grid-template-columns:repeat(2,1fr)}.vault-heading{align-items:flex-start;flex-direction:column}.vault-state{width:100%;justify-content:space-between}.vault-workspace{grid-template-columns:1fr}.vault-status-card{grid-column:auto}.cycle-participation-panel>header{align-items:flex-start;flex-direction:column}.cycle-capital-summary{width:100%;justify-content:space-between;gap:10px}.cycle-participation-actions{grid-template-columns:1fr}.cycle-action-note{text-align:left}.market-toolbar{align-items:flex-start;flex-direction:column}.toolbar-actions{width:100%;justify-content:space-between}.filter-bar{grid-template-columns:1fr}.category-tabs{overflow:auto}.market-row{grid-template-columns:34px minmax(180px,1fr) 72px}.price-pair,.edge-cell{display:none}.power-summary{grid-template-columns:1fr 1fr}.payment-methods{grid-template-columns:1fr}}
 @media(max-width:600px){.stat-grid{grid-template-columns:1fr}.sync-state{display:none}.market-row{grid-template-columns:32px 1fr}.probability-cell{display:none}.power-summary{grid-template-columns:1fr}.market-page :deep(.power-dialog .el-dialog__body){padding:14px}}

@@ -20,7 +20,7 @@ const MAX_REQUEST_BODY_BYTES = 8 * 1024;
 const RPC_TIMEOUT_MS = 12_000;
 const PUBLIC_BSC_RPC_URL = "https://bsc-dataseed.bnbchain.org";
 
-const VAULT_ADDRESS = "0xd22a42bEc8E789EeF2b4F34Af4EBd1bE40CC0eF8";
+const VAULT_ADDRESS = "0x52CCb026c43eb491cbF60c76795736Ffb69548d3";
 const USDT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955";
 
 const ERC20_ABI = [
@@ -49,8 +49,13 @@ const VAULT_ABI = [
   "function getWithdrawalRestriction(address user) view returns (tuple(bool restricted,uint64 windowStart,uint256 windowWithdrawn,uint256 rolling24HourLimit,uint256 lifetimeLimit,uint256 lifetimeWithdrawn))",
   "function getCycle(uint256 cycleId) view returns (tuple(uint8 status,uint32 monthId,uint64 fundingEndTime,uint64 startTime,uint64 expectedEndTime,uint64 settlementDeadline,uint256 participantCount,uint256 totalPrincipal,uint256 outboundAmount,uint256 returnedAmount,uint256 grossProfit,uint256 operatingExpense,uint256 netProfit,uint256 rewardBudget,uint256 distributedReward,uint256 releaseCursor,uint256 rewardBatchId,bytes32 participantSnapshotHash,bytes32 settlementReportHash))",
   "function memberTotalReturnBps(address user) view returns (uint256)",
+  "function cyclePrincipal(uint256 cycleId,address user) view returns (uint256)",
+  "function exitAfterCycle(uint256 cycleId,address user) view returns (uint256)",
   "function polymarketDeposit(uint256 amount)",
   "function polymarketWithdrawPrincipal(uint256 amount)",
+  "function joinPolymarketCycle(uint256 cycleId,uint256 amount)",
+  "function leavePolymarketCycle(uint256 cycleId,uint256 amount)",
+  "function requestExitAfterCycle(uint256 cycleId,uint256 amount)",
 ] as const;
 
 type VaultActionPayload = { amount?: unknown };
@@ -78,6 +83,9 @@ export function handlePolymarketVaultRequest(req: IncomingMessage, res: ServerRe
     "/api/polymarket/vault/approve",
     "/api/polymarket/vault/deposit",
     "/api/polymarket/vault/withdraw",
+    "/api/polymarket/vault/join-cycle",
+    "/api/polymarket/vault/leave-cycle",
+    "/api/polymarket/vault/request-exit",
   ].includes(pathname)) return false;
 
   if (req.method === "OPTIONS") {
@@ -110,8 +118,11 @@ async function routeRequest(pathname: string, req: IncomingMessage, res: ServerR
       await handleApprove(body, res, lockedEnv);
     } else if (pathname === "/api/polymarket/vault/deposit") {
       await handleDeposit(body, res, lockedEnv);
-    } else {
+    } else if (pathname === "/api/polymarket/vault/withdraw") {
       await handleWithdraw(body, res, lockedEnv);
+    } else {
+      const action = pathname.endsWith("/join-cycle") ? "join" : pathname.endsWith("/leave-cycle") ? "leave" : "request-exit";
+      await handleCycleAction(action, body, res, lockedEnv);
     }
   });
 }
@@ -182,6 +193,8 @@ async function handleStatus(res: ServerResponse): Promise<void> {
         lifetimeDeposited: token(walletState.lifetimeDeposited),
         lifetimePrincipalWithdrawn: token(walletState.lifetimePrincipalWithdrawn),
         lifetimeRewardReceived: token(walletState.lifetimeRewardReceived),
+        cyclePrincipal: token(walletState.cyclePrincipal),
+        exitAfterCycle: token(walletState.exitAfterCycle),
         totalReturnBps: Number(walletState.totalReturnBps),
         blacklisted: walletState.blacklisted,
         restriction: {
@@ -330,6 +343,53 @@ async function handleWithdraw(body: VaultActionPayload, res: ServerResponse, env
   }
 }
 
+async function handleCycleAction(action: "join" | "leave" | "request-exit", body: VaultActionPayload, res: ServerResponse, env: Record<string, string>): Promise<void> {
+  const amount = parseAmount(body.amount);
+  const context = await createContext(true, env);
+  try {
+    const wallet = requireWallet(context);
+    const cycleId = BigInt(await context.vault.currentCycleId());
+    if (cycleId <= 0n) throw new VaultApiError(409, "NO_ACTIVE_CYCLE", "当前尚未创建 Polymarket 周期。");
+    const [cycle, member, principal, cyclesPaused, blacklisted, migrationActive, migrationFinalized, bnbBalance, block] = await Promise.all([
+      context.vault.getCycle(cycleId),
+      context.vault.getMember(wallet.address),
+      context.vault.cyclePrincipal(cycleId, wallet.address),
+      context.vault.cyclesPaused(),
+      context.vault.blacklisted(wallet.address),
+      context.vault.migrationActive(),
+      context.vault.migrationFinalized(),
+      context.provider.getBalance(wallet.address),
+      context.provider.getBlock("latest"),
+    ]);
+    if (Boolean(cyclesPaused)) throw new VaultApiError(409, "CYCLES_PAUSED", "周期操作当前已暂停。");
+    if (Boolean(blacklisted)) throw new VaultApiError(403, "BLACKLISTED", "当前钱包已被限制，不能操作周期本金。");
+    if (Boolean(migrationActive) || Boolean(migrationFinalized)) throw new VaultApiError(409, "MIGRATION_ACTIVE", "合约正在迁移，不能操作周期本金。");
+
+    const status = Number(cycle.status);
+    const now = Number(block?.timestamp || 0);
+    if ((action === "join" || action === "leave") && (status !== 1 || now >= Number(cycle.fundingEndTime))) {
+      throw new VaultApiError(409, "FUNDING_CLOSED", "当前周期募集已经结束。");
+    }
+    if (action === "request-exit" && ![2, 3, 4].includes(status)) {
+      throw new VaultApiError(409, "CYCLE_NOT_RUNNING", "只有已锁定、运行中或结算中的周期可以登记周期后退出。");
+    }
+    if (action === "join" && BigInt(member.availablePrincipal) < amount) {
+      throw new VaultApiError(409, "INSUFFICIENT_AVAILABLE_PRINCIPAL", "可用本金不足。", { availablePrincipal: token(BigInt(member.availablePrincipal)) });
+    }
+    if (action !== "join" && BigInt(principal) < amount) {
+      throw new VaultApiError(409, "INSUFFICIENT_CYCLE_PRINCIPAL", "本周期本金不足。", { cyclePrincipal: token(BigInt(principal)) });
+    }
+
+    const vaultContract = context.vault.connect(wallet) as Contract;
+    const methodName = action === "join" ? "joinPolymarketCycle" : action === "leave" ? "leavePolymarketCycle" : "requestExitAfterCycle";
+    const label = action === "join" ? "加入 Polymarket 周期" : action === "leave" ? "退出周期募集" : "登记周期后退出";
+    const receipt = await sendContractTransaction(context, vaultContract.getFunction(methodName), [cycleId, amount], BigInt(bnbBalance), label);
+    sendJson(res, 200, { ok: true, action, cycleId: cycleId.toString(), amount: token(amount), txHash: receipt.hash, receipt: receipt.data });
+  } finally {
+    context.provider.destroy();
+  }
+}
+
 async function createContext(walletRequired: boolean, suppliedEnv?: Record<string, string>) {
   const env = suppliedEnv ?? readEnv();
   const candidates = [
@@ -384,7 +444,7 @@ async function createContext(walletRequired: boolean, suppliedEnv?: Record<strin
 
 async function readWalletState(context: Awaited<ReturnType<typeof createContext>>, blockTag: number, cycleId: bigint) {
   const wallet = requireWallet(context);
-  const [usdtBalance, allowance, bnbBalance, member, restriction, blacklisted, totalReturnBps, cycle] = await Promise.all([
+  const [usdtBalance, allowance, bnbBalance, member, restriction, blacklisted, totalReturnBps, cycle, cyclePrincipal, exitAfterCycle] = await Promise.all([
     context.usdt.balanceOf(wallet.address, { blockTag }),
     context.usdt.allowance(wallet.address, VAULT_ADDRESS, { blockTag }),
     context.provider.getBalance(wallet.address, blockTag),
@@ -393,6 +453,8 @@ async function readWalletState(context: Awaited<ReturnType<typeof createContext>
     context.vault.blacklisted(wallet.address, { blockTag }),
     context.vault.memberTotalReturnBps(wallet.address, { blockTag }),
     cycleId > 0n ? context.vault.getCycle(cycleId, { blockTag }) : Promise.resolve(undefined),
+    cycleId > 0n ? context.vault.cyclePrincipal(cycleId, wallet.address, { blockTag }) : Promise.resolve(0n),
+    cycleId > 0n ? context.vault.exitAfterCycle(cycleId, wallet.address, { blockTag }) : Promise.resolve(0n),
   ]);
   return {
     usdtBalance: BigInt(usdtBalance),
@@ -411,6 +473,8 @@ async function readWalletState(context: Awaited<ReturnType<typeof createContext>
     lifetimeWithdrawn: BigInt(restriction.lifetimeWithdrawn),
     blacklisted: Boolean(blacklisted),
     totalReturnBps: BigInt(totalReturnBps),
+    cyclePrincipal: BigInt(cyclePrincipal),
+    exitAfterCycle: BigInt(exitAfterCycle),
     cycle,
   };
 }
@@ -433,6 +497,8 @@ function emptyWalletState() {
     lifetimeWithdrawn: 0n,
     blacklisted: false,
     totalReturnBps: 0n,
+    cyclePrincipal: 0n,
+    exitAfterCycle: 0n,
     cycle: undefined,
   };
 }

@@ -87,11 +87,7 @@
         <div>
           <span class="section-kicker">BSC MAINNET · POLYMARKET VAULT</span>
           <h3>USDT 资金账户</h3>
-          <p v-if="vaultStatus?.wallet.configured">
-            执行钱包 <a :href="addressUrl(vaultStatus.wallet.address)" target="_blank" rel="noopener noreferrer">{{ shortAddress(vaultStatus.wallet.address) }} ↗</a>
-            · 合约 <a :href="addressUrl(vaultStatus.contracts.vault)" target="_blank" rel="noopener noreferrer">{{ shortAddress(vaultStatus.contracts.vault) }} ↗</a>
-          </p>
-          <p v-else>读取本地设置中的执行钱包，不会向浏览器发送私钥。</p>
+          <p v-if="!vaultStatus?.wallet.configured">读取本地设置中的执行钱包，不会向浏览器发送私钥。</p>
         </div>
         <div class="vault-state">
           <span :class="contractStateClass"><i></i>{{ contractStateLabel }}</span>
@@ -142,6 +138,30 @@
           <p class="vault-status-note">{{ cycleStatusNote }}</p>
         </article>
       </div>
+
+      <article v-if="vaultStatus?.cycle" class="cycle-participation-panel">
+        <header>
+          <div><span>CAPITAL CYCLE</span><h4>周期本金管理</h4><p>周期 #{{ vaultStatus.vault.currentCycleId }} · {{ CYCLE_LABELS[vaultStatus.cycle.status] || "未知状态" }}</p></div>
+          <div class="cycle-capital-summary">
+            <span><small>本人本周期本金</small><strong>{{ formatToken(vaultStatus.member.cyclePrincipal) }} USDT</strong></span>
+            <span><small>周期已跨链</small><strong>{{ formatToken(vaultStatus.cycle.outboundAmount) }} USDT</strong></span>
+            <span><small>周期后退出</small><strong>{{ formatToken(vaultStatus.member.exitAfterCycle) }} USDT</strong></span>
+          </div>
+        </header>
+        <div class="cycle-participation-actions">
+          <label class="vault-amount-field">
+            <input v-model="cycleAmount" inputmode="decimal" autocomplete="off" placeholder="0.0" @input="cycleAmount = normalizeAmount(cycleAmount)" />
+            <b>USDT</b>
+            <button type="button" @click="setMaximumCycleAmount(vaultStatus.cycle.status===1?'available':'cycle')">最大</button>
+          </label>
+          <template v-if="vaultStatus.cycle.status===1">
+            <button class="primary-button" type="button" :disabled="cycleActionDisabled||compareAmounts(cycleAmount,vaultStatus.member.availablePrincipal)>0" @click="submitCycleAction('join')">{{vaultSubmitting==='join'?'正在加入…':'加入当前周期'}}</button>
+            <button class="outline-button" type="button" :disabled="cycleActionDisabled||compareAmounts(cycleAmount,vaultStatus.member.cyclePrincipal)>0" @click="submitCycleAction('leave')">{{vaultSubmitting==='leave'?'正在退出…':'退出周期募集'}}</button>
+          </template>
+          <button v-else-if="[2,3,4].includes(vaultStatus.cycle.status)" class="outline-button cycle-exit-button" type="button" :disabled="cycleActionDisabled" @click="submitCycleAction('request-exit')">{{vaultSubmitting==='request-exit'?'正在登记…':'周期结束后退出'}}</button>
+          <span class="cycle-action-note">{{vaultStatus.cycle.status===1?'募集期内可自由加入或退出；募集结束后本金锁定。':[2,3,4].includes(vaultStatus.cycle.status)?'运行期间不能提取本金，可预先登记周期结束后的退出金额。':'当前周期已结束，等待管理员释放本金。'}}</span>
+        </div>
+      </article>
     </section>
 
     <div class="workspace-grid">
@@ -221,7 +241,7 @@ type VaultStatus = {
   wallet:{configured:boolean;address:string;bnbBalance:string;usdtBalance:string;allowance:string};
   member:{
     availablePrincipal:string;lockedPrincipal:string;pendingWithdrawal:string;lifetimeDeposited:string;lifetimePrincipalWithdrawn:string;
-    lifetimeRewardReceived:string;totalReturnBps:number;blacklisted:boolean;
+    lifetimeRewardReceived:string;cyclePrincipal:string;exitAfterCycle:string;totalReturnBps:number;blacklisted:boolean;
     restriction:{restricted:boolean;rolling24HourLimit:string;windowWithdrawn:string;lifetimeLimit:string;lifetimeWithdrawn:string};
   };
   vault:{
@@ -251,7 +271,8 @@ const powerLoading = ref(false);
 const powerError = ref("");
 const depositAmount = ref("");
 const withdrawAmount = ref("");
-const vaultSubmitting = ref<""|"approve"|"deposit"|"withdraw">("");
+const cycleAmount = ref("");
+const vaultSubmitting = ref<""|"approve"|"deposit"|"withdraw"|"join"|"leave"|"request-exit">("");
 const powerDialogVisible = ref(false);
 const powerPackages = ref(1);
 const powerPaymentMethod = ref<PowerPaymentMethod>("balance");
@@ -322,6 +343,15 @@ const withdrawDisabled = computed(() => {
   if (!status || vaultLoading.value || Boolean(vaultSubmitting.value) || !status.wallet.configured || !isPositiveAmount(withdrawAmount.value)) return true;
   if (status.vault.withdrawalsPaused || status.vault.migrationActive || status.vault.migrationFinalized || status.member.blacklisted) return true;
   return compareAmounts(withdrawAmount.value, status.member.availablePrincipal) > 0 || !decimalGreaterThanZero(status.wallet.bnbBalance);
+});
+const cycleActionDisabled = computed(() => {
+  const status = vaultStatus.value;
+  if (!status || vaultLoading.value || Boolean(vaultSubmitting.value) || !status.wallet.configured || !isPositiveAmount(cycleAmount.value)) return true;
+  if (status.vault.cyclesPaused || status.vault.migrationActive || status.vault.migrationFinalized || status.member.blacklisted || !decimalGreaterThanZero(status.wallet.bnbBalance)) return true;
+  const cycleStatus = status.cycle?.status || 0;
+  if (cycleStatus === 1) return compareAmounts(cycleAmount.value, status.member.availablePrincipal) > 0 && compareAmounts(cycleAmount.value, status.member.cyclePrincipal) > 0;
+  if ([2,3,4].includes(cycleStatus)) return compareAmounts(cycleAmount.value, status.member.cyclePrincipal) > 0;
+  return true;
 });
 const depositButtonLabel = computed(() => {
   if (vaultSubmitting.value === "deposit") return needsDepositApproval.value ? "正在授权并存入…" : "正在存入…";
@@ -505,6 +535,30 @@ async function submitWithdraw():Promise<void> {
   } finally { vaultSubmitting.value = ""; }
 }
 
+async function submitCycleAction(action:"join"|"leave"|"request-exit"):Promise<void> {
+  if (cycleActionDisabled.value || !vaultStatus.value?.cycle) return;
+  const amount = requestAmount(cycleAmount.value);
+  const labels = action === "join"
+    ? { title:"确认加入周期", action:"加入", path:"join-cycle" }
+    : action === "leave"
+      ? { title:"确认退出募集", action:"退出募集", path:"leave-cycle" }
+      : { title:"确认周期后退出", action:"登记周期结束后退出", path:"request-exit" };
+  try {
+    await ElMessageBox.confirm(`${labels.action} ${amount} USDT 本金，周期 #${vaultStatus.value.vault.currentCycleId}？`, labels.title, {
+      type:"warning", confirmButtonText:"确认执行", cancelButtonText:"取消",
+    });
+  } catch { return; }
+  vaultSubmitting.value = action;
+  try {
+    const result = await requestVaultJson<{txHash:string}>(`/api/polymarket/vault/${labels.path}`, { method:"POST", body:JSON.stringify({amount}) });
+    ElMessage.success(`${labels.action}已确认：${shortHash(result.txHash)}`);
+    cycleAmount.value = "";
+    await loadVaultStatus();
+  } catch (reason) {
+    ElMessage.error(errorText(reason));
+  } finally { vaultSubmitting.value = ""; }
+}
+
 async function requestVaultJson<T>(url:string, init:RequestInit={}):Promise<T> {
   const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
   const headers = new Headers(init.headers);
@@ -519,6 +573,9 @@ async function requestVaultJson<T>(url:string, init:RequestInit={}):Promise<T> {
 
 function setMaximumDeposit():void { depositAmount.value = trimAmount(vaultStatus.value?.wallet.usdtBalance || ""); }
 function setMaximumWithdraw():void { withdrawAmount.value = trimAmount(vaultStatus.value?.member.availablePrincipal || ""); }
+function setMaximumCycleAmount(source:"available"|"cycle"):void {
+  cycleAmount.value = trimAmount(source === "available" ? vaultStatus.value?.member.availablePrincipal || "" : vaultStatus.value?.member.cyclePrincipal || "");
+}
 function normalizeAmount(value:string):string {
   const source=String(value||"").replace(/,/g,"").replace(/[^\d.]/g,"");
   const [integer="",...parts]=source.split(".");
@@ -553,9 +610,7 @@ function formatToken(value:string):string {
   return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g,",")}${decimals?`.${decimals}`:""}`;
 }
 function formatReturn(bps:number):string { return `${(Number(bps||0)/100).toFixed(2)}%`; }
-function shortAddress(value:string):string { return /^0x[\da-f]{40}$/i.test(value) ? `${value.slice(0,6)}…${value.slice(-4)}` : value||"--"; }
 function shortHash(value:string):string { return /^0x[\da-f]{64}$/i.test(value) ? `${value.slice(0,10)}…${value.slice(-6)}` : value||"--"; }
-function addressUrl(value:string):string { return `https://bscscan.com/address/${encodeURIComponent(value)}`; }
 function errorText(reason:unknown):string { return reason instanceof Error ? reason.message : "交易失败，请稍后重试"; }
 
 function formatUsd(value:number):string { return new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",notation:"compact",maximumFractionDigits:2}).format(value || 0); }
