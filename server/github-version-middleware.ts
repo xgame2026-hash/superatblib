@@ -167,9 +167,9 @@ function readPackageVersion(): string {
   try {
     const source = existsSync(PACKAGE_FILE) ? readFileSync(PACKAGE_FILE, "utf8") : "{}";
     const payload = JSON.parse(source) as { version?: string };
-    return payload.version ?? "1.6.7";
+    return payload.version ?? "1.6.8";
   } catch {
-    return "1.6.7";
+    return "1.6.8";
   }
 }
 

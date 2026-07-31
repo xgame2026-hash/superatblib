@@ -1,0 +1,70 @@
+--- server.mjs
++++ server.mjs
+@@ -3,6 +3,7 @@
+ import http from 'node:http'
+ import crypto from 'node:crypto'
+ import { readFileSync } from 'node:fs'
++import { isIP } from 'node:net'
+ import pg from 'pg'
+ 
+ const { Pool } = pg
+@@ -328,6 +329,7 @@
+ 
+ async function heartbeatLiq2(req, body) {
+   const walletAddress = normalizeWalletAddress(body.walletAddress)
++  const clientIp = requestClientIp(req)
+   const appToken = requestAppToken(req, body)
+   const clientVersion = String(body.clientVersion || '').trim().slice(0, 32)
+   const protocolVersion = String(body.protocolVersion || '').trim().slice(0, 80)
+@@ -366,10 +368,11 @@
+     `INSERT INTO public.wallet_presence
+        (wallet_id, reported_status, online_status, client_version, protocol_version,
+         heartbeat_at, online_since, offline_at, updated_at,
+-        execution_status, execution_chain, execution_market, execution_started_at, execution_updated_at)
++        execution_status, execution_chain, execution_market, execution_started_at, execution_updated_at,
++        client_ip, client_ip_updated_at)
+      VALUES ($1,$2,$2,$3,$4,now(),CASE WHEN $2 = 'online' THEN now() ELSE NULL END,
+              CASE WHEN $2 = 'offline' THEN now() ELSE NULL END,now(),$5,$6,$7,
+-             CASE WHEN $5 = 'running' THEN now() ELSE NULL END,now())
++             CASE WHEN $5 = 'running' THEN now() ELSE NULL END,now(),$8::inet,CASE WHEN $8 IS NOT NULL THEN now() ELSE NULL END)
+      ON CONFLICT (wallet_id) DO UPDATE SET
+        reported_status = EXCLUDED.reported_status,
+        online_status = EXCLUDED.online_status,
+@@ -393,8 +396,11 @@
+        END,
+        execution_updated_at = now(),
++       client_ip = COALESCE(EXCLUDED.client_ip, public.wallet_presence.client_ip),
++       client_ip_updated_at = CASE WHEN EXCLUDED.client_ip IS NOT NULL THEN now()
++         ELSE public.wallet_presence.client_ip_updated_at END,
+        updated_at = now()
+-     RETURNING heartbeat_at, online_status, updated_at`,
+-    [row.wallet_id, status, clientVersion, protocolVersion, executionStatus, executionChain, executionMarket],
++     RETURNING heartbeat_at, online_status, client_ip, updated_at`,
++    [row.wallet_id, status, clientVersion, protocolVersion, executionStatus, executionChain, executionMarket, clientIp],
+   )
+   const presence = result.rows[0]
+   return {
+@@ -404,6 +411,7 @@
+     walletAddress,
+     username: row.username,
+     status: presence.online_status,
++    clientIp: presence.client_ip,
+     heartbeatAt: presence.heartbeat_at,
+     heartbeatTimeoutSeconds: Math.round(heartbeatTimeoutMs / 1000),
+   }
+@@ -435,6 +443,15 @@
+   return rows.length
+ }
+ 
++function requestClientIp(req) {
++  // privateapi only listens on loopback. Nginx overwrites X-Real-IP after its
++  // Cloudflare real-ip module accepts CF-Connecting-IP from trusted ranges.
++  // Never accept a clientIp value from the JSON body.
++  const raw = String(req.headers['x-real-ip'] || '').trim()
++  const candidate = raw.startsWith('::ffff:') ? raw.slice(7) : raw
++  return candidate && isIP(candidate) ? candidate : null
++}
++
+ function requestAppToken(req, body) {
+   const header = String(req.headers['x-supermtnode-app-token'] || '').trim()
+   if (header) return header

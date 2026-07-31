@@ -1,0 +1,18 @@
+--- privateapi.superarb.ai.conf
++++ privateapi.superarb.ai.conf
+@@ -3,6 +3,7 @@
+     listen [::]:80;
+     server_name privateapi.superarb.ai;
+     client_max_body_size 2m;
++    include /etc/nginx/snippets/privateapi-cloudflare-real-ip.conf;
+ 
+     # Advanced-member only. All LIQ2 paths continue to the unchanged 8848 service below.
+     location = /pro/login {
+@@ -48,6 +49,7 @@
+     ssl_certificate /etc/letsencrypt/live/supermtglobal-bound/fullchain.pem;
+     ssl_certificate_key /etc/letsencrypt/live/supermtglobal-bound/privkey.pem;
+     client_max_body_size 2m;
++    include /etc/nginx/snippets/privateapi-cloudflare-real-ip.conf;
+ 
+     # Advanced-member only. All LIQ2 paths continue to the unchanged 8848 service below.
+     location = /pro/login {

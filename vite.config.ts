@@ -18,6 +18,8 @@ import { handleTxGraphRequest } from "./server/tx-graph-middleware";
 import { handleUpdateCompletionRequest } from "./server/update-completion-middleware";
 import { handleWalletAssetsRequest } from "./server/wallet-assets-middleware";
 import { handlePolymarketMarketRequest } from "./server/polymarket-market-middleware";
+import { handlePolymarketVaultRequest } from "./server/polymarket-vault-middleware";
+import { handlePolymarketPowerRequest } from "./server/polymarket-power-middleware";
 import { handleCrossExchangeMarketRequest } from "./server/cross-exchange-market-middleware";
 import { ENV_FILE, LIQ2_PROFILE, STATE_DIR, stateFile } from "./server/runtime-paths";
 
@@ -53,6 +55,8 @@ export default defineConfig(({ mode }) => {
           }
           if (
             !handleAvatarProfileRequest(req, res) &&
+            !handlePolymarketPowerRequest(req, res) &&
+            !handlePolymarketVaultRequest(req, res) &&
             !handlePolymarketMarketRequest(req, res) &&
             !handleCrossExchangeMarketRequest(req, res) &&
             !handleSlotsOrdersRequest(req, res) &&

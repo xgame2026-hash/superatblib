@@ -26,7 +26,7 @@ const USER_LEAVE_ACTIONS = ["pause", "logout"];
 const SYSTEM_LEAVE_ACTIONS = ["rpc-expired"];
 const STOP_ACTIONS = [...USER_LEAVE_ACTIONS, ...SYSTEM_LEAVE_ACTIONS];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.6.7";
+const CLIENT_VERSION = "1.6.8";
 const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";

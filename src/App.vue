@@ -425,7 +425,7 @@ const AUTOMATIC_UPDATE_ATTEMPTED_KEY = "liq2-automatic-update-attempted-v1";
 const GITHUB_VERSION_REFRESH_MS = 5 * 60 * 1000;
 const AUTOMATIC_UPDATE_POLL_MS = 2_000;
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.6.7";
+const appVersion = "1.6.8";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
@@ -1424,7 +1424,7 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.6.7 internal settings.",
+    "# Generated from SuperARB 1.6.8 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",
