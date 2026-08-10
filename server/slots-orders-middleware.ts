@@ -17,12 +17,26 @@ const BSC_SLOT_SALE_RPC_URL = "https://rpc.bscpro.supermtglobal.com";
 const BSC_XBCH_ADDRESS = "0xf4471c699c4b85f6eb804e7e4f200b05750670fd";
 const BSC_SLOT_SALE_ADDRESS = "0xdad780fe35145b7df68e63abb17a8118d1bdc5a0";
 const BSC_PANCAKE_V2_ROUTER_ADDRESS = "0x10ed43c718714eb63d5aa57b78b54704e256024e";
+const BSC_XBCH_PAIR_ADDRESS = "0xf6b1e74fb8b338cc3b427c1fe53a441ec0576c2e";
 const BSC_APPROVE_SELECTOR = "0x095ea7b3";
 const BSC_BALANCE_OF_SELECTOR = "0x70a08231";
 const BSC_QUOTE_BUY_SELECTOR = "0x4beb394c";
 const BSC_BUY_SELECTOR = "0x8945257c";
-const BSC_GET_AMOUNTS_OUT_SELECTOR = "0xd06ca61f";
-const BSC_SWAP_EXACT_TOKENS_SELECTOR = "0x38ed1739";
+// xBCH charges transfer burns. Pancake's ordinary swapExactTokensForTokens
+// assumes the complete input reaches the pair and therefore reverts with
+// `Pancake: K` when xBCH is sold. This fee-aware router entry point measures
+// the actual pair input instead.
+const BSC_SWAP_EXACT_TOKENS_SUPPORTING_FEE_SELECTOR = "0x5c11d795";
+const BSC_XBCH_PAIR_SELECTOR = "0xa8aa1b31";
+const BSC_XBCH_USDT_SELECTOR = "0x2f48ab7d";
+const BSC_XBCH_SELL_BURN_BPS_SELECTOR = "0xbf1be3ac";
+const BSC_XBCH_PROFIT_BURN_BPS_SELECTOR = "0xd881edcf";
+const BSC_XBCH_AMM_FEE_BPS_SELECTOR = "0x649be0e3";
+const BSC_XBCH_COST_BASIS_USDT_SELECTOR = "0xa8b2edde";
+const BSC_XBCH_FEE_EXEMPT_SELECTOR = "0x398daa85";
+const BSC_PAIR_TOKEN0_SELECTOR = "0x0dfe1681";
+const BSC_PAIR_TOKEN1_SELECTOR = "0xd21220a7";
+const BSC_PAIR_RESERVES_SELECTOR = "0x0902f1ac";
 const BSC_CHAIN_ID_HEX = "0x38";
 const DEFAULT_PURCHASE_SLIPPAGE_BPS = 100n;
 const MIN_PURCHASE_SLIPPAGE_BPS = 10n;
@@ -100,6 +114,16 @@ type RpcReceipt = {
 } | null;
 
 type SwapDirection = "usdt_to_xbch" | "xbch_to_usdt";
+
+type FeeAwareSwapQuote = {
+  amountOutRaw: bigint;
+  pairInputRaw: bigint;
+  baseSellBurnRaw: bigint;
+  profitSellBurnRaw: bigint;
+  sellBurnBps: bigint;
+  profitBurnBps: bigint;
+  ammFeeBps: bigint;
+};
 
 const onChainOrderAmountCache = new Map<string, string>();
 const rewardProofCache = new Map<string, { verified: boolean; checkedAt: number }>();
@@ -261,8 +285,11 @@ async function quoteXbchSwap(body: JsonRecord) {
   const toAddress = sellingXbch ? BSC_USDT_ADDRESS : BSC_XBCH_ADDRESS;
   const fromSymbol = sellingXbch ? "xBCH" : "USDT";
   const toSymbol = sellingXbch ? "USDT" : "xBCH";
-  const quoteRaw = sellingXbch
-    ? await pancakeAmountsOut(paymentRaw)
+  const feeAwareQuote = sellingXbch
+    ? await feeAwarePancakeAmountsOut(walletAddress, paymentRaw)
+    : null;
+  const quoteRaw = feeAwareQuote
+    ? feeAwareQuote.amountOutRaw
     : hexTokenAmount(await rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{
       to: BSC_SLOT_SALE_ADDRESS,
       data: `${BSC_QUOTE_BUY_SELECTOR}${encodeUint256(paymentRaw)}`,
@@ -272,7 +299,7 @@ async function quoteXbchSwap(body: JsonRecord) {
   const deadline = Math.floor(Date.now() / 1000) + 20 * 60;
   const router = sellingXbch ? BSC_PANCAKE_V2_ROUTER_ADDRESS : BSC_SLOT_SALE_ADDRESS;
   const executionData = sellingXbch
-    ? `${BSC_SWAP_EXACT_TOKENS_SELECTOR}${encodeUint256(paymentRaw)}${encodeUint256(minXbchRaw)}${encodeUint256(160n)}${encodeAddress(walletAddress)}${encodeUint256(BigInt(deadline))}${encodeUint256(2n)}${encodeAddress(BSC_XBCH_ADDRESS)}${encodeAddress(BSC_USDT_ADDRESS)}`
+    ? `${BSC_SWAP_EXACT_TOKENS_SUPPORTING_FEE_SELECTOR}${encodeUint256(paymentRaw)}${encodeUint256(minXbchRaw)}${encodeUint256(160n)}${encodeAddress(walletAddress)}${encodeUint256(BigInt(deadline))}${encodeUint256(2n)}${encodeAddress(BSC_XBCH_ADDRESS)}${encodeAddress(BSC_USDT_ADDRESS)}`
     : `${BSC_BUY_SELECTOR}${encodeUint256(paymentRaw)}${encodeUint256(minXbchRaw)}${encodeAddress(walletAddress)}${encodeUint256(BigInt(deadline))}`;
   return {
     ok: true,
@@ -293,6 +320,15 @@ async function quoteXbchSwap(body: JsonRecord) {
       approvalData: `${BSC_APPROVE_SELECTOR}${encodeAddress(router)}${encodeUint256(paymentRaw)}`,
       executionData,
       deadline,
+      feeBreakdown: feeAwareQuote ? {
+        pairInput: formatTokenAmount(feeAwareQuote.pairInputRaw, 18),
+        baseSellBurn: formatTokenAmount(feeAwareQuote.baseSellBurnRaw, 18),
+        profitSellBurn: formatTokenAmount(feeAwareQuote.profitSellBurnRaw, 18),
+        totalXbchBurn: formatTokenAmount(feeAwareQuote.baseSellBurnRaw + feeAwareQuote.profitSellBurnRaw, 18),
+        sellBurnBps: Number(feeAwareQuote.sellBurnBps),
+        profitBurnBps: Number(feeAwareQuote.profitBurnBps),
+        ammFeeBps: Number(feeAwareQuote.ammFeeBps),
+      } : undefined,
     },
   };
 }
@@ -360,14 +396,86 @@ async function confirmXbchSwap(body: JsonRecord) {
   };
 }
 
-async function pancakeAmountsOut(amountIn: bigint): Promise<bigint> {
-  const raw = await rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{
-    to: BSC_PANCAKE_V2_ROUTER_ADDRESS,
-    data: `${BSC_GET_AMOUNTS_OUT_SELECTOR}${encodeUint256(amountIn)}${encodeUint256(64n)}${encodeUint256(2n)}${encodeAddress(BSC_XBCH_ADDRESS)}${encodeAddress(BSC_USDT_ADDRESS)}`,
-  }, "latest"]);
-  const normalized = String(raw).replace(/^0x/, "");
-  if (!/^[0-9a-f]+$/i.test(normalized) || normalized.length < 192) throw new SlotsApiError(502, "SWAP_QUOTE_UNAVAILABLE", "PancakeSwap 未返回有效报价。");
-  return BigInt(`0x${normalized.slice(-64)}`);
+async function feeAwarePancakeAmountsOut(walletAddress: string, amountIn: bigint): Promise<FeeAwareSwapQuote> {
+  // Do not use Router.getAmountsOut for an xBCH sell: that view call has no
+  // knowledge of xBCH's transfer burn and overstates what reaches the pair.
+  const [pairRaw, configuredUsdtRaw] = await Promise.all([
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: BSC_XBCH_PAIR_SELECTOR }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: BSC_XBCH_USDT_SELECTOR }, "latest"]),
+  ]);
+  const pairAddress = decodeAbiAddress(pairRaw);
+  const configuredUsdt = decodeAbiAddress(configuredUsdtRaw);
+  if (pairAddress !== BSC_XBCH_PAIR_ADDRESS || configuredUsdt !== BSC_USDT_ADDRESS) {
+    throw new SlotsApiError(502, "SWAP_POOL_CONFIGURATION_MISMATCH", "xBCH 链上兑换池配置异常，已停止创建交易。");
+  }
+
+  const [token0Raw, token1Raw, reservesRaw, sellBurnRaw, profitBurnRaw, ammFeeRaw, walletExemptRaw, pairExemptRaw, costBasisRaw, walletBalanceRaw] = await Promise.all([
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: pairAddress, data: BSC_PAIR_TOKEN0_SELECTOR }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: pairAddress, data: BSC_PAIR_TOKEN1_SELECTOR }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: pairAddress, data: BSC_PAIR_RESERVES_SELECTOR }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: BSC_XBCH_SELL_BURN_BPS_SELECTOR }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: BSC_XBCH_PROFIT_BURN_BPS_SELECTOR }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: BSC_XBCH_AMM_FEE_BPS_SELECTOR }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: `${BSC_XBCH_FEE_EXEMPT_SELECTOR}${encodeAddress(walletAddress)}` }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: `${BSC_XBCH_FEE_EXEMPT_SELECTOR}${encodeAddress(pairAddress)}` }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: `${BSC_XBCH_COST_BASIS_USDT_SELECTOR}${encodeAddress(walletAddress)}` }, "latest"]),
+    rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{ to: BSC_XBCH_ADDRESS, data: `${BSC_BALANCE_OF_SELECTOR}${encodeAddress(walletAddress)}` }, "latest"]),
+  ]);
+
+  if (decodeAbiAddress(token0Raw) !== BSC_USDT_ADDRESS || decodeAbiAddress(token1Raw) !== BSC_XBCH_ADDRESS) {
+    throw new SlotsApiError(502, "SWAP_PAIR_TOKEN_MISMATCH", "xBCH 兑换池代币配置异常，已停止创建交易。");
+  }
+  const [reserveUsdt, reserveXbch] = decodeReserves(reservesRaw);
+  const sellBurnBps = hexTokenAmount(sellBurnRaw);
+  const profitBurnBps = hexTokenAmount(profitBurnRaw);
+  const ammFeeBps = hexTokenAmount(ammFeeRaw);
+  if (reserveUsdt <= 0n || reserveXbch <= 0n || sellBurnBps >= PURCHASE_BPS_DENOMINATOR || profitBurnBps >= PURCHASE_BPS_DENOMINATOR || ammFeeBps >= PURCHASE_BPS_DENOMINATOR) {
+    throw new SlotsApiError(502, "SWAP_POOL_STATE_INVALID", "xBCH 兑换池状态异常，已停止创建交易。");
+  }
+
+  const feeExempt = hexTokenAmount(walletExemptRaw) > 0n || hexTokenAmount(pairExemptRaw) > 0n;
+  // xBCH may apply an additional, wallet-specific profit burn on a sell.  The
+  // quoted amount below therefore models the amount that actually reaches the
+  // Pancake pair, rather than pretending the fixed sell burn is the only fee.
+  let pairInput = amountIn;
+  let baseSellBurnRaw = 0n;
+  let profitSellBurnRaw = 0n;
+  if (!feeExempt) {
+    baseSellBurnRaw = amountIn * sellBurnBps / PURCHASE_BPS_DENOMINATOR;
+    pairInput -= baseSellBurnRaw;
+    const walletBalance = hexTokenAmount(walletBalanceRaw);
+    const costBasisUsdt = hexTokenAmount(costBasisRaw);
+    if (walletBalance > 0n && pairInput > 0n && costBasisUsdt > 0n) {
+      const allocatedCost = costBasisUsdt * amountIn / walletBalance;
+      const estimatedUsdt = constantProductAmountOut(pairInput, reserveXbch, reserveUsdt, ammFeeBps);
+      if (estimatedUsdt > allocatedCost) {
+        const profitTokens = (estimatedUsdt - allocatedCost) * pairInput / estimatedUsdt;
+        profitSellBurnRaw = profitTokens * profitBurnBps / PURCHASE_BPS_DENOMINATOR;
+        pairInput -= profitSellBurnRaw;
+      }
+    }
+  }
+  const output = constantProductAmountOut(pairInput, reserveXbch, reserveUsdt, ammFeeBps);
+  if (output <= 0n) throw new SlotsApiError(502, "SWAP_QUOTE_UNAVAILABLE", "暂时无法获取 USDT 链上报价。");
+  return { amountOutRaw: output, pairInputRaw: pairInput, baseSellBurnRaw, profitSellBurnRaw, sellBurnBps, profitBurnBps, ammFeeBps };
+}
+
+function constantProductAmountOut(amountIn: bigint, reserveIn: bigint, reserveOut: bigint, ammFeeBps: bigint): bigint {
+  if (amountIn <= 0n || reserveIn <= 0n || reserveOut <= 0n) return 0n;
+  const amountInAfterFee = amountIn * (PURCHASE_BPS_DENOMINATOR - ammFeeBps);
+  return amountInAfterFee * reserveOut / (reserveIn * PURCHASE_BPS_DENOMINATOR + amountInAfterFee);
+}
+
+function decodeAbiAddress(value: unknown): string {
+  const normalized = String(value || "").toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]{64}$/.test(normalized)) throw new SlotsApiError(502, "SWAP_CHAIN_RESPONSE_INVALID", "链上兑换池返回了无效地址。");
+  return `0x${normalized.slice(-40)}`;
+}
+
+function decodeReserves(value: unknown): [bigint, bigint] {
+  const normalized = String(value || "").replace(/^0x/, "");
+  if (!/^[0-9a-f]+$/i.test(normalized) || normalized.length < 128) throw new SlotsApiError(502, "SWAP_CHAIN_RESPONSE_INVALID", "链上兑换池未返回有效储备量。");
+  return [BigInt(`0x${normalized.slice(0, 64)}`), BigInt(`0x${normalized.slice(64, 128)}`)];
 }
 
 function swapDirection(value: unknown): SwapDirection {

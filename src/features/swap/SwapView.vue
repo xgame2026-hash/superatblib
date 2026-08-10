@@ -57,6 +57,11 @@
             <div><dt>支付</dt><dd>{{ quote.amountIn }} {{ quote.fromSymbol }}</dd></div>
             <div><dt>最低获得</dt><dd>{{ formatAmount(quote.minReceive) }} {{ quote.toSymbol }}</dd></div>
             <div><dt>最大滑点</dt><dd>{{ formatBps(quote.slippageBps) }}</dd></div>
+            <template v-if="quote.feeBreakdown">
+              <div><dt>xBCH 基础卖出销毁</dt><dd>{{ formatAmount(quote.feeBreakdown.baseSellBurn) }} xBCH（{{ formatBps(quote.feeBreakdown.sellBurnBps) }}）</dd></div>
+              <div><dt>xBCH 盈利销毁</dt><dd>{{ formatAmount(quote.feeBreakdown.profitSellBurn) }} xBCH（{{ formatBps(quote.feeBreakdown.profitBurnBps) }}）</dd></div>
+              <div><dt>实际进入交易池</dt><dd>{{ formatAmount(quote.feeBreakdown.pairInput) }} xBCH</dd></div>
+            </template>
           </dl>
         </template>
         <p v-else-if="quoteLoading">正在读取链上的实时兑换报价…</p>
@@ -95,6 +100,15 @@ type SwapQuote = {
   outputTokenAddress: string;
   approvalData: string;
   executionData: string;
+  feeBreakdown?: {
+    pairInput: string;
+    baseSellBurn: string;
+    profitSellBurn: string;
+    totalXbchBurn: string;
+    sellBurnBps: number;
+    profitBurnBps: number;
+    ammFeeBps: number;
+  };
 };
 type SwapQuotePayload = { ok?: boolean; walletAddress?: string; swap?: SwapQuote; error?: string };
 type SwapResult = { txHash: string; amountIn: string; amountOut: string; fromSymbol: "USDT" | "xBCH"; toSymbol: "USDT" | "xBCH" };
@@ -236,7 +250,12 @@ async function executeSwap() {
     await loadBalances();
   } catch (error) {
     const candidate = error as { code?: number; message?: string };
-    swapError.value = candidate?.code === 4001 ? "已在钱包中取消交易。" : (error instanceof Error ? error.message : "兑换失败，请稍后重试。");
+    const message = error instanceof Error ? error.message : "兑换失败，请稍后重试。";
+    swapError.value = candidate?.code === 4001
+      ? "已在钱包中取消交易。"
+      : /Pancake:\s*K/i.test(message)
+        ? "兑换池状态已变化，请刷新报价后重试；若持续出现，请联系支持并附上交易哈希。"
+        : message;
   } finally {
     swapping.value = false;
     swapStatus.value = "处理中...";
@@ -281,9 +300,7 @@ async function readTokenAllowance(provider: Eip1193Provider, owner: string, toke
 }
 
 async function sendTransaction(provider: Eip1193Provider, transaction: { from: string; to: string; data: string }): Promise<string> {
-  // Use Reown's documented Ethers bridge rather than manually issuing
-  // eth_sendTransaction. This preserves WalletConnect session semantics across
-  // QR/mobile wallets and exposes the normalized TransactionResponse hash.
+  // Reown's Ethers bridge normalizes transaction responses for QR/mobile wallets.
   const ethersProvider = new BrowserProvider(provider);
   const signer = await ethersProvider.getSigner(transaction.from);
   const response = await signer.sendTransaction({ to: transaction.to, data: transaction.data });
