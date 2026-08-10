@@ -34,13 +34,6 @@
   opacity: 0.58;
 }
 
-.slots-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.slots-summary article,
 .order-slot,
 .slots-empty,
 .slots-loading,
@@ -61,14 +54,6 @@
   padding: 12px;
 }
 
-.slots-summary article {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-}
-
-.slots-summary span,
-.slots-summary small,
 .slots-toolbar label > span,
 .slots-sync-meta span,
 .slots-sync-meta small,
@@ -80,10 +65,294 @@
   font-weight: 800;
 }
 
-.slots-summary strong {
+.slot-purchase-panel {
+  display: grid;
+  gap: 18px;
+  border: 1px solid rgba(174, 126, 255, 0.22);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(39, 215, 255, 0.08), transparent 36%),
+    rgba(14, 11, 24, 0.76);
+  padding: 20px;
+}
+
+.slot-purchase-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.slot-purchase-heading h3 {
+  margin: 3px 0 0;
+  color: #f7f2ff;
+  font-size: 20px;
+}
+
+.slot-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.slot-plan-grid article {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(174, 126, 255, 0.16);
+  border-radius: 9px;
+  background: rgba(26, 21, 39, 0.74);
+  padding: 13px 14px;
+}
+
+.slot-plan-grid article.active {
+  border-color: rgba(39, 215, 255, 0.6);
+  background: linear-gradient(135deg, rgba(39, 215, 255, 0.13), rgba(168, 85, 247, 0.11));
+  box-shadow: inset 0 0 22px rgba(39, 215, 255, 0.04);
+}
+
+.slot-plan-grid strong {
   color: #f3eefe;
-  font-size: 24px;
+  font-size: 15px;
+}
+
+.slot-plan-grid span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.slot-purchase-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  border-top: 1px solid rgba(174, 126, 255, 0.12);
+  padding-top: 18px;
+}
+
+.slot-purchase-capacity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  border: 1px solid rgba(174, 126, 255, 0.16);
+  border-radius: 9px;
+  background: rgba(26, 21, 39, 0.48);
+  padding: 14px;
+}
+
+.slot-purchase-copy {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.slot-purchase-capacity span,
+.slot-purchase-total span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.slot-purchase-capacity strong {
+  color: #f3eefe;
+  font-size: 17px;
   font-weight: 900;
+}
+
+.slot-purchase-capacity small {
+  color: #8bdff3;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.slot-purchase-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(92px, 1fr));
+  min-width: 330px;
+  border-left: 1px solid rgba(174, 126, 255, 0.16);
+}
+
+.slot-purchase-metrics > div {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 2px 15px;
+  text-align: center;
+}
+
+.slot-purchase-metrics > div + div {
+  border-left: 1px solid rgba(174, 126, 255, 0.14);
+}
+
+.slot-purchase-metrics span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.slot-purchase-metrics strong {
+  color: #f3eefe;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.slot-purchase-metrics .is-available strong {
+  color: #8bdff3;
+}
+
+.slot-purchase-form {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(39, 215, 255, 0.28);
+  border-radius: 9px;
+  background: rgba(7, 33, 48, 0.32);
+  padding: 13px;
+}
+
+.slot-purchase-form > div:first-child {
+  display: grid;
+  flex: 1;
+  gap: 5px;
+}
+
+.slot-purchase-form span,
+.slot-purchase-form small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.slot-purchase-form strong {
+  color: #f3eefe;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.slot-purchase-actions {
+  display: flex;
+  align-items: end;
+  min-width: 360px;
+  gap: 9px;
+}
+
+.slot-purchase-slippage {
+  display: grid;
+  gap: 7px;
+  min-width: 310px;
+}
+
+.slot-purchase-slippage span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.slot-slippage-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(54px, 1fr));
+  gap: 6px;
+}
+
+.slot-slippage-options button,
+.slot-custom-slippage {
+  min-height: 40px;
+  border: 1px solid rgba(174, 126, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(14, 11, 24, 0.78);
+  color: #dcd3f5;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.slot-slippage-options button {
+  cursor: pointer;
+}
+
+.slot-slippage-options button.active {
+  border-color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.12);
+  color: #8bdff3;
+}
+
+.slot-slippage-options button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.slot-custom-slippage {
+  width: 100%;
+  padding: 8px 10px;
+}
+
+.slot-purchase-quantity {
+  width: 82px;
+  border: 1px solid rgba(174, 126, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(14, 11, 24, 0.78);
+  color: #f3eefe;
+  font: inherit;
+  font-weight: 800;
+  padding: 8px 9px;
+}
+
+.slot-purchase-actions .slot-purchase-button {
+  flex: 1;
+}
+
+.slot-purchase-button {
+  min-height: 40px;
+  border: 1px solid rgba(168, 85, 247, 0.62);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 10px 16px;
+}
+
+.slot-purchase-button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.4);
+  opacity: 0.48;
+}
+
+.slot-purchase-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: 8px;
+  background: rgba(6, 78, 59, 0.14);
+  color: #a7f3d0;
+  font-size: 12px;
+  padding: 11px 13px;
+}
+
+.slot-purchase-result strong {
+  color: #6ee7b7;
+  font-size: 14px;
+}
+
+.slot-purchase-result a {
+  margin-left: auto;
+  color: #8bdff3;
+  font-weight: 900;
+}
+
+.slot-purchase-error {
+  grid-column: 1 / -1;
+  border: 1px solid rgba(248, 113, 113, 0.38);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.16);
+  color: #fecaca;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 10px 12px;
 }
 
 .slots-toolbar {
@@ -138,13 +407,18 @@
 .slots-loading,
 .slots-empty {
   display: flex;
-  min-height: 180px;
+  min-height: 72px;
   align-items: center;
   justify-content: center;
   gap: 10px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 800;
+}
+
+.slots-empty {
+  border-style: dashed;
+  background: rgba(14, 11, 24, 0.42);
 }
 
 .slots-spinner {
@@ -463,10 +737,39 @@
 }
 
 @media (max-width: 760px) {
-  .slots-summary,
   .slots-toolbar,
-  .slots-grid {
+  .slots-grid,
+  .slot-plan-grid,
+  .slot-purchase-controls {
     grid-template-columns: 1fr;
+  }
+
+  .slot-purchase-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .slot-purchase-capacity,
+  .slot-purchase-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .slot-purchase-metrics {
+    min-width: 0;
+    border-top: 1px solid rgba(174, 126, 255, 0.16);
+    border-left: 0;
+    padding-top: 12px;
+  }
+
+  .slot-purchase-actions {
+    min-width: 0;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .slot-purchase-slippage {
+    min-width: 0;
   }
 
   .slots-heading,

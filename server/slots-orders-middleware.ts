@@ -1,18 +1,33 @@
-import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Wallet, id } from "ethers";
 import { ENV_FILE } from "./runtime-paths";
+import { SLOT_UNIT_PRICE_USDT, slotPurchasePolicy } from "./slot-purchase-policy";
 
 const PRIVATE_ARB_WALLET_ACTIVITY_URL = "https://privateapi.superarb.ai/wallet-activity";
+const LIQ2_SLOT_ORDERS_URL = "https://privateapi.superarb.ai/v1/liq2/slot-orders";
 const DEFAULT_TX2_TREASURY_CONFIG_PATH = "/api/private-member/treasury-compensation-config";
 const UPSTREAM_PAGE_SIZE = 200;
 const MAX_ORDERS = 2_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 const BSC_USDT_ADDRESS = "0x55d398326f99059ff775485246999027b3197955";
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-const COMPENSATION_PAID_OUT_TOPIC = id("CompensationPaidOut(bytes32,address,uint256,address)").toLowerCase();
+const COMPENSATION_PAID_OUT_TOPIC = "0x600fc69be5582278ca13137bc99851a3ae6d747d578dbf1d7147057ebd1b51f7";
 const BSC_PUBLIC_RPC_URL = "https://bsc-dataseed.binance.org";
+const BSC_SLOT_SALE_RPC_URL = "https://rpc.bscpro.supermtglobal.com";
+const BSC_XBCH_ADDRESS = "0xf4471c699c4b85f6eb804e7e4f200b05750670fd";
+const BSC_SLOT_SALE_ADDRESS = "0xdad780fe35145b7df68e63abb17a8118d1bdc5a0";
+const BSC_PANCAKE_V2_ROUTER_ADDRESS = "0x10ed43c718714eb63d5aa57b78b54704e256024e";
+const BSC_APPROVE_SELECTOR = "0x095ea7b3";
+const BSC_BALANCE_OF_SELECTOR = "0x70a08231";
+const BSC_QUOTE_BUY_SELECTOR = "0x4beb394c";
+const BSC_BUY_SELECTOR = "0x8945257c";
+const BSC_GET_AMOUNTS_OUT_SELECTOR = "0xd06ca61f";
+const BSC_SWAP_EXACT_TOKENS_SELECTOR = "0x38ed1739";
+const BSC_CHAIN_ID_HEX = "0x38";
+const DEFAULT_PURCHASE_SLIPPAGE_BPS = 100n;
+const MIN_PURCHASE_SLIPPAGE_BPS = 10n;
+const MAX_PURCHASE_SLIPPAGE_BPS = 500n;
+const PURCHASE_BPS_DENOMINATOR = 10_000n;
 const ON_CHAIN_AMOUNT_CONCURRENCY = 5;
 const TREASURY_POOL_CACHE_MS = 5 * 60_000;
 
@@ -63,18 +78,28 @@ type SlotOrder = {
   createdAt: string;
   updatedAt: string;
   explorerUrl: string;
+  slotCount: number;
+};
+
+type Liq2Profile = {
+  rpcPlanType: string;
+  rpcPlanName: string;
 };
 
 type RpcLog = {
   address?: string;
-  topics?: unknown;
+  topics?: unknown[];
   data?: string;
+  blockTimestamp?: string;
 };
 
 type RpcReceipt = {
   status?: string;
+  blockNumber?: string;
   logs?: RpcLog[];
 } | null;
+
+type SwapDirection = "usdt_to_xbch" | "xbch_to_usdt";
 
 const onChainOrderAmountCache = new Map<string, string>();
 const rewardProofCache = new Map<string, { verified: boolean; checkedAt: number }>();
@@ -89,29 +114,66 @@ class SlotsApiError extends Error {
 
 export function handleSlotsOrdersRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const pathname = requestPathname(req.url);
-  if (pathname !== "/api/slots/orders") return false;
+  if (!["/api/slots/orders", "/api/slots/purchase-quote", "/api/slots/purchase-confirm", "/api/swap/quote", "/api/swap/confirm", "/api/swap/balances"].includes(pathname)) return false;
 
-  if (req.method !== "GET") {
+  if (pathname === "/api/slots/orders" && req.method === "GET") {
+    void loadSlotsOrders(req)
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((error: unknown) => sendError(res, error));
+    return true;
+  }
+  if (pathname === "/api/slots/purchase-quote" && req.method === "POST") {
+    void readRequestJson(req)
+      .then((body) => quoteSlotPurchase(body))
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((error: unknown) => sendError(res, error));
+    return true;
+  }
+  if (pathname === "/api/slots/purchase-confirm" && req.method === "POST") {
+    void readRequestJson(req)
+      .then((body) => confirmSlotPurchase(body))
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((error: unknown) => sendError(res, error));
+    return true;
+  }
+  if (pathname === "/api/swap/quote" && req.method === "POST") {
+    void readRequestJson(req)
+      .then((body) => quoteXbchSwap(body))
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((error: unknown) => sendError(res, error));
+    return true;
+  }
+  if (pathname === "/api/swap/confirm" && req.method === "POST") {
+    void readRequestJson(req)
+      .then((body) => confirmXbchSwap(body))
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((error: unknown) => sendError(res, error));
+    return true;
+  }
+  if (pathname === "/api/swap/balances" && req.method === "GET") {
+    void loadSwapBalances()
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((error: unknown) => sendError(res, error));
+    return true;
+  }
+  {
     sendJson(res, 405, { ok: false, code: "METHOD_NOT_ALLOWED", error: "Method not allowed." });
     return true;
   }
-
-  void loadSlotsOrders(req)
-    .then((payload) => sendJson(res, 200, payload))
-    .catch((error: unknown) => sendError(res, error));
-  return true;
 }
 
 async function loadSlotsOrders(req: IncomingMessage) {
   const requestUrl = new URL(req.url || "/api/slots/orders", "http://127.0.0.1");
   if (requestUrl.searchParams.has("walletAddress") || requestUrl.searchParams.has("username")) {
-    throw new SlotsApiError(400, "WALLET_OVERRIDE_FORBIDDEN", "钱包由本地 PRIVATE_KEY 确定，不能从页面指定。");
+    throw new SlotsApiError(400, "WALLET_OVERRIDE_FORBIDDEN", "钱包地址由系统自动读取，不能从页面指定。");
   }
 
   const env = readEnv();
-  requireAuthorizedReadRequest(req, env);
-  const walletAddress = walletAddressFromPrivateKey(env.PRIVATE_KEY);
-  const result = await fetchAllOrders(walletAddress, env, requestAuthCode(req));
+  const walletAddress = localWalletAddress(env);
+  const [result, profile] = await Promise.all([
+    fetchLiq2SlotOrders(walletAddress, env),
+    fetchLiq2Profile(walletAddress, env),
+  ]);
   const allSorted = [...result.orders].sort((left, right) => orderTimestamp(right) - orderTimestamp(left));
   const sorted = allSorted.slice(0, MAX_ORDERS);
   await enrichBscOrderAmounts(sorted, walletAddress, env);
@@ -123,39 +185,321 @@ async function loadSlotsOrders(req: IncomingMessage) {
     source: privateArbActivitySource(),
     walletAddress,
     summary: summarizeOrders(sorted),
+    purchase: slotPurchasePolicy({
+      ...env,
+      RPC_PLAN_TYPE: profile.rpcPlanType,
+      RPC_PLAN_NAME: profile.rpcPlanName,
+    }, purchasedSlotCount(allSorted)),
+    rpcPlan: profile,
     orders: sorted,
     truncated: result.truncated || allSorted.length > MAX_ORDERS,
     updatedAt: new Date().toISOString(),
   };
 }
 
+async function quoteSlotPurchase(body: JsonRecord) {
+  const quantity = positiveInteger(body.quantity);
+  if (quantity < 1 || quantity > 100) throw new SlotsApiError(400, "INVALID_SLOT_QUANTITY", "购买数量必须是 1 到 100 的整数。");
+  const slippageBps = purchaseSlippageBps(body.slippageBps);
+  const env = readEnv();
+  const walletAddress = localWalletAddress(env).toLowerCase();
+  const [ordersResult, profile] = await Promise.all([
+    fetchLiq2SlotOrders(walletAddress, env),
+    fetchLiq2Profile(walletAddress, env),
+  ]);
+  const policy = slotPurchasePolicy({ ...env, RPC_PLAN_TYPE: profile.rpcPlanType, RPC_PLAN_NAME: profile.rpcPlanName }, purchasedSlotCount(ordersResult.orders));
+  if (policy.maxSlots < 1 || quantity > policy.remainingSlots) {
+    throw new SlotsApiError(409, "SLOT_PLAN_LIMIT_REACHED", `当前 ${policy.planName} 套餐还可购买 ${policy.remainingSlots} 个卡槽。`);
+  }
+  const paymentRaw = BigInt(quantity) * BigInt(SLOT_UNIT_PRICE_USDT) * 10n ** 18n;
+  const quoteRaw = hexTokenAmount(await rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{
+    to: BSC_SLOT_SALE_ADDRESS,
+    data: `${BSC_QUOTE_BUY_SELECTOR}${encodeUint256(paymentRaw)}`,
+  }, "latest"]));
+  if (quoteRaw <= 0n) throw new SlotsApiError(502, "SLOT_PURCHASE_QUOTE_UNAVAILABLE", "暂时无法获取 xBCH 链上报价。");
+  const minXbchRaw = quoteRaw * (PURCHASE_BPS_DENOMINATOR - slippageBps) / PURCHASE_BPS_DENOMINATOR;
+  const deadline = Math.floor(Date.now() / 1000) + 20 * 60;
+  return {
+    ok: true,
+    walletAddress,
+    chainId: BSC_CHAIN_ID_HEX,
+    policy,
+    purchase: {
+      quantity,
+      usdtAmount: formatTokenAmount(paymentRaw, 18),
+      usdtAmountRaw: `0x${paymentRaw.toString(16)}`,
+      expectedXbch: formatTokenAmount(quoteRaw, 18),
+      minXbch: formatTokenAmount(minXbchRaw, 18),
+      slippageBps: Number(slippageBps),
+      saleAddress: BSC_SLOT_SALE_ADDRESS,
+      usdtAddress: BSC_USDT_ADDRESS,
+      xbchAddress: BSC_XBCH_ADDRESS,
+      approvalData: `${BSC_APPROVE_SELECTOR}${encodeAddress(BSC_SLOT_SALE_ADDRESS)}${encodeUint256(paymentRaw)}`,
+      buyData: `${BSC_BUY_SELECTOR}${encodeUint256(paymentRaw)}${encodeUint256(minXbchRaw)}${encodeAddress(walletAddress)}${encodeUint256(BigInt(deadline))}`,
+      deadline,
+    },
+  };
+}
+
+function purchaseSlippageBps(value: unknown): bigint {
+  if (value === undefined || value === null || value === "") return DEFAULT_PURCHASE_SLIPPAGE_BPS;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed < Number(MIN_PURCHASE_SLIPPAGE_BPS) || parsed > Number(MAX_PURCHASE_SLIPPAGE_BPS)) {
+    throw new SlotsApiError(400, "INVALID_PURCHASE_SLIPPAGE", "最大滑点仅支持 0.1% 到 5%。");
+  }
+  return BigInt(parsed);
+}
+
+async function quoteXbchSwap(body: JsonRecord) {
+  const direction = swapDirection(body.direction);
+  const paymentRaw = swapPaymentRaw(body.amount);
+  const slippageBps = purchaseSlippageBps(body.slippageBps);
+  const env = readEnv();
+  const walletAddress = localWalletAddress(env).toLowerCase();
+  const sellingXbch = direction === "xbch_to_usdt";
+  const fromAddress = sellingXbch ? BSC_XBCH_ADDRESS : BSC_USDT_ADDRESS;
+  const toAddress = sellingXbch ? BSC_USDT_ADDRESS : BSC_XBCH_ADDRESS;
+  const fromSymbol = sellingXbch ? "xBCH" : "USDT";
+  const toSymbol = sellingXbch ? "USDT" : "xBCH";
+  const quoteRaw = sellingXbch
+    ? await pancakeAmountsOut(paymentRaw)
+    : hexTokenAmount(await rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{
+      to: BSC_SLOT_SALE_ADDRESS,
+      data: `${BSC_QUOTE_BUY_SELECTOR}${encodeUint256(paymentRaw)}`,
+    }, "latest"]));
+  if (quoteRaw <= 0n) throw new SlotsApiError(502, "SWAP_QUOTE_UNAVAILABLE", `暂时无法获取 ${toSymbol} 链上报价。`);
+  const minXbchRaw = quoteRaw * (PURCHASE_BPS_DENOMINATOR - slippageBps) / PURCHASE_BPS_DENOMINATOR;
+  const deadline = Math.floor(Date.now() / 1000) + 20 * 60;
+  const router = sellingXbch ? BSC_PANCAKE_V2_ROUTER_ADDRESS : BSC_SLOT_SALE_ADDRESS;
+  const executionData = sellingXbch
+    ? `${BSC_SWAP_EXACT_TOKENS_SELECTOR}${encodeUint256(paymentRaw)}${encodeUint256(minXbchRaw)}${encodeUint256(160n)}${encodeAddress(walletAddress)}${encodeUint256(BigInt(deadline))}${encodeUint256(2n)}${encodeAddress(BSC_XBCH_ADDRESS)}${encodeAddress(BSC_USDT_ADDRESS)}`
+    : `${BSC_BUY_SELECTOR}${encodeUint256(paymentRaw)}${encodeUint256(minXbchRaw)}${encodeAddress(walletAddress)}${encodeUint256(BigInt(deadline))}`;
+  return {
+    ok: true,
+    walletAddress,
+    chainId: BSC_CHAIN_ID_HEX,
+    swap: {
+      direction,
+      fromSymbol,
+      toSymbol,
+      amountIn: formatTokenAmount(paymentRaw, 18),
+      expectedReceive: formatTokenAmount(quoteRaw, 18),
+      minReceive: formatTokenAmount(minXbchRaw, 18),
+      slippageBps: Number(slippageBps),
+      router,
+      inputTokenAddress: fromAddress,
+      outputTokenAddress: toAddress,
+      xbchAddress: BSC_XBCH_ADDRESS,
+      approvalData: `${BSC_APPROVE_SELECTOR}${encodeAddress(router)}${encodeUint256(paymentRaw)}`,
+      executionData,
+      deadline,
+    },
+  };
+}
+
+async function loadSwapBalances() {
+  const walletAddress = localWalletAddress(readEnv()).toLowerCase();
+  const [usdtRaw, xbchRaw] = await Promise.all([
+    tokenBalanceOf(BSC_USDT_ADDRESS, walletAddress),
+    tokenBalanceOf(BSC_XBCH_ADDRESS, walletAddress),
+  ]);
+  return {
+    ok: true,
+    walletAddress,
+    usdt: formatTokenAmount(usdtRaw, 18),
+    xbch: formatTokenAmount(xbchRaw, 18),
+  };
+}
+
+async function tokenBalanceOf(tokenAddress: string, walletAddress: string): Promise<bigint> {
+  const raw = await rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{
+    to: tokenAddress,
+    data: `${BSC_BALANCE_OF_SELECTOR}${encodeAddress(walletAddress)}`,
+  }, "latest"]);
+  return hexTokenAmount(raw);
+}
+
+async function confirmXbchSwap(body: JsonRecord) {
+  const direction = swapDirection(body.direction);
+  const txHash = txHashValue(body.txHash);
+  if (!txHash) throw new SlotsApiError(400, "INVALID_TRANSACTION_HASH", "兑换交易哈希无效。");
+  const env = readEnv();
+  const walletAddress = localWalletAddress(env).toLowerCase();
+  const receipt = await rpcRequest<RpcReceipt>(BSC_SLOT_SALE_RPC_URL, "eth_getTransactionReceipt", [txHash]);
+  if (!receipt || receipt.status !== "0x1") throw new SlotsApiError(409, "SWAP_NOT_CONFIRMED", "兑换交易尚未确认或已失败。");
+  const walletTopic = `0x${walletAddress.slice(2).padStart(64, "0")}`;
+  const saleTopic = `0x${BSC_SLOT_SALE_ADDRESS.slice(2).padStart(64, "0")}`;
+  const logs = receipt.logs || [];
+  const outgoingUsdtRaw = logs.filter((log) => log.address?.toLowerCase() === BSC_USDT_ADDRESS
+    && String(log.topics?.[0] || "").toLowerCase() === ERC20_TRANSFER_TOPIC
+    && String(log.topics?.[1] || "").toLowerCase() === walletTopic
+    && String(log.topics?.[2] || "").toLowerCase() === saleTopic)
+    .reduce((total, log) => total + hexTokenAmount(log.data), 0n);
+  const incomingXbchRaw = logs.filter((log) => log.address?.toLowerCase() === BSC_XBCH_ADDRESS
+    && String(log.topics?.[0] || "").toLowerCase() === ERC20_TRANSFER_TOPIC
+    && String(log.topics?.[1] || "").toLowerCase() === saleTopic
+    && String(log.topics?.[2] || "").toLowerCase() === walletTopic)
+    .reduce((total, log) => total + hexTokenAmount(log.data), 0n);
+  const outgoingXbchRaw = logs.filter((log) => log.address?.toLowerCase() === BSC_XBCH_ADDRESS
+    && String(log.topics?.[0] || "").toLowerCase() === ERC20_TRANSFER_TOPIC
+    && String(log.topics?.[1] || "").toLowerCase() === walletTopic)
+    .reduce((total, log) => total + hexTokenAmount(log.data), 0n);
+  const incomingUsdtRaw = logs.filter((log) => log.address?.toLowerCase() === BSC_USDT_ADDRESS
+    && String(log.topics?.[0] || "").toLowerCase() === ERC20_TRANSFER_TOPIC
+    && String(log.topics?.[2] || "").toLowerCase() === walletTopic)
+    .reduce((total, log) => total + hexTokenAmount(log.data), 0n);
+  const amountIn = direction === "xbch_to_usdt" ? outgoingXbchRaw : outgoingUsdtRaw;
+  const amountOut = direction === "xbch_to_usdt" ? incomingUsdtRaw : incomingXbchRaw;
+  if (amountIn <= 0n || amountOut <= 0n) throw new SlotsApiError(409, "SWAP_RECEIPT_INVALID", "该交易不是有效的兑换交易。");
+  return {
+    ok: true,
+    txHash: txHash.toLowerCase(),
+    direction,
+    amountIn: formatTokenAmount(amountIn, 18),
+    amountOut: formatTokenAmount(amountOut, 18),
+  };
+}
+
+async function pancakeAmountsOut(amountIn: bigint): Promise<bigint> {
+  const raw = await rpcRequest<string>(BSC_SLOT_SALE_RPC_URL, "eth_call", [{
+    to: BSC_PANCAKE_V2_ROUTER_ADDRESS,
+    data: `${BSC_GET_AMOUNTS_OUT_SELECTOR}${encodeUint256(amountIn)}${encodeUint256(64n)}${encodeUint256(2n)}${encodeAddress(BSC_XBCH_ADDRESS)}${encodeAddress(BSC_USDT_ADDRESS)}`,
+  }, "latest"]);
+  const normalized = String(raw).replace(/^0x/, "");
+  if (!/^[0-9a-f]+$/i.test(normalized) || normalized.length < 192) throw new SlotsApiError(502, "SWAP_QUOTE_UNAVAILABLE", "PancakeSwap 未返回有效报价。");
+  return BigInt(`0x${normalized.slice(-64)}`);
+}
+
+function swapDirection(value: unknown): SwapDirection {
+  if (value === "xbch_to_usdt") return value;
+  if (value === "usdt_to_xbch" || value === undefined || value === null || value === "") return "usdt_to_xbch";
+  throw new SlotsApiError(400, "INVALID_SWAP_DIRECTION", "仅支持 USDT 与 xBCH 之间的兑换。");
+}
+
+function swapPaymentRaw(value: unknown): bigint {
+  const amount = typeof value === "number" || typeof value === "string" ? String(value).trim() : "";
+  if (!/^\d+(?:\.\d{1,18})?$/.test(amount)) throw new SlotsApiError(400, "INVALID_SWAP_AMOUNT", "请输入有效的兑换金额。");
+  const raw = parseTokenUnits(amount);
+  if (raw < 10n ** 18n) throw new SlotsApiError(400, "SWAP_AMOUNT_TOO_SMALL", "单次兑换金额至少为 1 个代币。");
+  return raw;
+}
+
+async function confirmSlotPurchase(body: JsonRecord) {
+  const txHash = txHashValue(body.txHash);
+  if (!txHash) throw new SlotsApiError(400, "INVALID_TRANSACTION_HASH", "购买交易哈希无效。");
+  const env = readEnv();
+  const walletAddress = localWalletAddress(env).toLowerCase();
+  const receipt = await rpcRequest<RpcReceipt>(BSC_SLOT_SALE_RPC_URL, "eth_getTransactionReceipt", [txHash]);
+  if (!receipt || receipt.status !== "0x1") throw new SlotsApiError(409, "SLOT_PURCHASE_NOT_CONFIRMED", "购买交易尚未确认或已失败。");
+  const walletTopic = `0x${walletAddress.slice(2).padStart(64, "0")}`;
+  const saleTopic = `0x${BSC_SLOT_SALE_ADDRESS.slice(2).padStart(64, "0")}`;
+  const logs = receipt.logs || [];
+  const usdtRaw = logs.filter((log) => log.address?.toLowerCase() === BSC_USDT_ADDRESS
+    && String(log.topics?.[0] || "").toLowerCase() === ERC20_TRANSFER_TOPIC
+    && String(log.topics?.[1] || "").toLowerCase() === walletTopic
+    && String(log.topics?.[2] || "").toLowerCase() === saleTopic)
+    .reduce((total, log) => total + hexTokenAmount(log.data), 0n);
+  const xbchRaw = logs.filter((log) => log.address?.toLowerCase() === BSC_XBCH_ADDRESS
+    && String(log.topics?.[0] || "").toLowerCase() === ERC20_TRANSFER_TOPIC
+    && String(log.topics?.[1] || "").toLowerCase() === saleTopic
+    && String(log.topics?.[2] || "").toLowerCase() === walletTopic)
+    .reduce((total, log) => total + hexTokenAmount(log.data), 0n);
+  const slotUnit = BigInt(SLOT_UNIT_PRICE_USDT) * 10n ** 18n;
+  if (usdtRaw < slotUnit || usdtRaw % slotUnit !== 0n || xbchRaw <= 0n) {
+    throw new SlotsApiError(409, "SLOT_PURCHASE_RECEIPT_INVALID", "该交易不是有效的标准卡槽购买交易。");
+  }
+  const blockNumber = Number(BigInt(receipt.blockNumber || "0x0"));
+  const blockTimestamp = String(logs[0]?.blockTimestamp || "");
+  const purchasedAt = /^0x[0-9a-f]+$/i.test(blockTimestamp)
+    ? new Date(Number(BigInt(blockTimestamp)) * 1000).toISOString()
+    : new Date().toISOString();
+  const importResponse = await fetch(new URL("/v1/liq2/slot-orders/import", LIQ2_SLOT_ORDERS_URL), {
+    method: "POST",
+    headers: { ...privateArbActivityHeaders(env, ""), "content-type": "application/json" },
+    body: JSON.stringify({ orders: [{
+      txHash: txHash.toLowerCase(), walletAddress, settlementContract: BSC_SLOT_SALE_ADDRESS,
+      usdtAmount: formatTokenAmount(usdtRaw, 18), xbchAmount: formatTokenAmount(xbchRaw, 18),
+      slotCount: Number(usdtRaw / slotUnit), blockNumber, purchasedAt,
+    }] }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const imported = (await importResponse.json().catch(() => ({}))) as JsonRecord;
+  if (!importResponse.ok || imported.ok === false) {
+    throw new SlotsApiError(502, "SLOT_PURCHASE_CACHE_FAILED", "链上购买已确认，但订单缓存同步失败；请点击刷新记录重试。");
+  }
+  return { ok: true, txHash: txHash.toLowerCase(), slotCount: Number(usdtRaw / slotUnit), xbchAmount: formatTokenAmount(xbchRaw, 18) };
+}
+
+async function fetchLiq2Profile(walletAddress: string, env: Record<string, string>): Promise<Liq2Profile> {
+  const endpoint = new URL("/v1/liq2/profile", "https://privateapi.superarb.ai");
+  endpoint.searchParams.set("walletAddress", walletAddress);
+  const response = await fetch(endpoint, {
+    headers: privateArbActivityHeaders(env, ""),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const payload = (await response.json().catch(() => ({}))) as JsonRecord;
+  const rpcPlanType = stringValue(payload.rpcPlanType, payload.rpc_plan_type);
+  const rpcPlanName = stringValue(payload.rpcPlanName, payload.rpc_plan_name);
+  if (!response.ok || payload.ok === false || !rpcPlanType || !rpcPlanName) {
+    throw new SlotsApiError(502, "LIQ2_PROFILE_UNAVAILABLE", `LIQ2 1.7 RPC 套餐读取失败（HTTP ${response.status}）。`);
+  }
+  return { rpcPlanType, rpcPlanName };
+}
+
+export async function readSlotPurchaseUsage(env: Record<string, string>): Promise<number> {
+  const walletAddress = localWalletAddress(env);
+  const result = await fetchLiq2SlotOrders(walletAddress, env);
+  return purchasedSlotCount(result.orders);
+}
+
+/** LIQ2 1.7 slots are the immutable xBCH purchase ledger, not the retired tx2 order tables. */
+async function fetchLiq2SlotOrders(
+  walletAddress: string,
+  env: Record<string, string>,
+): Promise<{ orders: SlotOrder[]; truncated: boolean }> {
+  const endpoint = new URL(LIQ2_SLOT_ORDERS_URL);
+  endpoint.searchParams.set("walletAddress", walletAddress);
+  const response = await fetch(endpoint, {
+    headers: privateArbActivityHeaders(env, ""),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const payload = (await response.json().catch(() => ({}))) as JsonRecord;
+  if (!response.ok || payload.ok === false) {
+    throw new SlotsApiError(502, "LIQ2_SLOT_ORDERS_UNAVAILABLE", `LIQ2 1.7 卡槽订单读取失败（HTTP ${response.status}）。`);
+  }
+  const rows = arrayValue(payload.orders);
+  if (!rows) throw new SlotsApiError(502, "LIQ2_SLOT_ORDERS_INVALID_RESPONSE", "LIQ2 1.7 卡槽订单返回格式不正确。");
+  const byId = new Map<string, SlotOrder>();
+  mergeOrderRows(byId, rows, walletAddress);
+  return { orders: [...byId.values()], truncated: false };
+}
+
 async function fetchAllOrders(
   walletAddress: string,
   env: Record<string, string>,
-  authCode: string,
   retryOnHeadChange = true,
 ): Promise<{ orders: SlotOrder[]; truncated: boolean }> {
   const byId = new Map<string, SlotOrder>();
   let initialHeadSignature = "";
   for (let offset = 0; offset < MAX_ORDERS; offset += UPSTREAM_PAGE_SIZE) {
-    const rows = await fetchActivityPage(walletAddress, UPSTREAM_PAGE_SIZE, offset, env, authCode);
+    const rows = await fetchActivityPage(walletAddress, UPSTREAM_PAGE_SIZE, offset, env);
     if (offset === 0) initialHeadSignature = orderPageSignature(rows);
     mergeOrderRows(byId, rows, walletAddress);
     if (rows.length < UPSTREAM_PAGE_SIZE) {
       if (offset > 0) {
-        const latestRows = await fetchActivityPage(walletAddress, UPSTREAM_PAGE_SIZE, 0, env, authCode);
+        const latestRows = await fetchActivityPage(walletAddress, UPSTREAM_PAGE_SIZE, 0, env);
         if (retryOnHeadChange && orderPageSignature(latestRows) !== initialHeadSignature) {
-          return fetchAllOrders(walletAddress, env, authCode, false);
+          return fetchAllOrders(walletAddress, env, false);
         }
         mergeOrderRows(byId, latestRows, walletAddress);
       }
       return { orders: [...byId.values()], truncated: false };
     }
   }
-  const remaining = await fetchActivityPage(walletAddress, 1, MAX_ORDERS, env, authCode);
-  const latestRows = await fetchActivityPage(walletAddress, UPSTREAM_PAGE_SIZE, 0, env, authCode);
+  const remaining = await fetchActivityPage(walletAddress, 1, MAX_ORDERS, env);
+  const latestRows = await fetchActivityPage(walletAddress, UPSTREAM_PAGE_SIZE, 0, env);
   if (retryOnHeadChange && orderPageSignature(latestRows) !== initialHeadSignature) {
-    return fetchAllOrders(walletAddress, env, authCode, false);
+    return fetchAllOrders(walletAddress, env, false);
   }
   mergeOrderRows(byId, latestRows, walletAddress);
   return { orders: [...byId.values()], truncated: remaining.length > 0 };
@@ -370,7 +714,6 @@ async function fetchActivityPage(
   limit: number,
   offset: number,
   env: Record<string, string>,
-  authCode: string,
 ): Promise<unknown[]> {
   const endpoint = privateArbActivityEndpoint();
   const url = new URL(endpoint);
@@ -378,7 +721,9 @@ async function fetchActivityPage(
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
   const response = await fetch(url, {
-    headers: privateArbActivityHeaders(env, authCode),
+    // Wallet activity is authenticated by the application token. A user's
+    // login/license code is intentionally never forwarded to this read API.
+    headers: privateArbActivityHeaders(env, ""),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const payload = (await response.json().catch(() => ({}))) as JsonRecord;
@@ -496,6 +841,7 @@ function normalizeOrder(row: JsonRecord): SlotOrder | null {
     createdAt: dateString(row.createdAt, row.created_at),
     updatedAt: dateString(row.updatedAt, row.updated_at),
     explorerUrl: txHash ? explorerTxUrl(chainId, chain, txHash) : "",
+    slotCount: positiveInteger(row.slotCount, row.slot_count) || 0,
   };
 }
 
@@ -520,10 +866,11 @@ function linkRewardsToOrders(orders: SlotOrder[]): void {
 function summarizeOrders(orders: SlotOrder[]) {
   const tradeOrders = orders.filter((order) => isTradeOrderType(order.orderType));
   const rewardOrders = orders.filter((order) => isRewardOrderType(order.orderType));
-  const completed = tradeOrders.filter((order) => order.statusGroup === "completed").length;
-  const active = tradeOrders.filter((order) => order.statusGroup === "active").length;
-  const failed = tradeOrders.filter((order) => order.statusGroup === "failed").length;
-  const cancelled = tradeOrders.filter((order) => order.statusGroup === "cancelled").length;
+  const slotTotal = tradeOrders.reduce((total, order) => total + slotQuantity(order), 0);
+  const completed = tradeOrders.filter((order) => order.statusGroup === "completed").reduce((total, order) => total + slotQuantity(order), 0);
+  const active = tradeOrders.filter((order) => order.statusGroup === "active").reduce((total, order) => total + slotQuantity(order), 0);
+  const failed = tradeOrders.filter((order) => order.statusGroup === "failed").reduce((total, order) => total + slotQuantity(order), 0);
+  const cancelled = tradeOrders.filter((order) => order.statusGroup === "cancelled").reduce((total, order) => total + slotQuantity(order), 0);
   const totalUsdt = tradeOrders
     .reduce((total, order) => addDecimalStrings(total, order.effectiveUsdtAmount || order.usdtAmount), "0");
   const rewardUsdt = rewardOrders
@@ -531,7 +878,7 @@ function summarizeOrders(orders: SlotOrder[]) {
   const xbchTotal = tradeOrders
     .reduce((total, order) => addDecimalStrings(total, order.xbchAmount), "0");
   return {
-    total: tradeOrders.length,
+    total: slotTotal,
     recordTotal: orders.length,
     operationTotal: orders.length - tradeOrders.length,
     active,
@@ -561,6 +908,49 @@ function isRewardOrderType(orderType: string): boolean {
   return ["reward", "rewards", "profit", "paid_profit", "payout", "rebate"].includes(orderType);
 }
 
+function purchasedSlotCount(orders: SlotOrder[]): number {
+  const unitPriceRaw = parseTokenUnits(String(SLOT_UNIT_PRICE_USDT));
+  const slots = orders.reduce((total, order) => {
+    if (order.orderType !== "buy_xbch" || order.statusGroup === "failed" || order.statusGroup === "cancelled") return total;
+    if (order.slotCount > 0) return total + order.slotCount;
+    const amount = order.usdtAmount || order.effectiveUsdtAmount;
+    try {
+      return total + Math.max(1, Number(parseTokenUnits(amount) / unitPriceRaw));
+    } catch {
+      return total;
+    }
+  }, 0);
+  return Number.isSafeInteger(slots) ? slots : Number.MAX_SAFE_INTEGER;
+}
+
+function slotQuantity(order: SlotOrder): number {
+  if (order.slotCount > 0) return order.slotCount;
+  if (order.orderType !== "buy_xbch" || order.statusGroup === "failed" || order.statusGroup === "cancelled") return 0;
+  try {
+    return Math.max(1, Number(parseTokenUnits(order.usdtAmount || order.effectiveUsdtAmount) / parseTokenUnits(String(SLOT_UNIT_PRICE_USDT))));
+  } catch {
+    return 0;
+  }
+}
+
+function parseTokenUnits(value: string): bigint {
+  const normalized = value.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) throw new Error("invalid token amount");
+  const [whole, fraction = ""] = normalized.split(".");
+  return BigInt(whole) * 10n ** 18n + BigInt(fraction.slice(0, 18).padEnd(18, "0"));
+}
+
+function encodeUint256(value: bigint): string {
+  if (value < 0n) throw new Error("uint256 cannot be negative");
+  return value.toString(16).padStart(64, "0");
+}
+
+function encodeAddress(value: string): string {
+  const normalized = value.toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]{40}$/.test(normalized)) throw new Error("invalid EVM address");
+  return normalized.padStart(64, "0");
+}
+
 function addDecimalStrings(left: string, right: string): string {
   const scale = 18;
   const parse = (value: string) => {
@@ -574,37 +964,10 @@ function addDecimalStrings(left: string, right: string): string {
   return fraction ? `${total / base}.${fraction}` : (total / base).toString();
 }
 
-function requireAuthorizedReadRequest(req: IncomingMessage, env: Record<string, string>): void {
-  const expected = (env.AUTH_CODE || env.SUPERARB_AUTH_CODE || env.LICENSE_CODE || "").trim().toUpperCase();
-  if (!expected) throw new SlotsApiError(503, "AUTH_CODE_NOT_CONFIGURED", "请先登录并在 .env 保存 AUTH_CODE。");
-  const provided = requestAuthCode(req).toUpperCase();
-  if (!provided || !safeEqual(provided, expected)) throw new SlotsApiError(401, "UNAUTHORIZED", "授权码无效。");
-
-  const originValue = headerValue(req.headers.origin);
-  if (!originValue) return;
-  const hostValue = headerValue(req.headers.host).toLowerCase();
-  let origin: URL;
-  try {
-    origin = new URL(originValue);
-  } catch {
-    throw new SlotsApiError(403, "UNTRUSTED_ORIGIN", "订单请求来源无效。");
-  }
-  const local = origin.hostname === "localhost" || origin.hostname === "127.0.0.1";
-  if (!local || !hostValue || origin.host.toLowerCase() !== hostValue) {
-    throw new SlotsApiError(403, "UNTRUSTED_ORIGIN", "订单请求必须来自当前本地面板。");
-  }
-}
-
-function requestAuthCode(req: IncomingMessage): string {
-  return headerValue(req.headers["x-supermtnode-auth-code"]);
-}
-
-function walletAddressFromPrivateKey(value?: string): string {
-  const privateKey = value?.trim() || "";
-  if (!/^(?:0x)?[a-fA-F0-9]{64}$/.test(privateKey)) {
-    throw new SlotsApiError(400, "INVALID_PRIVATE_KEY", "请先在设置中配置有效的 PRIVATE_KEY。");
-  }
-  return new Wallet(privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`).address;
+function localWalletAddress(env: Record<string, string>): string {
+  const configuredAddress = env.WALLET_ADDRESS?.trim();
+  if (/^0x[a-fA-F0-9]{40}$/.test(configuredAddress || "")) return configuredAddress as string;
+  throw new SlotsApiError(400, "WALLET_NOT_CONFIGURED", "系统暂未读取到钱包地址。");
 }
 
 function readEnv(): Record<string, string> {
@@ -657,6 +1020,14 @@ function nullableInteger(...values: unknown[]): number | null {
     if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
   }
   return null;
+}
+
+function positiveInteger(...values: unknown[]): number {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return 0;
 }
 
 function normalizeIdentifier(value: string, fallback: string): string {
@@ -716,23 +1087,39 @@ function recordValue(...values: unknown[]): JsonRecord {
   return {};
 }
 
-function headerValue(value: string | string[] | undefined): string {
-  if (Array.isArray(value)) return value.find((item) => item.trim())?.trim() || "";
-  return value?.trim() || "";
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
-
 function requestPathname(value?: string): string {
   try {
     return new URL(value || "", "http://127.0.0.1").pathname;
   } catch {
     return "";
   }
+}
+
+function readRequestJson(req: IncomingMessage): Promise<JsonRecord> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 32 * 1024) {
+        reject(new SlotsApiError(413, "REQUEST_TOO_LARGE", "请求体过大。"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        const parsed = raw ? JSON.parse(raw) : {};
+        if (!isRecord(parsed)) throw new Error("invalid JSON object");
+        resolve(parsed);
+      } catch {
+        reject(new SlotsApiError(400, "INVALID_REQUEST_BODY", "请求数据格式错误。"));
+      }
+    });
+    req.on("error", reject);
+  });
 }
 
 function isRecord(value: unknown): value is JsonRecord {

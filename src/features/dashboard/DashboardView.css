@@ -50,6 +50,13 @@
   color: #8fffd0;
 }
 
+.overview-stat.is-information-notification strong {
+  color: #8fffd0;
+  font-size: 16px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
 .overview-stat div {
   display: grid;
   min-width: 0;
@@ -122,7 +129,11 @@
 }
 
 .market-status-panel {
-  min-height: 0;
+  display: flex;
+  height: min(720px, calc(100vh - 250px));
+  min-height: 420px;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .panel-heading {
@@ -334,6 +345,26 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 5px;
+  scrollbar-color: rgba(139, 92, 246, 0.65) rgba(255, 255, 255, 0.04);
+  scrollbar-width: thin;
+}
+
+.market-source-grid::-webkit-scrollbar {
+  width: 7px;
+}
+
+.market-source-grid::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.market-source-grid::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.65);
 }
 
 .market-source-card {
@@ -484,6 +515,17 @@
   .market-source-grid,
   .market-status-skeleton {
     grid-template-columns: 1fr;
+  }
+
+  .market-status-panel {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .market-source-grid {
+    overflow: visible;
+    padding-right: 0;
   }
 
   .dashboard-news-item {

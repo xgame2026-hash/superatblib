@@ -1,6 +1,3 @@
-import { getPublicKey } from "@noble/secp256k1";
-import { keccak_256 } from "@noble/hashes/sha3.js";
-import { hexToBytes } from "@noble/hashes/utils.js";
 import { assertActiveSuperMtNodeLicense } from "./supermtnode-license";
 
 export type SecurityCheckItem = {
@@ -142,31 +139,15 @@ function expectedEndpoint(rule: OfficialEndpointRule): string {
     .join(" 或 ");
 }
 
-function privateKeyToAddress(privateKey: string): string | null {
-  const hex = privateKey.replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(hex)) return null;
-  try {
-    const publicKey = getPublicKey(hexToBytes(hex), false).slice(1);
-    const hash = keccak_256(publicKey);
-    return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
-  } catch {
-    return null;
-  }
-}
-
 function checkWallet(scope: string, env: Record<string, string>): SecurityCheckItem {
-  const privateKey = env.PRIVATE_KEY?.trim() ?? "";
-  if (!privateKey) {
-    return { scope, key: "PRIVATE_KEY", label: "钱包地址", value: "", ok: false, message: "本地未配置" };
-  }
-  const walletAddress = privateKeyToAddress(privateKey);
+  const walletAddress = env.WALLET_ADDRESS?.trim() ?? "";
   return {
     scope,
-    key: "PRIVATE_KEY",
+    key: "WALLET_ADDRESS",
     label: "钱包地址",
-    value: walletAddress ?? "",
-    ok: Boolean(walletAddress),
-    message: walletAddress ? "已解析钱包地址" : "钱包授权格式无效，请检查输入",
+    value: walletAddress,
+    ok: /^0x[a-fA-F0-9]{40}$/.test(walletAddress),
+    message: /^0x[a-fA-F0-9]{40}$/.test(walletAddress) ? "钱包地址格式正确" : "钱包地址格式无效，请检查输入",
   };
 }
 

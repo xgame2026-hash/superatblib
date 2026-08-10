@@ -266,7 +266,7 @@ function stopDashboardView() {
 
 function createOverviewMetrics(): OverviewMetric[] {
   return [
-    { key: "bnb", label: "BNB", value: "--", note: t("dashboard.walletAsset"), tone: "flat" },
+    { key: "informationNotification", label: "信息通知", value: "--", note: "信息通知表", tone: "flat" },
     { key: "bnbRpc", label: "BNB RPC", value: "--", note: t("dashboard.expiresAt", { value: "--" }), tone: "flat" },
     readSafetyOperationMetric(),
     { key: "paidProfit", label: t("dashboard.paidProfit"), value: "--", note: t("dashboard.totalNetwork"), tone: "flat" },
@@ -284,6 +284,7 @@ function translateOverviewMetrics() {
 }
 
 function overviewMetricLabel(key: string): string {
+  if (key === "informationNotification") return "信息通知";
   if (key === "paidProfit") return t("dashboard.paidProfit");
   if (key === "liquidationStarted") return t("dashboard.liquidationStarted");
   if (key === "safetyOperation") return t("dashboard.securityOperation");
@@ -292,6 +293,7 @@ function overviewMetricLabel(key: string): string {
 }
 
 function translateOverviewNote(metric: OverviewMetric): string {
+  if (metric.key === "informationNotification") return metric.note;
   if (metric.key === "bnb") return metric.note === "--" ? "--" : t("dashboard.walletAsset");
   if (metric.key === "bnbRpc") return metric.note === "--" ? "--" : t("dashboard.expiresAt", { value: extractTrailingValue(metric.note) || "--" });
   if (metric.key === "safetyOperation") return t("dashboard.zeroAccident", { date: t("dashboard.safetyStartDate") });
@@ -316,7 +318,7 @@ function extractTrailingValue(value: string): string {
 async function loadOverviewMetrics() {
   updateOverviewMetric(readLiquidationStartedMetric());
   updateOverviewMetric(readSafetyOperationMetric());
-  void readBnbUsdtMetric().then(updateOverviewMetric);
+  void readInformationNotificationMetric().then(updateOverviewMetric);
   void readBnbRpcMetric().then(updateOverviewMetric);
   void readPaidProfitMetric().then(updateOverviewMetric);
 }
@@ -396,15 +398,20 @@ function hashStorageScope(value: string): string {
   return (hash >>> 0).toString(16);
 }
 
-async function readBnbUsdtMetric(): Promise<OverviewMetric> {
+async function readInformationNotificationMetric(): Promise<OverviewMetric> {
   try {
-    const response = await fetch("/api/wallet-assets", { cache: "no-store" });
-    const payload = (await response.json().catch(() => ({}))) as { rows?: Array<{ key?: string; usdt?: string }> };
-    const bnb = payload.rows?.find((row) => row.key === "bnb");
-    const value = formatAssetAmount(bnb?.usdt);
-    return { key: "bnb", label: "BNB", value: value === "--" ? "--" : `${value} USDT`, note: t("dashboard.walletAsset"), tone: value === "--" ? "flat" : "ready" };
+    const response = await fetch("/api/liq2/information-notifications", { cache: "no-store" });
+    const payload = (await response.json().catch(() => ({}))) as { content?: string; source?: string; error?: string };
+    if (!response.ok || !payload.content?.trim()) throw new Error(payload.error || "信息通知读取失败。");
+    return {
+      key: "informationNotification",
+      label: "信息通知",
+      value: payload.content.trim(),
+      note: "信息通知表",
+      tone: "ready",
+    };
   } catch {
-    return { key: "bnb", label: "BNB", value: "--", note: t("dashboard.readFailed"), tone: "flat" };
+    return { key: "informationNotification", label: "信息通知", value: "--", note: t("dashboard.readFailed"), tone: "flat" };
   }
 }
 
@@ -511,6 +518,7 @@ function tickRunningRpcMetric() {
 
 function metricClass(metric: OverviewMetric) {
   return {
+    "is-information-notification": metric.key === "informationNotification",
     "is-liquidation-started": metric.key === "liquidationStarted",
     "is-safety-operation": metric.key === "safetyOperation",
     "is-paid-profit": metric.key === "paidProfit",

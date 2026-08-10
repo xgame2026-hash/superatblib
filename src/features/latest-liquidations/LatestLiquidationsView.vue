@@ -1,93 +1,5 @@
 <template>
-  <section class="latest-liquidations">
-    <article class="latest-card">
-      <div class="latest-title-row">
-        <h2>{{ t("latest.rank") }}</h2>
-        <label class="latest-wallet-search">
-          <span>{{ t("latest.walletSearch") }}</span>
-          <input
-            v-model="walletSearchQuery"
-            type="search"
-            :placeholder="t('latest.walletPlaceholder')"
-            autocomplete="off"
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-          />
-        </label>
-        <div class="latest-title-side">
-          <div class="latest-wss-stat" :class="wssConnected ? 'is-connected' : 'is-empty'" :title="wssStatusTitle">
-            <span class="latest-wss-dot" aria-hidden="true"></span>
-            <strong>{{ wssConnectionText }}</strong>
-          </div>
-          <div class="latest-total-stat latest-paid-profit-stat" :class="paidProfitPulseClass" :title="paidProfitTitle">
-            <span>{{ t("latest.paidProfit") }}</span>
-            <strong>{{ formattedPaidProfit }}</strong>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="!configured" class="latest-service-notice">{{ t("app.privateDataSetupRequired") }}</div>
-      <div v-else-if="errorMessage" class="latest-service-error">{{ errorMessage }}</div>
-
-      <div class="latest-table-shell">
-        <table class="latest-table">
-          <thead>
-            <tr>
-              <th>{{ t("latest.chain") }}</th>
-              <th>{{ t("latest.queueId") }}</th>
-              <th>{{ t("latest.wallet") }}</th>
-              <th>USDT</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in pagedQueuedWalletRows" :key="row.id">
-              <td>{{ formatChainLabel(row) }}</td>
-              <td class="latest-queue-id" :title="row.id">{{ formatQueueId(row) }}</td>
-              <td>
-                <span class="latest-address-cell latest-wallet-full" :title="rowWallet(row)">
-                  <img
-                    class="latest-identicon"
-                    :class="{ 'is-generated': !walletAvatarUrl(row) }"
-                    :src="walletAvatarSrc(row)"
-                    alt=""
-                    aria-hidden="true"
-                  />
-                  {{ formatFullWallet(row) }}
-                </span>
-              </td>
-              <td class="latest-asset-summary">{{ formatUsdtAsset(row) }}</td>
-            </tr>
-            <tr v-if="loading && queuedWalletRows.length === 0">
-              <td class="latest-skeleton-row" colspan="4">
-                <span></span>
-                <span></span>
-              </td>
-            </tr>
-            <tr v-else-if="filteredQueuedWalletRows.length === 0">
-              <td class="latest-empty-row" colspan="4">{{ walletSearchQuery.trim() ? t("latest.noMatched") : t("latest.noQueued") }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="latest-pagination" v-if="filteredQueuedWalletRows.length > pageSize">
-        <button type="button" :disabled="currentPage === 1" @click="currentPage = 1">{{ t("latest.first") }}</button>
-        <button type="button" :disabled="currentPage === 1" @click="currentPage -= 1">{{ t("latest.prev") }}</button>
-        <button
-          v-for="page in visiblePages"
-          :key="page"
-          type="button"
-          :class="{ active: page === currentPage }"
-          @click="currentPage = page"
-        >
-          {{ page }}
-        </button>
-        <button type="button" :disabled="currentPage === totalPages" @click="currentPage += 1">{{ t("latest.next") }}</button>
-        <button type="button" :disabled="currentPage === totalPages" @click="currentPage = totalPages">{{ t("latest.last") }}</button>
-      </div>
-    </article>
-  </section>
+  <section class="latest-liquidations" aria-label="最新清算"></section>
 </template>
 
 <script setup lang="ts">
@@ -119,6 +31,11 @@ type QueueRow = {
   protocol?: string;
   rpc?: string;
   status?: string;
+  online?: boolean;
+  isOnline?: boolean;
+  is_online?: boolean;
+  presenceStatus?: string;
+  presence_status?: string;
   source?: string;
   endpointId?: string;
   endpointSlug?: string;
@@ -350,15 +267,15 @@ async function loadLatestLiquidations(): Promise<void> {
     queueUpdatedAt.value = payload.queueUpdatedAt || "";
     latestLoadedAt = Date.now();
   } catch (error) {
-    if (queuedWalletRows.value.length === 0) {
-      queueRows.value = [];
-      queuedWalletSourceRows.value = [];
-      queueTransport.value = "";
-      wssConnected.value = false;
-      queueParticipantCount.value = 0;
-      queueSubscribers.value = 0;
-      queueUpdatedAt.value = "";
-    }
+    // Without a fresh authoritative online response there is no proof that a
+    // wallet is still started. Never leave stale wallets visible.
+    queueRows.value = [];
+    queuedWalletSourceRows.value = [];
+    queueTransport.value = "";
+    wssConnected.value = false;
+    queueParticipantCount.value = 0;
+    queueSubscribers.value = 0;
+    queueUpdatedAt.value = "";
     markWssStaleIfNeeded();
     errorMessage.value = error instanceof Error ? `${t("latest.queueReadFailed")}：${error.message}` : t("latest.queueReadFailed");
   } finally {
@@ -441,7 +358,18 @@ function isProductionQueueWallet(row: QueueRow) {
     row.dedupeKey,
     row.dedupe_key,
   ].filter(Boolean).join(":").toLowerCase();
-  return wallet !== "0x0000000000000000000000000000000000000001" && endpointSlug !== "public-test" && endpointId !== "public-test" && !identity.includes(":no-license:");
+  return isExplicitlyStartedWallet(row)
+    && wallet !== "0x0000000000000000000000000000000000000001"
+    && endpointSlug !== "public-test"
+    && endpointId !== "public-test"
+    && !identity.includes(":no-license:");
+}
+
+function isExplicitlyStartedWallet(row: QueueRow) {
+  const online = row.online ?? row.isOnline ?? row.is_online;
+  const status = String(row.status || row.presenceStatus || row.presence_status || "").trim().toLowerCase();
+  if (online === false || ["offline", "stopped", "paused", "logout", "rpc-expired", "expired"].includes(status)) return false;
+  return online === true || ["online", "active", "running", "started"].includes(status);
 }
 
 function dedupeQueueRows(rows: QueueRow[]) {

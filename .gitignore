@@ -32,6 +32,7 @@ credentials/
 
 # Private backend source belongs in a separate, access-controlled repository.
 server/state-api-rust/
+ops/
 
 # Logs, caches, and temporary files
 *.log
@@ -61,7 +62,7 @@ test-results/
 *.sqlite
 *.sqlite3
 
-# Private keys, certificates, and signing bundles
+# Sensitive certificates and signing bundles
 *.key
 *.pem
 *.p12
@@ -69,7 +70,6 @@ test-results/
 *.jks
 *.keystore
 *.mobileprovision
-!server/tx-wallet-public.pem
 
 # Editor and operating-system metadata
 .DS_Store

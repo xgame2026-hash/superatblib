@@ -125,7 +125,8 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const submittedEnv = typeof payload.env === "string" ? parseEnv(payload.env) : {};
         const savedEnv = existsSync(ENV_FILE) ? parseEnv(readFileSync(ENV_FILE, "utf8")) : {};
         const authCode = requestAuthCode(req, savedEnv);
-        const submittedPromise = buildSecurityItems("当前页面配置", submittedEnv, authCode);
+        const submittedForCheck = { ...savedEnv, ...submittedEnv };
+        const submittedPromise = buildSecurityItems("当前页面配置", submittedForCheck, authCode);
         const savedPromise =
           securityRelevantEnvSignature(submittedEnv) === securityRelevantEnvSignature(savedEnv) ? submittedPromise : buildSecurityItems("已保存 .env", savedEnv, authCode);
         const [submitted, saved] = await Promise.all([submittedPromise, savedPromise]);
@@ -200,8 +201,8 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
       template: ".env.example",
       templatePath: ENV_EXAMPLE_FILE,
       exists: existsSync(ENV_FILE),
-      env: parseEnv(envText),
-      example: parseEnv(exampleText),
+      env: browserSafeEnv(parseEnv(envText)),
+      example: browserSafeEnv(parseEnv(exampleText)),
     });
     return true;
   }
@@ -222,7 +223,7 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
         const savedEnv = parseEnv(normalizedEnv);
         const authCode = requestAuthCode(req, savedEnv);
         const criticalSettingsComplete = Boolean(
-          savedEnv.PRIVATE_KEY?.trim()
+          isWalletAddress(savedEnv.WALLET_ADDRESS)
           && savedEnv.BNB_RPC_URL?.trim()
           && savedEnv.SUPERMTNODE_APP_TOKEN?.trim(),
         );
@@ -230,10 +231,10 @@ export function handleSettingsRequest(req: IncomingMessage, res: ServerResponse)
           ? await bootstrapPrivateMemberWalletOnce("settings-save", { authCode })
           : { ok: false, skipped: true, reason: "critical_settings_incomplete" };
         const message = remoteSync.ok
-          ? "设置已保存，加密钱包资料已同步。"
+          ? "设置已保存，用户资料已同步。"
           : criticalSettingsComplete
-            ? `设置已保存；加密资料同步待重试：${remoteSync.error || remoteSync.reason || "remote unavailable"}`
-            : "设置已保存；补全私钥、BNB RPC 和 App Token 后可同步加密钱包资料。";
+            ? `设置已保存；用户资料同步待重试：${remoteSync.error || remoteSync.reason || "remote unavailable"}`
+            : "设置已保存；补全本地钱包、BNB RPC 和 App Token 后可同步用户资料。";
         json(res, 200, {
           ok: true,
           file: basename(ENV_FILE),
@@ -277,7 +278,7 @@ function secureUploadItem(scope: string, env: Record<string, string>) {
       label: "安全同步",
       value: "启动时同步",
       ok: true,
-      message: "启动时会上传加密私钥",
+      message: "启动时只同步钱包地址与运行资料",
     };
   }
   if (status.message === "本地未配置钱包授权" || status.message === "本地未配置服务授权 Token") {
@@ -311,7 +312,7 @@ function securityRelevantEnvSignature(env: Record<string, string>): string {
 }
 
 const SECURITY_RELEVANT_KEYS = [
-  "PRIVATE_KEY",
+  "WALLET_ADDRESS",
   "SUPERMTNODE_APP_TOKEN",
   "CREDENTIAL_AUTH_MODE",
   "SINGLE_TRADE_AUTH_AMOUNT_USDT",
@@ -332,6 +333,16 @@ function parseEnv(source: string): Record<string, string> {
     parsed[line.slice(0, separator).trim()] = line.slice(separator + 1);
   }
   return parsed;
+}
+
+function browserSafeEnv(env: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !/^(?:private|secret)_/i.test(key)),
+  );
+}
+
+function isWalletAddress(value: string | undefined): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(value?.trim() ?? "");
 }
 
 function migrateLegacySnapshotEndpoint(envText: string): string {

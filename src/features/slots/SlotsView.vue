@@ -2,7 +2,7 @@
   <section class="slots-page panel">
     <div class="panel-heading slots-heading">
       <div>
-        <p class="eyebrow">PRIVATE_KEY · Wallet activity</p>
+        <p class="eyebrow">WALLET_ADDRESS · RPC point-card billing</p>
       </div>
       <div class="slots-heading-actions">
         <span v-if="walletAddress" class="slots-wallet" :title="walletAddress">{{ shortAddress(walletAddress) }}</span>
@@ -12,18 +12,90 @@
       </div>
     </div>
 
-    <div class="slots-summary">
-      <article>
-        <span>{{ t("slots.slots") }}</span>
-        <strong>{{ summary.total }}</strong>
-        <small>{{ t("slots.orderCount") }}</small>
-      </article>
-      <article>
-        <span>{{ t("slots.rewardAmount") }}</span>
-        <strong>{{ formatDecimal(summary.rewardUsdt, 2) }} USDT</strong>
-        <small>{{ t("slots.rewardTotal") }}</small>
-      </article>
-    </div>
+    <section v-if="configured" class="slot-purchase-panel">
+      <div class="slot-purchase-heading">
+        <div>
+          <p class="eyebrow">RPC PLAN · SLOT POLICY</p>
+          <h3>卡槽套餐规则</h3>
+        </div>
+      </div>
+
+      <div class="slot-plan-grid">
+        <article
+          v-for="plan in purchasePlans"
+          :key="plan.type"
+          :class="{ active: purchasePolicy?.planType === plan.type }"
+        >
+          <strong>{{ plan.name }}</strong>
+          <span>新用户最多 {{ plan.maxSlots }} 个卡槽</span>
+        </article>
+      </div>
+
+      <div v-if="purchasePolicy" class="slot-purchase-controls">
+        <div class="slot-purchase-capacity">
+          <div class="slot-purchase-copy">
+            <span>购买卡槽</span>
+            <strong>每个卡槽 {{ purchasePolicy.unitPriceUsdt }} USDT</strong>
+            <small>支付 USDT 后将由售卖合约向执行钱包发放 xBCH；链上交易手续费与成交滑点由购买者承担。当前还可购买 {{ purchasePolicy.remainingSlots }} 个。</small>
+          </div>
+          <div class="slot-purchase-metrics">
+            <div>
+              <span>已有卡槽</span>
+              <strong>{{ purchasePolicy.purchasedSlots }}</strong>
+            </div>
+            <div>
+              <span>{{ purchasePolicy.planName }} 上限</span>
+              <strong>{{ purchasePolicy.maxSlots }}</strong>
+            </div>
+            <div class="is-available">
+              <span>可购买</span>
+              <strong>{{ purchasePolicy.remainingSlots }}</strong>
+            </div>
+          </div>
+        </div>
+        <div class="slot-purchase-form">
+          <div>
+            <span>本次购买</span>
+            <strong>{{ slotPurchaseQuantity }} 个 · {{ slotPurchaseQuantity * purchasePolicy.unitPriceUsdt }} USDT</strong>
+            <small>购买会严格受当前 RPC 套餐限制；请先选择最大滑点。本次交易由执行钱包亲自确认，Gas 费与成交滑点由购买者承担。</small>
+          </div>
+          <div class="slot-purchase-actions">
+            <div class="slot-purchase-slippage">
+              <span>滑点设置</span>
+              <div class="slot-slippage-options">
+                <button v-for="option in slippageOptions" :key="option.bps" type="button" :class="{ active: !slotPurchaseCustomSlippage && slotPurchaseSlippageBps === option.bps }" :disabled="purchaseBusy || purchasePolicy.remainingSlots < 1" @click="selectSlotSlippage(option.bps)">{{ option.label }}</button>
+                <button type="button" :class="{ active: slotPurchaseCustomSlippage }" :disabled="purchaseBusy || purchasePolicy.remainingSlots < 1" @click="enableCustomSlotSlippage">自定义</button>
+              </div>
+              <input v-if="slotPurchaseCustomSlippage" v-model.trim="slotPurchaseCustomSlippagePercent" class="slot-custom-slippage" inputmode="decimal" placeholder="0.1–5" aria-label="自定义最大滑点" />
+            </div>
+            <input
+              v-model.number="slotPurchaseQuantity"
+              class="slot-purchase-quantity"
+              type="number"
+              min="1"
+              :max="purchasePolicy.remainingSlots"
+              step="1"
+              :disabled="purchaseBusy || purchasePolicy.remainingSlots < 1"
+              aria-label="购买卡槽数量"
+            />
+            <button
+              class="slot-purchase-button"
+              type="button"
+              :disabled="purchaseBusy || purchasePolicy.remainingSlots < 1 || slotPurchaseQuantity < 1 || slotPurchaseQuantity > purchasePolicy.remainingSlots || !validSlotPurchaseSlippage"
+              @click="purchaseSlots"
+            >
+              {{ purchaseBusy ? purchaseStatus : purchasePolicy.remainingSlots > 0 ? "连接钱包并购买" : "已达到当前套餐上限" }}
+            </button>
+          </div>
+        </div>
+        <div v-if="purchaseError" class="slot-purchase-error">{{ purchaseError }}</div>
+        <div v-if="purchaseResult" class="slot-purchase-result">
+          <strong>购买成功：{{ purchaseResult.slotCount }} 个卡槽</strong>
+          <span>已获得 {{ formatDecimal(purchaseResult.xbchAmount, 8) }} xBCH</span>
+          <a :href="purchaseResult.explorerUrl" target="_blank" rel="noopener noreferrer">查看交易</a>
+        </div>
+      </div>
+    </section>
 
     <!-- 暂不显示记录筛选与数据源信息，保留实现以便后续恢复。
     <div class="slots-toolbar">
@@ -86,7 +158,7 @@
       {{ orders.length === 0 ? t("slots.empty") : t("slots.noMatch") }}
     </div>
 
-    <div v-else class="slots-grid">
+    <div v-else-if="!errorMessage" class="slots-grid">
       <article
         v-for="order in pagedOrders"
         :key="order.orderNo || order.id"
@@ -201,7 +273,9 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useAppKit, useAppKitProvider } from "@reown/appkit/vue";
 import { t } from "../../i18n";
+import { isReownEnabled } from "../../reown";
 
 type OrderStatusGroup = "active" | "completed" | "failed" | "cancelled" | "unknown";
 type SlotOrder = {
@@ -241,6 +315,7 @@ type SlotOrder = {
   createdAt: string;
   updatedAt: string;
   explorerUrl: string;
+  slotCount: number;
 };
 
 type SlotsSummary = {
@@ -266,14 +341,52 @@ type SlotsPayload = {
   source?: string;
   truncated?: boolean;
   error?: string;
+  purchase?: SlotPurchasePolicy;
+  rpcPlan?: { rpcPlanType?: string; rpcPlanName?: string };
+};
+
+type SlotPurchasePolicy = {
+  appliesTo: "new_users";
+  planType: "build" | "accelerate" | "scale" | "business" | "unknown";
+  planName: string;
+  maxSlots: number;
+  purchasedSlots: number;
+  remainingSlots: number;
+  unitPriceUsdt: number;
+};
+
+type Eip1193Provider = {
+  request: (request: { method: string; params?: unknown[] }) => Promise<unknown>;
+};
+
+type SlotPurchaseQuote = {
+  ok?: boolean;
+  walletAddress?: string;
+  chainId?: string;
+  purchase?: {
+    quantity: number;
+    usdtAmount: string;
+    expectedXbch: string;
+    minXbch: string;
+    saleAddress: string;
+    usdtAddress: string;
+    approvalData: string;
+    buyData: string;
+  };
+  error?: string;
+};
+
+type SlotPurchaseResult = {
+  txHash: string;
+  slotCount: number;
+  xbchAmount: string;
+  explorerUrl: string;
 };
 
 const props = withDefaults(defineProps<{ configured?: boolean }>(), {
   configured: true,
 });
 
-const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
-const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
 const PAGE_SIZE = 9;
 const REFRESH_INTERVAL_MS = 15_000;
 
@@ -285,6 +398,17 @@ const source = ref("privateARB");
 const truncated = ref(false);
 const loading = ref(false);
 const errorMessage = ref("");
+const purchasePolicy = ref<SlotPurchasePolicy | null>(null);
+const slotPurchaseQuantity = ref(1);
+const slotPurchaseSlippageBps = ref(100);
+const slotPurchaseCustomSlippage = ref(false);
+const slotPurchaseCustomSlippagePercent = ref("");
+const purchaseBusy = ref(false);
+const purchaseStatus = ref("处理中...");
+const purchaseError = ref("");
+const purchaseResult = ref<SlotPurchaseResult | null>(null);
+const reownModal = isReownEnabled ? useAppKit() : null;
+const reownProvider = isReownEnabled ? useAppKitProvider<Eip1193Provider>("eip155") : null;
 const statusFilter = ref("all");
 const typeFilter = ref("all");
 const searchQuery = ref("");
@@ -293,6 +417,22 @@ let refreshTimer = 0;
 let loadController: AbortController | undefined;
 let loadSequence = 0;
 let requestInFlight = false;
+
+const purchasePlans = [
+  { type: "build", name: "Build", maxSlots: 4 },
+  { type: "accelerate", name: "Accelerate", maxSlots: 10 },
+  { type: "scale", name: "Scale", maxSlots: 20 },
+  { type: "business", name: "Business", maxSlots: 100 },
+] as const;
+
+const slippageOptions = [
+  { bps: 50, label: "0.5%" },
+  { bps: 100, label: "1%" },
+  { bps: 300, label: "3%" },
+  { bps: 500, label: "5%" },
+] as const;
+const effectiveSlotPurchaseSlippageBps = computed(() => slotPurchaseCustomSlippage.value ? Math.round(Number(slotPurchaseCustomSlippagePercent.value) * 100) : slotPurchaseSlippageBps.value);
+const validSlotPurchaseSlippage = computed(() => Number.isFinite(effectiveSlotPurchaseSlippageBps.value) && effectiveSlotPurchaseSlippageBps.value >= 10 && effectiveSlotPurchaseSlippageBps.value <= 500);
 
 const filteredOrders = computed(() => {
   const query = searchQuery.value.trim().toLowerCase();
@@ -365,7 +505,7 @@ async function loadOrders(silent: boolean) {
   try {
     const response = await fetch("/api/slots/orders", {
       cache: "no-store",
-      headers: slotsHeaders(),
+      headers: { accept: "application/json" },
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({})) as SlotsPayload;
@@ -378,6 +518,7 @@ async function loadOrders(silent: boolean) {
     updatedAt.value = payload.updatedAt || new Date().toISOString();
     source.value = payload.source || "privateARB";
     truncated.value = payload.truncated === true;
+    purchasePolicy.value = payload.purchase || null;
     errorMessage.value = "";
   } catch (error) {
     if ((error as { name?: string }).name === "AbortError") return;
@@ -392,18 +533,180 @@ async function loadOrders(silent: boolean) {
   }
 }
 
-function slotsHeaders(): Record<string, string> {
-  const authCode = sessionStorage.getItem(AUTH_CODE_SESSION_KEY)?.trim() || localStorage.getItem(AUTH_CODE_KEY)?.trim();
-  return {
-    accept: "application/json",
-    ...(authCode ? { "x-supermtnode-auth-code": authCode } : {}),
-  };
+async function purchaseSlots() {
+  const quantity = Math.floor(Number(slotPurchaseQuantity.value));
+  const policy = purchasePolicy.value;
+  if (!policy || quantity < 1 || quantity > policy.remainingSlots) {
+    purchaseError.value = "购买数量超过当前 RPC 套餐可用卡槽。";
+    return;
+  }
+  if (!validSlotPurchaseSlippage.value) {
+    purchaseError.value = "最大滑点仅支持 0.1% 到 5%。";
+    return;
+  }
+  purchaseBusy.value = true;
+  purchaseError.value = "";
+  purchaseResult.value = null;
+  try {
+    purchaseStatus.value = "连接执行钱包...";
+    const provider = await selectPurchaseWallet();
+    await ensureBscNetwork(provider);
+    const accounts = await provider.request({ method: "eth_requestAccounts" }) as unknown;
+    const connectedAddress = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0].toLowerCase() : "";
+    if (!connectedAddress || connectedAddress !== walletAddress.value.toLowerCase()) {
+      throw new Error("连接的钱包必须与通用设置中的执行钱包一致。");
+    }
+
+    purchaseStatus.value = "获取链上报价...";
+    const quote = await requestPurchaseQuote(quantity, effectiveSlotPurchaseSlippageBps.value);
+    if (!quote.purchase || quote.walletAddress?.toLowerCase() !== connectedAddress) throw new Error("购买报价与执行钱包不一致，请刷新后重试。");
+
+    purchaseStatus.value = "检查 USDT 授权...";
+    const allowance = await readUsdtAllowance(provider, connectedAddress, quote.purchase.usdtAddress, quote.purchase.saleAddress);
+    const required = parseUnits(quote.purchase.usdtAmount);
+    if (allowance < required) {
+      purchaseStatus.value = "请在钱包中确认 USDT 授权...";
+      const approvalHash = await sendWalletTransaction(provider, {
+        from: connectedAddress,
+        to: quote.purchase.usdtAddress,
+        data: quote.purchase.approvalData,
+      });
+      await waitForConfirmedReceipt(provider, approvalHash);
+    }
+
+    purchaseStatus.value = "请在钱包中确认购买...";
+    const txHash = await sendWalletTransaction(provider, {
+      from: connectedAddress,
+      to: quote.purchase.saleAddress,
+      data: quote.purchase.buyData,
+    });
+    purchaseStatus.value = "等待链上确认...";
+    await waitForConfirmedReceipt(provider, txHash);
+
+    purchaseStatus.value = "同步订单记录...";
+    const confirmation = await fetch("/api/slots/purchase-confirm", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ txHash }),
+    });
+    const confirmed = await confirmation.json().catch(() => ({})) as { ok?: boolean; error?: string; slotCount?: number; xbchAmount?: string; txHash?: string };
+    if (!confirmation.ok || confirmed.ok === false || !confirmed.txHash) throw new Error(confirmed.error || "购买已上链，但订单缓存同步失败；请刷新记录重试。");
+    purchaseResult.value = {
+      txHash: confirmed.txHash,
+      slotCount: Number(confirmed.slotCount || quantity),
+      xbchAmount: String(confirmed.xbchAmount || quote.purchase.expectedXbch),
+      explorerUrl: `https://bscscan.com/tx/${confirmed.txHash}`,
+    };
+    await loadOrders(false);
+  } catch (error) {
+    purchaseError.value = userFacingWalletError(error);
+  } finally {
+    purchaseBusy.value = false;
+    purchaseStatus.value = "处理中...";
+  }
+}
+
+function selectSlotSlippage(bps: number) {
+  slotPurchaseCustomSlippage.value = false;
+  slotPurchaseSlippageBps.value = bps;
+}
+
+function enableCustomSlotSlippage() {
+  slotPurchaseCustomSlippage.value = true;
+  slotPurchaseCustomSlippagePercent.value = (slotPurchaseSlippageBps.value / 100).toString();
+}
+
+async function selectPurchaseWallet(): Promise<Eip1193Provider> {
+  const existingReownProvider = reownProvider?.walletProvider;
+  if (isEip1193Provider(existingReownProvider)) return existingReownProvider;
+  if (!isReownEnabled || !reownModal) throw new Error("Reown 尚未配置。请在 .env 设置 VITE_REOWN_PROJECT_ID 后重启应用。");
+  await reownModal.open({ view: "Connect" });
+  const connectedReownProvider = reownProvider?.walletProvider;
+  if (isEip1193Provider(connectedReownProvider)) return connectedReownProvider;
+  throw new Error("请在钱包中选择账户并完成连接。");
+}
+
+function isEip1193Provider(value: unknown): value is Eip1193Provider {
+  return Boolean(value) && typeof (value as Eip1193Provider).request === "function";
+}
+
+async function requestPurchaseQuote(quantity: number, slippageBps: number): Promise<SlotPurchaseQuote> {
+  const response = await fetch("/api/slots/purchase-quote", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ quantity, slippageBps }),
+  });
+  const payload = await response.json().catch(() => ({})) as SlotPurchaseQuote;
+  if (!response.ok || payload.ok === false || !payload.purchase) throw new Error(payload.error || "当前无法获取购买报价。");
+  return payload;
+}
+
+async function ensureBscNetwork(provider: Eip1193Provider) {
+  const chainId = await provider.request({ method: "eth_chainId" });
+  if (String(chainId).toLowerCase() === "0x38") return;
+  try {
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
+  } catch (error) {
+    if ((error as { code?: number }).code !== 4902) throw error;
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [{
+        chainId: "0x38", chainName: "BNB Smart Chain", nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+        rpcUrls: ["https://rpc.bscpro.supermtglobal.com"],
+        blockExplorerUrls: ["https://bscscan.com"],
+      }],
+    });
+  }
+}
+
+async function readUsdtAllowance(provider: Eip1193Provider, owner: string, token: string, spender: string): Promise<bigint> {
+  const data = `0xdd62ed3e${encodeAddress(owner)}${encodeAddress(spender)}`;
+  const value = await provider.request({ method: "eth_call", params: [{ to: token, data }, "latest"] });
+  return /^0x[0-9a-f]+$/i.test(String(value)) ? BigInt(String(value)) : 0n;
+}
+
+async function sendWalletTransaction(provider: Eip1193Provider, transaction: { from: string; to: string; data: string }): Promise<string> {
+  const result = await provider.request({ method: "eth_sendTransaction", params: [transaction] });
+  const hash = String(result || "");
+  if (!/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("钱包未返回有效交易哈希。");
+  return hash;
+}
+
+async function waitForConfirmedReceipt(provider: Eip1193Provider, txHash: string) {
+  const timeoutAt = Date.now() + 180_000;
+  while (Date.now() < timeoutAt) {
+    const receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [txHash] }) as { status?: string } | null;
+    if (receipt) {
+      if (String(receipt.status).toLowerCase() !== "0x1") throw new Error("链上交易执行失败。");
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+  }
+  throw new Error("交易仍在等待链上确认，请稍后刷新卡槽记录。");
+}
+
+function encodeAddress(value: string) {
+  const normalized = value.toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]{40}$/.test(normalized)) throw new Error("钱包地址无效。");
+  return normalized.padStart(64, "0");
+}
+
+function parseUnits(value: string) {
+  const [whole, fraction = ""] = value.split(".");
+  if (!/^\d+$/.test(whole) || !/^\d*$/.test(fraction)) throw new Error("购买金额无效。");
+  return BigInt(whole) * 10n ** 18n + BigInt(fraction.slice(0, 18).padEnd(18, "0"));
+}
+
+function userFacingWalletError(error: unknown) {
+  const candidate = error as { code?: number; message?: string };
+  if (candidate?.code === 4001) return "已在钱包中取消交易。";
+  return error instanceof Error ? error.message : "购买卡槽失败，请稍后重试。";
 }
 
 function normalizeSummary(value: Partial<SlotsSummary> | undefined, rows: SlotOrder[]): SlotsSummary {
   const tradeRows = rows.filter((order) => isTradeOrderType(order.orderType));
   return {
-    total: finiteInteger(value?.total, tradeRows.length),
+    total: finiteInteger(value?.total, tradeRows.reduce((total, order) => total + slotQuantity(order), 0)),
     recordTotal: finiteInteger(value?.recordTotal, rows.length),
     operationTotal: finiteInteger(value?.operationTotal, rows.length - tradeRows.length),
     active: finiteInteger(value?.active, tradeRows.filter((order) => order.statusGroup === "active").length),
@@ -439,6 +742,12 @@ function emptySummary(): SlotsSummary {
 
 function isTradeOrderType(orderType: string) {
   return ["buy_xbch", "sell_xbch", "legacy_trade"].includes(orderType);
+}
+
+function slotQuantity(order: SlotOrder) {
+  if (Number.isSafeInteger(order.slotCount) && order.slotCount > 0) return order.slotCount;
+  const amount = Number(order.usdtAmount || order.effectiveUsdtAmount || 0);
+  return order.orderType === "buy_xbch" && Number.isFinite(amount) && amount > 0 ? Math.max(1, Math.floor(amount / 500)) : 0;
 }
 
 function isRewardOrderType(orderType: string) {

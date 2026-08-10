@@ -15,14 +15,14 @@ const forbiddenPaths = [
   /^server\/state-api-rust(?:\/|$)/,
   /(?:^|\/)\.superarb(?:\/|$)/,
   /(?:^|\/)outputs(?:\/|$)/,
+  /^ops(?:\/|$)/,
   /(?:^|\/)\.env(?:\.|$)/,
-  /\.sql$/i,
   /\.(?:key|p12|pfx|jks|keystore)$/i,
   /(?:^|\/)(?:secrets?|credentials?)(?:\/|\.|$)/i,
 ];
-const allowedPaths = new Set([".env.example", "server/tx-wallet-public.pem"]);
+const allowedPaths = new Set([".env.example"]);
 const secretPatterns = [
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
+  /-----BEGIN [A-Z ]*KEY-----/,
   /postgres(?:ql)?:\/\/[^\s]+@/i,
   /\bghp_[A-Za-z0-9]{30,}\b/,
   /\bgithub_pat_[A-Za-z0-9_]{30,}\b/,
@@ -53,4 +53,4 @@ if (failures.length) {
 }
 
 if (files.some((path) => path.split(sep).includes("state-api-rust"))) process.exit(1);
-console.log(`public release check passed (${files.length} publishable files, no private backend/database/secrets)`);
+console.log(`public release check passed (${files.length} publishable files, no private backend/secrets)`);

@@ -1,33 +1,28 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { dirname, resolve } from "node:path";
-import { getPublicKey } from "@noble/secp256k1";
-import { keccak_256 } from "@noble/hashes/sha3.js";
-import { hexToBytes } from "@noble/hashes/utils.js";
+import { dirname } from "node:path";
 import WebSocket from "ws";
 import { assertOfficialConfig } from "./official-config";
 import { bootstrapPrivateMemberWalletOnce, setPrivateMemberExecutionPresence } from "./private-member-wallet-bootstrap";
-import { encryptPrivateKeyEnvelope } from "./private-key-envelope";
 import { queueWssToken } from "./queue-token";
 import { ENV_FILE, stateFile } from "./runtime-paths";
 
 const LOCAL_QUEUE_STATE_FILE = stateFile("liquidation-queue-client.json");
 const LOCAL_QUEUE_STOP_FILE = stateFile("liquidation-queue-stops.json");
 const CLIENT_INSTANCE_FILE = stateFile("client-instance-id");
-const TX_CREDENTIAL_SYNC_STATE_FILE = stateFile("tx-credential-sync.json");
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_QUEUE_STATUS_API_URL = "https://privateapi.superarb.ai/online-users";
-const DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL = "https://privateapi.superarb.ai/bootstrap";
+const DEFAULT_PRIVATE_MEMBER_BOOTSTRAP_URL = "https://privateapi.superarb.ai/v1/liq2/bootstrap";
 const DEFAULT_QUEUE_WSS_URL = "wss://private.superarb.ai/ws/liquidation-queue-v2";
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const USER_LEAVE_ACTIONS = ["pause", "logout"];
 const SYSTEM_LEAVE_ACTIONS = ["rpc-expired"];
 const STOP_ACTIONS = [...USER_LEAVE_ACTIONS, ...SYSTEM_LEAVE_ACTIONS];
 const ENABLED_QUEUE_CHAINS: ChainKey[] = ["bnb"];
-const CLIENT_VERSION = "1.6.9";
-const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
+const CLIENT_VERSION = "1.7.0";
+const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260810-v170";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
 
@@ -375,7 +370,7 @@ async function registerQueueStatus(req: IncomingMessage) {
   } catch (error) {
     preflightWarning = `官方配置检测暂未通过，已按本地 RPC/token 继续启动：${error instanceof Error ? error.message : String(error)}`;
   }
-  const walletAddress = privateKeyToAddress(env.PRIVATE_KEY?.trim() ?? "");
+  const walletAddress = configuredWalletAddress(env);
   const meteredRpcUrl = env[chainEnvKeys[chain]]?.trim();
   const rpcUrls = balanceRpcUrls(chain, env);
   if (!meteredRpcUrl) throw new Error(`${chainEnvKeys[chain]} 未配置，不能启动该链队列。`);
@@ -445,10 +440,6 @@ async function registerQueueStatus(req: IncomingMessage) {
     rpcServiceExpiresAt: rpcAccess?.rpcServiceExpiresAt ?? previousRuntimeSettings?.rpcServiceExpiresAt ?? QUEUE_NO_RPC_EXPIRY,
   };
   const expiresAt = queueRuntimeSettings.rpcServiceExpiresAt;
-  const txCredentialSignature = txCredentialSyncSignature(env, walletAddress, rpcAccess);
-  const shouldUploadTxCredential = !stopping && !heartbeat && shouldUploadTxCredentialFields(action, txCredentialSignature);
-  const txCredentialFields = shouldUploadTxCredential ? buildTxWalletCredentialFields(env, walletAddress) : {};
-
   const eligible = !stopping && (balances ? Number.isFinite(gasBalance) && Number(gasBalance) > 0 : true);
   const reason = stopping ? "client stopped" : balances ? (eligible ? undefined : `${chainLabel(chain)} wallet has no gas.`) : balanceResult.reason;
   const payload = {
@@ -488,13 +479,10 @@ async function registerQueueStatus(req: IncomingMessage) {
     billingStatus: billable ? "online" : "stopped",
     billingStartedAt: billable ? generatedAtIso : undefined,
     billingStoppedAt: billable ? undefined : generatedAtIso,
-    txCredentialSyncSignature: shouldUploadTxCredential ? txCredentialSignature : undefined,
-    txCredentialSyncRequired: shouldUploadTxCredential,
     eligible,
     reason,
     ...queueRuntimeSettings,
     ...rpcAccess,
-    ...txCredentialFields,
   };
   const localQueueItem = publicLocalQueueItem(privateQueuePayload(payload).items[0] as Record<string, unknown>);
   if (stopping) {
@@ -509,8 +497,6 @@ async function registerQueueStatus(req: IncomingMessage) {
     payload: { ok: true, source: "liq2-local-queue" },
   };
   let transportWarning: string | undefined = preflightWarning;
-  if (shouldUploadTxCredential) rememberTxCredentialSync(txCredentialSignature);
-
   let remoteQueue: { verified: true; participantId?: string } | undefined;
   let remoteQueueWarning: string | undefined;
   try {
@@ -684,9 +670,6 @@ function backgroundHeartbeatPayload(
     // queue membership or manufacture a new client-side lease.
     expiresAt: payload.expiresAt,
     balances: undefined,
-    privateKeyCipher: undefined,
-    txCredentialSyncSignature: undefined,
-    txCredentialSyncRequired: false,
   };
 }
 
@@ -723,8 +706,6 @@ function updateLocalQueueState(payload: {
   billingStatus?: string;
   billingStartedAt?: string;
   billingStoppedAt?: string;
-  txCredentialSyncSignature?: string;
-  txCredentialSyncRequired?: boolean;
 }): void {
   const state = readLocalQueueState();
   const item = publicLocalQueueItem(privateQueuePayload(payload).items[0] as Record<string, unknown>);
@@ -796,8 +777,6 @@ function findLocalQueueRow(
 
 function publicLocalQueueItem(item: Record<string, unknown>): Record<string, unknown> {
   const {
-    privateKeyCipher: _privateKeyCipher,
-    private_key_cipher: _privateKeyCipherSnake,
     walletPublicKey: _walletPublicKey,
     wallet_public_key: _walletPublicKeySnake,
     publicKey: _publicKey,
@@ -2088,7 +2067,6 @@ function privateQueuePayload(payload: {
   heartbeatIntervalMs: number;
   expiresAt: string;
   clientVersion?: string;
-  privateKeyCipher?: string;
   rpcUrl?: string;
   rpcToken?: string;
   walletUsdt?: string;
@@ -2106,8 +2084,6 @@ function privateQueuePayload(payload: {
   billingStatus?: string;
   billingStartedAt?: string;
   billingStoppedAt?: string;
-  txCredentialSyncSignature?: string;
-  txCredentialSyncRequired?: boolean;
 }) {
   const stopping = STOP_ACTIONS.includes(payload.action);
   const status = stopping ? "paused" : payload.eligible ? "queued" : "waiting";
@@ -2167,17 +2143,11 @@ function privateQueuePayload(payload: {
     billing_started_at: payload.billingStartedAt,
     billingStoppedAt: payload.billingStoppedAt,
     billing_stopped_at: payload.billingStoppedAt,
-    txCredentialSyncSignature: payload.txCredentialSyncSignature,
-    tx_credential_sync_signature: payload.txCredentialSyncSignature,
-    txCredentialSyncRequired: payload.txCredentialSyncRequired,
-    tx_credential_sync_required: payload.txCredentialSyncRequired,
     online,
     isOnline: online,
     is_online: online,
     metering: meteringSettings(payload, billable, online, billingStatus, rpcQuotaKey, billingAccountKey),
     rpc: payload.rpcEnv,
-    privateKeyCipher: payload.privateKeyCipher,
-    private_key_cipher: payload.privateKeyCipher,
     credentialAuthMode: payload.credentialAuthMode,
     credential_auth_mode: payload.credentialAuthMode,
     credentialMode: credentialModeLabel(payload.credentialAuthMode),
@@ -2244,8 +2214,6 @@ function privateQueuePayload(payload: {
         nickname: payload.nickname,
         clientInstanceId: payload.clientInstanceId,
         client_instance_id: payload.clientInstanceId,
-        privateKeyCipher: payload.privateKeyCipher,
-        private_key_cipher: payload.privateKeyCipher,
         arbitrageIntensity: payload.arbitrageIntensity,
         arbitrage_intensity: payload.arbitrageIntensity,
         credentialAuthMode: payload.credentialAuthMode,
@@ -2292,10 +2260,6 @@ function privateQueuePayload(payload: {
         billing_started_at: payload.billingStartedAt,
         billingStoppedAt: payload.billingStoppedAt,
         billing_stopped_at: payload.billingStoppedAt,
-        txCredentialSyncSignature: payload.txCredentialSyncSignature,
-        tx_credential_sync_signature: payload.txCredentialSyncSignature,
-        txCredentialSyncRequired: payload.txCredentialSyncRequired,
-        tx_credential_sync_required: payload.txCredentialSyncRequired,
         online,
         isOnline: online,
         is_online: online,
@@ -2370,8 +2334,8 @@ function meteringSettings(
     model: "server_online_wallet_per_second",
     quotaModel: "shared_rpc_token_quota",
     quota_model: "shared_rpc_token_quota",
-    billingModel: "per_private_key_wallet",
-    billing_model: "per_private_key_wallet",
+    billingModel: "per_wallet_address",
+    billing_model: "per_wallet_address",
     billable,
     online,
     billingStatus,
@@ -2401,14 +2365,12 @@ function meteringSettings(
 }
 
 function tx2Settings(payload: {
-  privateKeyCipher?: string;
   credentialAuthMode?: string;
   singleTradeAuthAmountUsdt?: string;
   arbitrageIntensity?: string;
 }, queueCredential: string) {
   return {
     queueCredential,
-    privateKeyCipher: payload.privateKeyCipher,
     credentialAuthMode: payload.credentialAuthMode,
     credentialMode: credentialModeLabel(payload.credentialAuthMode),
     singleTradeAuthAmountUsdt: payload.singleTradeAuthAmountUsdt,
@@ -2459,55 +2421,6 @@ function readClientInstanceId(): string {
   }
 }
 
-function buildTxWalletCredentialFields(env: Record<string, string>, walletAddress: string): {
-  privateKeyCipher: string;
-} {
-  const privateKey = normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "");
-  const derivedAddress = privateKeyToAddress(privateKey);
-  if (derivedAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("PRIVATE_KEY 与当前钱包地址不匹配，不能提交 tx2 凭证。");
-  return {
-    privateKeyCipher: encryptPrivateKeyEnvelope(privateKey, readTxPublicKeyPem()),
-  };
-}
-
-function shouldUploadTxCredentialFields(action: string, signature: string): boolean {
-  if (STOP_ACTIONS.includes(action)) return false;
-  if (action === "start") return true;
-  return readTxCredentialSyncSignature() !== signature;
-}
-
-function txCredentialSyncSignature(env: Record<string, string>, walletAddress: string, rpcAccess?: RpcAccessInfo): string {
-  const tradeSettings = readTradeSettings(env);
-  const payload = {
-    version: 1,
-    walletAddress: walletAddress.toLowerCase(),
-    privateKeyHash: tokenFingerprint(normalizePrivateKey(env.PRIVATE_KEY?.trim() ?? "")),
-    credentialAuthMode: tradeSettings.credentialAuthMode,
-    singleTradeAuthAmountUsdt: tradeSettings.singleTradeAuthAmountUsdt,
-    arbitrageIntensity: tradeSettings.arbitrageIntensity,
-    rpcAccessTokenHash: rpcAccess?.rpcAccessTokenHash ?? "",
-    rpcPlanType: rpcAccess?.rpcPlanType ?? "",
-    rpcPlanName: rpcAccess?.rpcPlanName ?? "",
-    creditBurnPerSecond: rpcAccess?.creditBurnPerSecond ?? null,
-  };
-  return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-}
-
-function readTxCredentialSyncSignature(): string {
-  if (!existsSync(TX_CREDENTIAL_SYNC_STATE_FILE)) return "";
-  try {
-    const parsed = JSON.parse(readFileSync(TX_CREDENTIAL_SYNC_STATE_FILE, "utf8")) as { signature?: unknown };
-    return typeof parsed.signature === "string" ? parsed.signature : "";
-  } catch {
-    return "";
-  }
-}
-
-function rememberTxCredentialSync(signature: string): void {
-  mkdirSync(dirname(TX_CREDENTIAL_SYNC_STATE_FILE), { recursive: true });
-  writeFileSync(TX_CREDENTIAL_SYNC_STATE_FILE, `${JSON.stringify({ signature, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
-}
-
 function readTradeSettings(env: Record<string, string>): { arbitrageIntensity: string; credentialAuthMode: string; singleTradeAuthAmountUsdt: string } {
   return {
     arbitrageIntensity: normalizeArbitrageIntensity(env.ARBITRAGE_INTENSITY),
@@ -2534,12 +2447,6 @@ function normalizeUsdtAmount(value?: string): string {
   const numeric = Number(String(value || "").replace(/,/g, "").trim());
   if (!Number.isFinite(numeric) || numeric <= 0) return "100";
   return numeric.toString();
-}
-
-function readTxPublicKeyPem(): string {
-  const defaultPath = resolve(process.cwd(), "server/tx-wallet-public.pem");
-  if (!existsSync(defaultPath)) throw new Error(`TX wallet public key not found: ${defaultPath}`);
-  return readFileSync(defaultPath, "utf8");
 }
 
 async function parseOptionalJson(response: Response): Promise<Record<string, unknown>> {
@@ -2591,18 +2498,10 @@ function normalizeEndpointSlug(value?: string): string {
   return (value ?? "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
 }
 
-function privateKeyToAddress(privateKey: string): string {
-  const key = privateKey.replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确，不能上报启动队列。");
-  const publicKey = getPublicKey(hexToBytes(key), false).slice(1);
-  const hash = keccak_256(publicKey);
-  return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
-}
-
-function normalizePrivateKey(privateKey: string): string {
-  const hex = privateKey.trim().replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(hex)) throw new Error("PRIVATE_KEY 格式不正确，不能加密提交。");
-  return `0x${hex}`;
+function configuredWalletAddress(env: Record<string, string>): string {
+  const value = env.WALLET_ADDRESS?.trim() ?? "";
+  if (!/^0x[a-fA-F0-9]{40}$/.test(value)) throw new Error("WALLET_ADDRESS 格式不正确，不能上报启动队列。");
+  return value;
 }
 
 async function readWalletBalances(chain: ChainKey, walletAddress: string, rpcUrl: string, env: Record<string, string>): Promise<WalletBalances> {

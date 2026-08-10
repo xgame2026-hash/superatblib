@@ -1,8 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getPublicKey } from "@noble/secp256k1";
-import { keccak_256 } from "@noble/hashes/sha3.js";
-import { hexToBytes } from "@noble/hashes/utils.js";
 import { ENV_FILE } from "./runtime-paths";
 
 const BALANCE_OF_SELECTOR = "0x70a08231";
@@ -68,12 +65,7 @@ export function handleWalletAssetsRequest(req: IncomingMessage, res: ServerRespo
 
 async function fetchWalletAssets() {
   const env = readEnv();
-  const privateKey = env.PRIVATE_KEY?.trim();
-  if (!privateKey) {
-    throw new Error("请先在 .env 配置 PRIVATE_KEY，才能查询钱包资产。");
-  }
-
-  const walletAddress = privateKeyToAddress(privateKey);
+  const walletAddress = configuredWalletAddress(env);
   const chains: ChainKey[] = ["ethereum", "bnb", "arbitrum"];
   const rows = await Promise.all(chains.map((chain) => fetchChainAssets(chain, walletAddress, env)));
   return { ok: true, walletAddress, rows };
@@ -163,12 +155,10 @@ async function rpc<T>(chain: ChainKey, rpcUrl: string, method: string, params: u
   return payload.result as T;
 }
 
-function privateKeyToAddress(privateKey: string): string {
-  const key = privateKey.replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY 格式不正确。");
-  const publicKey = getPublicKey(hexToBytes(key), false).slice(1);
-  const hash = keccak_256(publicKey);
-  return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
+function configuredWalletAddress(env: Record<string, string>): string {
+  const value = env.WALLET_ADDRESS?.trim() ?? "";
+  if (!/^0x[a-fA-F0-9]{40}$/.test(value)) throw new Error("请先在 .env 配置格式正确的 WALLET_ADDRESS，才能查询钱包资产。");
+  return value;
 }
 
 function hexToBigInt(value?: string): bigint {

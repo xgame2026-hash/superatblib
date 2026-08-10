@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { verifyMessage } from "ethers";
 
 const PROFILE_ROUTE = "/api/profile/avatar";
 const PROFILE_IMAGE_ROUTE = "/api/profile/avatar/image";
@@ -64,6 +65,14 @@ export function handleAvatarProfileRequest(req: IncomingMessage, res: ServerResp
     void readCanonicalProfile(wallet, uploadToken)
       .then((result) => sendCanonicalProfileResult(res, wallet, result))
       .catch((error: unknown) => sendUnexpectedError(res, error));
+    return true;
+  }
+
+  try {
+    assertWalletOwnershipProof(wallet, req.headers);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Wallet confirmation is required.";
+    json(res, 401, { message });
     return true;
   }
 
@@ -164,6 +173,8 @@ async function forwardMultipartRequest(
   }
 
   const body = await readBody(req, options.bodyLimit);
+  const upstreamBody: BodyInit = body;
+  const upstreamContentType: string | undefined = contentType;
 
   let response: Response;
   let responseBody: Buffer;
@@ -172,9 +183,9 @@ async function forwardMultipartRequest(
       method: "POST",
       headers: {
         ...upstreamHeaders(options.wallet, options.uploadToken),
-        "content-type": contentType,
+        ...(upstreamContentType ? { "content-type": upstreamContentType } : {}),
       },
-      body,
+      body: upstreamBody,
       signal: AbortSignal.timeout(options.timeoutMs),
     });
     responseBody = Buffer.from(await response.arrayBuffer());
@@ -252,6 +263,21 @@ function upstreamHeaders(wallet: string, uploadToken?: string): Record<string, s
   };
   if (uploadToken) headers["x-superimg-upload-token"] = uploadToken;
   return headers;
+}
+
+function assertWalletOwnershipProof(wallet: string, headers: IncomingMessage["headers"]): void {
+  const signature = headerValue(headers["x-wallet-signature"]);
+  const encodedMessage = headerValue(headers["x-wallet-proof-message"]);
+  if (!signature || !encodedMessage) throw new Error("请先通过钱包确认头像上传。");
+  let message = "";
+  try { message = Buffer.from(encodedMessage, "base64").toString("utf8"); } catch { throw new Error("钱包确认信息无效。"); }
+  const match = /^SuperARB LIQ2 avatar update \| wallet=(0x[a-fA-F0-9]{40}) \| issuedAt=(.+) \| nonce=\d+$/.exec(message);
+  if (!match || normalizeWallet(match[1]) !== wallet) throw new Error("钱包确认信息与执行钱包不一致。");
+  const issuedAt = Date.parse(match[2]);
+  if (!Number.isFinite(issuedAt) || Math.abs(Date.now() - issuedAt) > 5 * 60_000) throw new Error("钱包确认已过期，请重新确认。");
+  let signer = "";
+  try { signer = verifyMessage(message, signature).toLowerCase(); } catch { throw new Error("钱包确认签名无效。"); }
+  if (signer !== wallet) throw new Error("钱包确认签名与执行钱包不一致。");
 }
 
 function sendUnexpectedError(res: ServerResponse, error: unknown): void {

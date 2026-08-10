@@ -5,22 +5,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { handleAvatarProfileRequest } from "./server/avatar-profile-middleware";
 import { handleGithubVersionRequest } from "./server/github-version-middleware";
+import { handleInformationNotificationsRequest } from "./server/information-notifications-middleware";
 import { handleLatestLiquidationsRequest } from "./server/latest-liquidations-middleware";
 import { handleLiquidationQueueStatusRequest, restoreLocalQueueHeartbeats } from "./server/liquidation-queue-status-middleware";
 import { handleNewsRequest } from "./server/news-middleware";
+import { handlePolymarketMarketRequest } from "./server/polymarket-market-middleware";
+import { handlePolymarketReadonlyRequest } from "./server/polymarket-readonly-middleware";
 import { handlePaidProfitRequest } from "./server/paid-profit-middleware";
 import { handleRpcUsageRequest } from "./server/rpc-usage-middleware";
 import { handleSettingsRequest } from "./server/settings-middleware";
 import { restorePendingPrivateMemberLeave } from "./server/private-member-wallet-bootstrap";
 import { handleSlotsOrdersRequest } from "./server/slots-orders-middleware";
-import { handleSwapRequest } from "./server/swap-middleware";
 import { handleTxGraphRequest } from "./server/tx-graph-middleware";
 import { handleUpdateCompletionRequest } from "./server/update-completion-middleware";
 import { handleWalletAssetsRequest } from "./server/wallet-assets-middleware";
-import { handlePolymarketMarketRequest } from "./server/polymarket-market-middleware";
-import { handlePolymarketVaultRequest } from "./server/polymarket-vault-middleware";
-import { handlePolymarketPowerRequest } from "./server/polymarket-power-middleware";
-import { handleCrossExchangeMarketRequest } from "./server/cross-exchange-market-middleware";
 import { ENV_FILE, LIQ2_PROFILE, STATE_DIR, stateFile } from "./server/runtime-paths";
 
 export default defineConfig(({ mode }) => {
@@ -55,12 +53,9 @@ export default defineConfig(({ mode }) => {
           }
           if (
             !handleAvatarProfileRequest(req, res) &&
-            !handlePolymarketPowerRequest(req, res) &&
-            !handlePolymarketVaultRequest(req, res) &&
+            !handlePolymarketReadonlyRequest(req, res) &&
             !handlePolymarketMarketRequest(req, res) &&
-            !handleCrossExchangeMarketRequest(req, res) &&
             !handleSlotsOrdersRequest(req, res) &&
-            !handleSwapRequest(req, res) &&
             !handleSettingsRequest(req, res) &&
             !handleLatestLiquidationsRequest(req, res) &&
             !handleLiquidationQueueStatusRequest(req, res) &&
@@ -69,6 +64,7 @@ export default defineConfig(({ mode }) => {
             !handleTxGraphRequest(req, res) &&
             !handleRpcUsageRequest(req, res) &&
             !handleGithubVersionRequest(req, res) &&
+            !handleInformationNotificationsRequest(req, res) &&
             !handleUpdateCompletionRequest(req, res) &&
             !handleWalletAssetsRequest(req, res)
           ) {

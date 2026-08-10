@@ -1,27 +1,8 @@
 <template>
   <div class="app-shell" :class="{ 'is-authenticated': isAuthenticated }">
     <section v-if="!isAuthenticated" class="login-screen">
-      <div class="login-liquid-shell">
-        <LiquidEther
-          class-name="login-liquid-ether"
-          :colors="['#6D28D9', '#8B5CF6', '#A78BFA']"
-          :mouse-force="20"
-          :cursor-size="100"
-          :is-viscous="false"
-          :viscous="30"
-          :iterations-viscous="32"
-          :iterations-poisson="32"
-          :dt="0.014"
-          :resolution="0.5"
-          :BFECC="true"
-          :is-bounce="false"
-          :auto-demo="true"
-          :auto-speed="0.5"
-          :auto-intensity="2.2"
-          :takeover-duration="0.25"
-          :auto-resume-delay="3000"
-          :auto-ramp-duration="0.6"
-        />
+      <div class="login-background-shell">
+        <VantaWaves class="login-vanta-waves" />
       </div>
       <div class="login-card-stack">
         <main class="login-panel">
@@ -145,14 +126,6 @@
           />
         </div>
 
-        <div v-show="activeView === 'execution'" :hidden="activeView !== 'execution'">
-          <LatestLiquidationsView
-            :active="activeView === 'execution'"
-            :configured="privateDataReady"
-            @open-tx-graph="openTxGraphFromLiquidation"
-          />
-        </div>
-
         <div v-show="activeView === 'liquidationTopic'" :hidden="activeView !== 'liquidationTopic'">
           <LiquidationTopicView
             :active="activeView === 'liquidationTopic'"
@@ -171,6 +144,14 @@
           />
         </div>
 
+        <div v-show="activeView === 'swap'" :hidden="activeView !== 'swap'">
+          <SwapView :configured="privateDataReady" />
+        </div>
+
+        <div v-show="activeView === 'polymarket'" :hidden="activeView !== 'polymarket'">
+          <PolymarketView :active="activeView === 'polymarket'" />
+        </div>
+
         <template v-if="activeView === 'news'">
           <NewsPanel
             :items="newsItems"
@@ -184,18 +165,6 @@
 
         <template v-else-if="activeView === 'txgraph'">
           <TxGraphPanel :initial-query="txGraphInitialQuery" />
-        </template>
-
-        <template v-else-if="activeView === 'swap'">
-          <SwapView />
-        </template>
-
-        <template v-else-if="activeView === 'polymarket'">
-          <PolymarketView />
-        </template>
-
-        <template v-else-if="activeView === 'crossExchange'">
-          <CrossExchangeArbitrageView />
         </template>
 
         <template v-else-if="activeView === 'slots'">
@@ -354,16 +323,16 @@ import {
   type CredentialAuditResult,
 } from "../server/credential-audit";
 import DashboardView from "./features/dashboard/DashboardView.vue";
-import LatestLiquidationsView from "./features/latest-liquidations/LatestLiquidationsView.vue";
 import LiquidationView from "./features/liquidation/LiquidationView.vue";
 import LiquidationTopicView from "./features/liquidation/LiquidationTopicView.vue";
-import LiquidEther from "./components/LiquidEther.vue";
+import VantaWaves from "./components/VantaWaves.vue";
 import NewsPanel from "./features/news/NewsPanel.vue";
 import SettingsView from "./features/settings/SettingsView.vue";
 import SidebarNav from "./features/sidebar/SidebarNav.vue";
 import SlotsView from "./features/slots/SlotsView.vue";
-import AlertSoundMonitor from "./features/alerts/AlertSoundMonitor.vue";
 import SwapView from "./features/swap/SwapView.vue";
+import PolymarketView from "./features/polymarket/PolymarketView.vue";
+import AlertSoundMonitor from "./features/alerts/AlertSoundMonitor.vue";
 import miniLogoUrl from "./img/SuperARBmini.png";
 import aaveIcon from "./img/aave-token-round.svg";
 import arbIcon from "./img/arb.svg";
@@ -377,14 +346,12 @@ import infoNewIconUrl from "./img/infonew.svg";
 import liqItemIconUrl from "./img/liqitem.svg";
 import musicCloseIconUrl from "./img/music_close.svg";
 import musicOpenIconUrl from "./img/music_open.svg";
-import newLiqIconUrl from "./img/newliq.svg";
 import polygonIcon from "./img/Polygon.svg";
 import queryIconUrl from "./img/sarchhash.svg";
 import saveIconUrl from "./img/save.svg";
 import arrowIconUrl from "./img/arrow.svg";
-import swapIconUrl from "./img/swap-line.svg";
+import swapIconUrl from "./img/crosswap.svg";
 import polymarketIconUrl from "./img/polymarket.svg";
-import crossExchangeIconUrl from "./img/crosswap.svg";
 import footerLogoUrl from "./img/SuperARB_logo.png";
 import githubIconUrl from "./img/github.svg";
 import homeIconUrl from "./img/home.svg";
@@ -398,7 +365,7 @@ type GithubVersionState = "checking" | "latest" | "update" | "unconfigured" | "e
 type GithubUpdateTarget = { version: string; commit: string };
 type PendingUpdateCompletion = { receiptId: string; played: boolean };
 type AutomaticUpdateStatus = { status?: string; message?: string; workerPid?: number };
-type ViewKey = "overview" | "execution" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "swap" | "polymarket" | "crossExchange" | "slots" | "settings";
+type ViewKey = "overview" | "swap" | "polymarket" | "analytics" | "liquidationTopic" | "news" | "txgraph" | "slots" | "settings";
 type SettingsSectionKey = "general" | "profile" | "credentials" | "rpc" | "feeds" | "alerts";
 type RpcKey = "ethereum" | "bnb" | "arbitrum" | "base" | "polygon";
 type FeedKey =
@@ -425,14 +392,12 @@ const AUTOMATIC_UPDATE_ATTEMPTED_KEY = "liq2-automatic-update-attempted-v1";
 const GITHUB_VERSION_REFRESH_MS = 5 * 60 * 1000;
 const AUTOMATIC_UPDATE_POLL_MS = 2_000;
 const AUTH_CODE_PATTERN = /^SMT-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i;
-const appVersion = "1.6.9";
+const appVersion = "1.7.0";
 const appGitCommit = __APP_GIT_COMMIT__;
 const displayVersion = appGitCommit ? `${appVersion}+${appGitCommit}` : appVersion;
 
 const TxGraphPanel = defineAsyncComponent(() => import("./features/txgraph/TxGraphPanel.vue"));
-const PolymarketView = defineAsyncComponent(() => import("./features/polymarket/PolymarketView.vue"));
-const CrossExchangeArbitrageView = defineAsyncComponent(() => import("./features/cross-exchange/CrossExchangeArbitrageView.vue"));
-const viewKeys = ["overview", "execution", "analytics", "liquidationTopic", "news", "txgraph", "swap", "polymarket", "crossExchange", "slots", "settings"] satisfies ViewKey[];
+const viewKeys = ["overview", "swap", "polymarket", "analytics", "liquidationTopic", "news", "txgraph", "slots", "settings"] satisfies ViewKey[];
 const settingsSectionKeys = ["general", "profile", "credentials", "rpc", "feeds", "alerts"] satisfies SettingsSectionKey[];
 const authCode = ref("");
 const showAuthCode = ref(false);
@@ -449,7 +414,6 @@ const settingsSaveDialogVisible = ref(false);
 const settingsSaveState = ref<SettingsSaveState>("saving");
 const settingsSaveMessage = ref(t("save.savingLong"));
 const settingsLoaded = ref(false);
-const savedPrivateKey = ref("");
 const settingsSecurityChecking = ref(false);
 const settingsSecurityRepairing = ref(false);
 const settingsSecurityDialogVisible = ref(false);
@@ -468,15 +432,13 @@ const { newsItems, newsLoading, newsError, loadNews } = useNews();
 
 const navItems = computed(() => [
   { key: "overview" as const, label: t("nav.overview"), iconUrl: homeIconUrl },
-  { key: "execution" as const, label: t("nav.execution"), iconUrl: newLiqIconUrl },
+  { key: "news" as const, label: t("nav.news"), iconUrl: infoIconUrl },
   { key: "analytics" as const, label: t("nav.analytics"), iconUrl: controlIconUrl },
   { key: "liquidationTopic" as const, label: t("nav.liquidationTopic"), iconUrl: liqItemIconUrl },
-  { key: "news" as const, label: t("nav.news"), iconUrl: infoIconUrl },
-  { key: "txgraph" as const, label: t("nav.txgraph"), iconUrl: queryIconUrl },
+  { key: "slots" as const, label: t("nav.slots"), iconUrl: compontIconUrl },
   { key: "swap" as const, label: t("nav.swap"), iconUrl: swapIconUrl },
   { key: "polymarket" as const, label: t("nav.polymarket"), iconUrl: polymarketIconUrl },
-  { key: "crossExchange" as const, label: t("nav.crossExchange"), iconUrl: crossExchangeIconUrl },
-  { key: "slots" as const, label: t("nav.slots"), iconUrl: compontIconUrl },
+  { key: "txgraph" as const, label: t("nav.txgraph"), iconUrl: queryIconUrl },
   { key: "settings" as const, label: t("nav.settings"), iconUrl: setupIconUrl },
 ]);
 
@@ -529,7 +491,7 @@ const alertSoundFields = [
 const alertSoundOptions = ALERT_SOUND_IDS;
 
 const settingsForm = reactive({
-  privateKey: "",
+  walletAddress: "",
   superMtNodeAppToken: "",
   fundingMode: "flash_loan",
   arbitrageIntensity: "conservative",
@@ -581,11 +543,9 @@ const pageEyebrow = computed(() => {
   if (activeView.value === "settings") return t("hero.settings");
   if (activeView.value === "news") return t("hero.news");
   if (activeView.value === "txgraph") return t("hero.txgraph");
+  if (activeView.value === "slots") return t("hero.slots");
   if (activeView.value === "swap") return t("hero.swap");
   if (activeView.value === "polymarket") return t("hero.polymarket");
-  if (activeView.value === "crossExchange") return t("hero.crossExchange");
-  if (activeView.value === "slots") return t("hero.slots");
-  if (activeView.value === "execution") return t("hero.execution");
   if (activeView.value === "analytics") return t("hero.analytics");
   if (activeView.value === "liquidationTopic") return t("hero.liquidationTopic");
   return t("hero.overview");
@@ -602,8 +562,9 @@ const launchSoundEnabled = computed(() => settingsForm.launchSoundMode !== "disa
 const privateDataReady = computed(() => {
   return isAuthenticated.value
     && Boolean(authCode.value.trim())
-    && /^(?:0x)?[a-fA-F0-9]{64}$/.test(settingsForm.privateKey.trim())
-    && Boolean(settingsForm.superMtNodeAppToken.trim());
+    && /^0x[a-fA-F0-9]{40}$/.test(settingsForm.walletAddress.trim())
+    && Boolean(settingsForm.superMtNodeAppToken.trim())
+    && Boolean(settingsForm.rpc.bnb.trim());
 });
 const settingsSaveTitle = computed(() => {
   if (settingsSaveState.value === "done") return t("save.doneTitle");
@@ -611,7 +572,7 @@ const settingsSaveTitle = computed(() => {
   return t("save.inProgress");
 });
 
-const missingLocalConfigKeys = ["PRIVATE_KEY", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"];
+const missingLocalConfigKeys = ["WALLET_ADDRESS", "SUPERMTNODE_APP_TOKEN", "BNB_RPC_URL"];
 const hiddenPassingSecurityKeys = [
   "SECURE_UPLOAD_STATUS",
 ];
@@ -766,11 +727,7 @@ function readViewFromUrl(): ViewKey | null {
 
 function normalizeViewAlias(value: string | null): string {
   const normalized = (value || "").trim().toLowerCase();
-  if (["leaderboard", "ranking", "rank", "latest", "liquidations", "latest-liquidations"].includes(normalized)) return "execution";
   if (["control", "dashboard", "analytics"].includes(normalized)) return "analytics";
-  if (["exchange", "swap", "兑换"].includes(normalized)) return "swap";
-  if (["polymarket", "prediction", "prediction-market", "预测市场"].includes(normalized)) return "polymarket";
-  if (["cross-exchange", "crossexchange", "arbitrage", "跨交易所套利"].includes(normalized)) return "crossExchange";
   if (["slots", "slot", "orders", "order", "卡槽", "订单"].includes(normalized)) return "slots";
   return normalized;
 }
@@ -916,11 +873,6 @@ function refreshData() {}
 function openNewsFromDashboard(id?: string) {
   selectedNewsId.value = id ?? "";
   activeView.value = "news";
-}
-
-function openTxGraphFromLiquidation(payload: { chain: "ethereum" | "bnb" | "arbitrum"; hash: string }) {
-  txGraphInitialQuery.value = { ...payload, nonce: Date.now() };
-  activeView.value = "txgraph";
 }
 
 function closeGithubMenuOnOutside(event: PointerEvent) {
@@ -1332,7 +1284,7 @@ function formatSecurityCheckedAt(value?: string) {
 }
 
 function formatSecurityLabel(item: SecurityCheckItem) {
-  if (item.key === "PRIVATE_KEY") return t("security.walletAddressLabel");
+  if (item.key === "WALLET_ADDRESS") return t("security.walletAddressLabel");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return t("security.serviceTokenLabel");
   if (item.key === "BNB_RPC_URL") return t("security.bnbRpcLabel");
   if (item.key === "LIQUIDATION_SNAPSHOT_API_URL") return t("security.snapshotApiLabel");
@@ -1349,7 +1301,7 @@ function formatSecurityScope(item: SecurityCheckItem) {
 }
 
 function formatSecurityKey(item: SecurityCheckItem) {
-  if (item.key === "PRIVATE_KEY") return "WALLET_ADDRESS";
+  if (item.key === "WALLET_ADDRESS") return "WALLET_ADDRESS";
   if (item.key === "SUPERMTNODE_APP_TOKEN") return "SERVICE_TOKEN";
   if (item.key === "AUTH_CODE") return "AUTH_CODE";
   if (item.key === "SECURE_UPLOAD_STATUS") return "SECURE_SYNC";
@@ -1357,8 +1309,8 @@ function formatSecurityKey(item: SecurityCheckItem) {
 }
 
 function formatSecurityValue(item: SecurityCheckItem) {
-  if (item.key === "PRIVATE_KEY") {
-    return item.ok ? item.value : t("security.invalidPrivateKey");
+  if (item.key === "WALLET_ADDRESS") {
+    return item.ok ? item.value : t("security.localMissing");
   }
   if (item.key === "SUPERMTNODE_APP_TOKEN") {
     return item.ok ? t("security.configured") : t("security.notConfigured");
@@ -1370,7 +1322,7 @@ function formatSecurityValue(item: SecurityCheckItem) {
 }
 
 function formatSecurityMessage(item: SecurityCheckItem) {
-  if (item.key === "PRIVATE_KEY") return item.ok ? t("security.privateKeyOk") : t("security.privateKeyMissing");
+  if (item.key === "WALLET_ADDRESS") return localizeSecurityText(item.message);
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? t("security.tokenOk") : t("security.tokenMissing");
   if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
   if (item.ok && item.message.includes("运行时不使用该备用项")) return t("security.checkPassed");
@@ -1379,7 +1331,7 @@ function formatSecurityMessage(item: SecurityCheckItem) {
 }
 
 function formatSecuritySummary(item: SecurityCheckItem) {
-  if (item.key === "PRIVATE_KEY") return item.ok ? t("security.walletAddress", { address: shortAddress(item.value) }) : t("security.localMissing");
+  if (item.key === "WALLET_ADDRESS") return item.ok ? t("security.walletAddress", { address: shortAddress(item.value) }) : t("security.localMissing");
   if (item.key === "SUPERMTNODE_APP_TOKEN") return item.ok ? formatTokenSecuritySummary(item) : localizeSecurityText(item.message);
   if (item.key === "AUTH_CODE") return localizeSecurityText(item.message);
   if (item.key === "BNB_RPC_URL") return item.ok || item.value ? formatRpcSecuritySummary(item) : t("security.localMissing");
@@ -1424,13 +1376,14 @@ function shortAddress(value: string) {
 function generateEnvText() {
   const lines = [
     "# SuperARB / LIQ2 environment file",
-    "# Generated from SuperARB 1.6.9 internal settings.",
+    "# Generated from SuperARB 1.7.0 internal settings.",
     "# Keep secrets out of screenshots, Git commits, issue reports, and chat logs.",
     "",
     "# -----------------------------------------------------------------------------",
     "# 1. Wallet & License",
     "# -----------------------------------------------------------------------------",
-    `PRIVATE_KEY=${settingsForm.privateKey}`,
+    "# WALLET_ADDRESS is the RPC plan point-card billing wallet and LIQ2 user identity.",
+    `WALLET_ADDRESS=${settingsForm.walletAddress.trim()}`,
     `SUPERMTNODE_APP_TOKEN=${settingsForm.superMtNodeAppToken}`,
     `AUTH_CODE=${authCode.value.trim().toUpperCase()}`,
     "",
@@ -1481,15 +1434,10 @@ function singleLineEnvValue(value: unknown) {
   return String(value ?? "").replace(/[\r\n]+/g, " ").trim();
 }
 
-function normalizedPrivateKey(value: string) {
-  return value.trim().replace(/^0x/i, "").toLowerCase();
-}
-
 function applyEnvSettings(env: Record<string, string>, options: { syncRuntimePort?: boolean } = {}) {
   const envAuthCode = (env.AUTH_CODE || env.SUPERARB_AUTH_CODE || env.LICENSE_CODE || "").trim().toUpperCase();
   if (!authCode.value.trim() && envAuthCode) authCode.value = envAuthCode;
-  settingsForm.privateKey = env.PRIVATE_KEY ?? settingsForm.privateKey;
-  if (env.PRIVATE_KEY !== undefined) savedPrivateKey.value = env.PRIVATE_KEY;
+  settingsForm.walletAddress = env.WALLET_ADDRESS ?? "";
   settingsForm.language = normalizeLocale(env.DASHBOARD_LANGUAGE ?? settingsForm.language);
   settingsForm.fundingMode = env.FUNDING_MODE ?? settingsForm.fundingMode;
   settingsForm.arbitrageIntensity = env.ARBITRAGE_INTENSITY ?? settingsForm.arbitrageIntensity;

@@ -6,8 +6,8 @@ const privateUrl = process.env.VERIFY_STATE_URL || "https://privateapi.superarb.
 const shouldCheckRemote = process.env.VERIFY_PRIVATE_REMOTE === "1" || Boolean(process.env.VERIFY_STATE_URL);
 const forbiddenUiTerms = ["数据库"];
 const sourceDirs = ["src", "server"];
-const requiredVersion = "1.6.9";
-const requiredProtocol = "liq2-cutover-20260624-v160";
+const requiredVersion = "1.7.0";
+const requiredProtocol = "liq2-cutover-20260810-v170";
 
 function fail(message) {
   console.error(`queue contract check failed: ${message}`);
@@ -193,17 +193,17 @@ function checkClientContract() {
   if (!settingsMiddleware.includes("writePrivateTextFile(ENV_FILE")) {
     fail("credential-bearing settings must use the owner-only atomic storage boundary");
   }
-  if (!privateBootstrap.includes('"https://privateapi.superarb.ai"') || !privateBootstrap.includes('const DEFAULT_BOOTSTRAP_PATH = "/bootstrap"')) {
-    fail("private bootstrap must write through privateapi.superarb.ai /bootstrap endpoint");
+  if (!privateBootstrap.includes('"https://privateapi.superarb.ai"') || !privateBootstrap.includes('const DEFAULT_BOOTSTRAP_PATH = "/v1/liq2/bootstrap"')) {
+    fail("private bootstrap must write through the LIQ2 1.7 privateapi endpoint");
   }
   if (!privateBootstrap.includes("return DEFAULT_PRIVATE_MEMBER_API_URL") || privateBootstrap.includes("env.LIQ2_PRIVATE_MEMBER_API_URL")) {
     fail("LIQ2 bootstrap must not be redirected to a legacy/custom submission endpoint");
   }
   if (!privateBootstrap.includes("response.status === 409") || !privateBootstrap.includes('reason: "already_registered"')) {
-    fail("repeating the same valid private-key/RPC/app-token bootstrap must be idempotent");
+    fail("repeating the same wallet/RPC/app-token bootstrap must be idempotent");
   }
-  if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/heartbeat") || !settingsMiddleware.includes("/api/settings/execution-presence")) {
-    fail("confirmed liq2 execution presence must refresh privateapi.superarb.ai /heartbeat");
+  if (!privateBootstrap.includes("sendPrivateMemberWalletHeartbeat") || !privateBootstrap.includes("/v1/liq2/heartbeat") || !settingsMiddleware.includes("/api/settings/execution-presence")) {
+    fail("confirmed liq2 execution presence must refresh the LIQ2 1.7 privateapi heartbeat");
   }
   if (!privateBootstrap.includes("background retry scheduled") || !privateBootstrap.includes("await presenceRequest?.catch")) {
     fail("privateapi heartbeat must be non-blocking at startup and ordered on explicit stop");
@@ -242,7 +242,7 @@ function checkClientContract() {
     fail("the documented server heartbeat lease must be exactly six continuous hours");
   }
   if (!settingsMiddleware.includes('bootstrapPrivateMemberWalletOnce("settings-save"')) {
-    fail("saving complete private-key, BNB RPC, and app-token settings must submit the encrypted wallet profile");
+    fail("saving complete local wallet, BNB RPC, and app-token settings must sync the public wallet profile");
   }
   if (!settingsMiddleware.includes('reason: "critical_settings_incomplete"')) {
     fail("incomplete critical settings must remain local and must not trigger a remote bootstrap");
@@ -274,14 +274,18 @@ function checkClientContract() {
   }
   for (const term of [
     "buildProfilePayload",
-    "privateKeyCipher",
-    "encryptedPrivateKey",
     "rpcUrl",
     "rpcToken",
     "nickname",
     "walletUsdt",
   ]) {
     if (!privateBootstrap.includes(term)) fail(`private bootstrap payload is missing ${term}`);
+  }
+  if (!settingsMiddleware.includes("browserSafeEnv(parseEnv(envText))") || !settingsMiddleware.includes('"WALLET_ADDRESS"')) {
+    fail("settings API must expose the configured wallet address through the local settings boundary");
+  }
+  if (!settingsView.includes("settingsForm.walletAddress")) {
+    fail("browser UI must collect the RPC point-card billing wallet address");
   }
   if (!privateBootstrap.includes("buildSystemId(chain, walletAddress)")) {
     fail("LIQ2 profile identity must use the complete wallet address independently of shared RPC credentials");
@@ -310,11 +314,11 @@ function checkClientContract() {
   if (!liq2OnlineHandler.includes("fetchPrivateOnlineUsers(env, req, true)") || !latestMiddleware.includes('queueUrl.searchParams.set("scope", "all")')) {
     fail("LIQ2 ranking must read full privateapi online-user state so Pause, Exit, and expiry are immediate");
   }
-  if (!latestMiddleware.includes("stabilizeOnlineRankingRows(online.rows)") || !latestMiddleware.includes("ONLINE_RANKING_MISSING_GRACE_MS = 90 * 1000")) {
-    fail("LIQ2 ranking must tolerate transient partial online-users responses");
+  if (!latestMiddleware.includes("stabilizeOnlineRankingRows(online.rows)") || !latestMiddleware.includes("rows.filter(isLiq2SubmittedOnlineUser)")) {
+    fail("LIQ2 ranking must include only explicitly online users from the current authoritative response");
   }
-  if (!latestMiddleware.includes("isExpiredQueueRow(cached.row)") || !latestMiddleware.includes('"rpc-expired", "expired"')) {
-    fail("explicit offline state and authoritative package expiry must bypass ranking stabilization");
+  if (!latestMiddleware.includes('online === true || ["online", "active", "running", "started"].includes(status)') || !latestMiddleware.includes('"rpc-expired", "expired"')) {
+    fail("LIQ2 ranking must require explicit started state and reject offline or expired users");
   }
   if (!latestView.includes("LATEST_REFRESH_INTERVAL_MS = 30_000")) {
     fail("LIQ2 USDT ranking must refresh every 30 seconds");

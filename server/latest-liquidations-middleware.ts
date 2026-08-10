@@ -22,11 +22,6 @@ const ASSET_CHANGE_CACHE_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_REFRESH_MS = 10 * 60 * 1000;
 const ASSET_CHANGE_ERROR_RETRY_MS = 2 * 60 * 1000;
 const QUEUE_BALANCE_CACHE_MS = 10 * 1000;
-// privateapi is authoritative for explicit offline states. A row that is
-// merely absent from one response is retained briefly so a partial read does
-// not make the public ranking jump. Three 30-second refresh windows are enough
-// to bridge transient reads without turning this into another presence store.
-const ONLINE_RANKING_MISSING_GRACE_MS = 90 * 1000;
 const DEFAULT_TX2_CONTRACT_EVENTS_API_PATH = "/api/liquidation-queue/contract-events/today";
 
 type ChainKey = "ethereum" | "bnb" | "arbitrum";
@@ -272,7 +267,6 @@ const queueBalanceCache = new Map<string, QueueBalanceCacheEntry>();
 const sevenDayBlockCache = new Map<ChainKey, BlockCacheEntry>();
 const blockAtTimestampCache = new Map<string, BlockCacheEntry>();
 const assetChangeRefreshInFlight = new Set<string>();
-const stableOnlineRankingRows = new Map<string, { row: SnapshotQueueRow; lastSeenAt: number }>();
 
 export function handleLatestLiquidationsRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const pathname = new URL(req.url || "/", "http://127.0.0.1").pathname;
@@ -287,7 +281,10 @@ export function handleLatestLiquidationsRequest(req: IncomingMessage, res: Serve
     fetchLiq2OnlineWallets(req)
       .then((payload) => json(res, 200, payload))
       .catch((error: unknown) => {
-        json(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) });
+        // Ranking membership must be positively confirmed by the authoritative
+        // online-user service. If it is unavailable, return an empty degraded
+        // snapshot instead of a 502 or stale/unconfirmed wallets.
+        json(res, 200, unavailableOnlineWallets(error));
       });
 
     return true;
@@ -369,6 +366,23 @@ async function fetchLiq2OnlineWallets(req: IncomingMessage) {
   };
 }
 
+function unavailableOnlineWallets(error: unknown) {
+  const updatedAt = new Date().toISOString();
+  return {
+    ok: true,
+    degraded: true,
+    warning: error instanceof Error ? error.message : String(error),
+    source: "privateapi.superarb.ai/online-users",
+    queueTransport: "unavailable",
+    queueSource: "authoritative online state unavailable",
+    queueParticipantCount: 0,
+    queueSubscribers: 0,
+    queueUpdatedAt: updatedAt,
+    updatedAt,
+    queuedWallets: [],
+  };
+}
+
 async function fetchMarketSnapshot(req: IncomingMessage) {
   const env = readEnv();
   assertOfficialConfig("全部市场快照读取", env);
@@ -426,31 +440,8 @@ function dedupeAndSortStateRows(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
 }
 
 function stabilizeOnlineRankingRows(rows: SnapshotQueueRow[], now = Date.now()): SnapshotQueueRow[] {
-  for (const row of rows) {
-    if (!isLiq2SubmittedUser(row)) continue;
-    const key = onlineRankingKey(row);
-
-    // Explicit user actions and authoritative package/RPC expiry always win
-    // over display stabilization.
-    if (!isLiq2SubmittedOnlineUser(row) || isExpiredQueueRow(row)) {
-      stableOnlineRankingRows.delete(key);
-      continue;
-    }
-    stableOnlineRankingRows.set(key, { row, lastSeenAt: now });
-  }
-
-  for (const [key, cached] of stableOnlineRankingRows) {
-    if (isExpiredQueueRow(cached.row) || now - cached.lastSeenAt > ONLINE_RANKING_MISSING_GRACE_MS) {
-      stableOnlineRankingRows.delete(key);
-      continue;
-    }
-  }
-
-  return dedupeAndSortStateRows([...stableOnlineRankingRows.values()].map((entry) => entry.row));
-}
-
-function onlineRankingKey(row: SnapshotQueueRow): string {
-  return `${row.chain}:${row.wallet.toLowerCase()}`;
+  void now;
+  return dedupeAndSortStateRows(rows.filter(isLiq2SubmittedOnlineUser));
 }
 
 function sortQueueRowsByRealtimeUsdtDesc(rows: SnapshotQueueRow[]): SnapshotQueueRow[] {
@@ -499,9 +490,10 @@ async function fetchPrivateOnlineUsers(env: Record<string, string>, req: Incomin
   // configuration.
   const queueUrl = new URL(DEFAULT_ONLINE_USERS_API_URL);
   if (includeAllLiq2) queueUrl.searchParams.set("scope", "all");
-  const authCode = headerValue(req.headers["x-supermtnode-auth-code"]);
   const response = await fetch(queueUrl, {
-    headers: privateMemberQueueStatusHeaders(env, authCode),
+    // This server-to-server read uses the application identity. Never forward
+    // a user's login/license code to the global online-wallet endpoint.
+    headers: privateMemberQueueStatusHeaders(env, ""),
     signal: AbortSignal.timeout(timeoutMs(env)),
   });
   if (!response.ok) throw new Error(`privateapi online-users request failed (${response.status})`);
@@ -520,7 +512,9 @@ function isLiq2SubmittedOnlineUser(row: SnapshotQueueRow): boolean {
   const online = onlineBooleanValue(record.online, record.isOnline, record.is_online);
   const status = (stringValue(record.status, record.presenceStatus, record.presence_status) ?? "").toLowerCase();
   if (online === false || ["offline", "stopped", "paused", "logout", "rpc-expired", "expired"].includes(status)) return false;
-  return true;
+  // A wallet appears only after an explicit successful Start. Missing or
+  // ambiguous presence fields are not enough to enter the ranking.
+  return online === true || ["online", "active", "running", "started"].includes(status);
 }
 
 function isLiq2SubmittedUser(row: SnapshotQueueRow): boolean {

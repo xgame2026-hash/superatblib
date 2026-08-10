@@ -87,7 +87,7 @@ input {
   background: #000;
 }
 
-.login-liquid-shell {
+.login-background-shell {
   position: fixed;
   inset: 0;
   z-index: 0;
@@ -96,12 +96,12 @@ input {
   overflow: hidden;
 }
 
-.login-liquid-ether {
+.login-vanta-waves {
   position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: #000;
+  background-color: #005588;
   opacity: 1;
 }
 
@@ -123,7 +123,7 @@ input {
   border: 0;
   border-radius: 20px;
   background: transparent;
-  backdrop-filter: blur(22px) saturate(124%);
+  backdrop-filter: blur(18px) saturate(112%);
   box-shadow:
     0 30px 90px rgba(0, 0, 0, 0.42),
     0 0 0 1px rgba(255, 255, 255, 0.055) inset,
@@ -170,11 +170,7 @@ input {
   inset: 2px;
   z-index: 0;
   border-radius: 18px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 38%),
-    radial-gradient(circle at 50% 18%, rgba(176, 2, 251, 0.06), transparent 36%),
-    radial-gradient(ellipse at 50% 100%, rgba(0, 0, 0, 0.18), transparent 62%),
-    linear-gradient(180deg, rgba(13, 12, 19, 0.36), rgba(6, 6, 10, 0.26));
+  background: rgba(0, 0, 0, 0.72);
 }
 
 .login-panel > * {
@@ -363,8 +359,7 @@ input {
 .auth-form .el-input__wrapper {
   border: 1px solid rgba(174, 126, 255, 0.26);
   border-radius: 20px;
-  background: rgba(18, 17, 26, 0.34);
-  backdrop-filter: blur(12px) saturate(118%);
+  background: #000;
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.035) inset,
     0 16px 42px rgba(0, 0, 0, 0.22);
@@ -373,7 +368,7 @@ input {
 .auth-form .el-input__wrapper:hover,
 .auth-form .el-input__wrapper.is-focus {
   border-color: rgba(174, 126, 255, 0.48);
-  background: rgba(22, 20, 32, 0.42);
+  background: #000;
 }
 
 .field-label {

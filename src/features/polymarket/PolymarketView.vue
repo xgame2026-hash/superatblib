@@ -4,8 +4,10 @@
       <div class="market-title-group">
         <span class="product-mark" aria-hidden="true"><img :src="polymarketIconUrl" alt="" /></span>
         <div>
-          <div class="title-line"><h2>Polymarket</h2><span class="mode-badge live">OFFICIAL API</span></div>
-          <p>官方市场数据 · 仅显示仍在接受订单且尚未到期的市场</p>
+          <div class="title-line">
+            <h2>Polymarket</h2>
+            <span class="market-payout-notice">{{ payoutNotice || "正在读取收益发放通知…" }}</span>
+          </div>
         </div>
       </div>
       <div class="toolbar-actions">
@@ -18,9 +20,7 @@
 
     <div class="stat-grid">
       <article class="stat-card"><span>已载入市场</span><strong>{{ snapshot ? snapshot.count : "--" }}</strong><small class="neutral">通过有效期与接单状态校验</small></article>
-      <article class="stat-card"><span>钱包 USDT</span><strong>{{ vaultStatus ? formatToken(vaultStatus.wallet.usdtBalance) : "--" }}</strong><small class="neutral">BSC 主网实时余额</small></article>
-      <article class="stat-card"><span>可提取本金</span><strong>{{ vaultStatus ? formatToken(vaultStatus.member.availablePrincipal) : "--" }}</strong><small class="neutral">未进入运行周期的本金</small></article>
-      <article class="stat-card"><span>运行中本金</span><strong>{{ vaultStatus ? formatToken(vaultStatus.member.lockedPrincipal) : "--" }}</strong><small :class="vaultStatus?.member.lockedPrincipal !== '0.0' ? 'cycle-running' : 'neutral'">{{ lockedPrincipalNote }}</small></article>
+      <article class="stat-card"><span>运行中本金</span><strong>{{ vaultStatus ? formatToken(currentVaultPrincipal) : "--" }}</strong><small :class="decimalGreaterThanZero(currentVaultPrincipal) ? 'cycle-running' : 'neutral'">{{ lockedPrincipalNote }}</small></article>
       <article class="stat-card compute-card">
         <span>算力</span>
         <strong>{{ powerStatus ? formatToken(powerStatus.power.balance) : "--" }}</strong>
@@ -87,7 +87,7 @@
         <div>
           <span class="section-kicker">BSC MAINNET · POLYMARKET VAULT</span>
           <h3>USDT 资金账户</h3>
-          <p v-if="!vaultStatus?.wallet.configured">读取本地设置中的执行钱包，不会向浏览器发送私钥。</p>
+          <p v-if="!vaultStatus?.wallet.configured">读取本地设置中的执行钱包地址与链上状态。</p>
         </div>
         <div class="vault-state">
           <span :class="contractStateClass"><i></i>{{ contractStateLabel }}</span>
@@ -96,7 +96,7 @@
       </div>
 
       <div v-if="vaultError" class="vault-alert error"><strong>合约状态读取失败</strong><span>{{ vaultError }}</span></div>
-      <div v-else-if="vaultStatus && !vaultStatus.wallet.configured" class="vault-alert warning"><strong>尚未配置执行钱包</strong><span>请先在设置中保存 PRIVATE_KEY 和 BNB_RPC_URL。</span></div>
+      <div v-else-if="vaultStatus && !vaultStatus.wallet.configured" class="vault-alert warning"><strong>尚未配置执行钱包</strong><span>请先在设置中保存执行钱包地址与 BNB_RPC_URL。</span></div>
       <div v-else-if="vaultStatus?.member.blacklisted" class="vault-alert error"><strong>当前钱包已受限</strong><span>合约禁止该钱包存入和提取。</span></div>
 
       <div class="vault-workspace">
@@ -216,7 +216,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Interface, parseUnits } from "ethers";
+import { useAppKit, useAppKitProvider } from "@reown/appkit/vue";
 import polymarketIconUrl from "../../img/polymarket.svg";
+import { isReownEnabled } from "../../reown";
 
 type Market = { id:string; question:string; slug:string; eventSlug:string; category:string; image:string; endDate:string; updatedAt:string; liquidity:number; volume:number; volume24hr:number; yesPrice:number|null; noPrice:number|null; bestBid:number|null; bestAsk:number|null; spread:number|null; oneDayPriceChange:number|null; acceptingOrders:boolean; minOrderSize:number|null; minTickSize:number|null };
 type Snapshot = { ok:boolean; source:string; sourceLabel:string; fetchedAt:string; latencyMs:number; count:number; totals:{liquidity:number;volume24hr:number}; markets:Market[] };
@@ -251,10 +254,26 @@ type VaultStatus = {
   };
   cycle:VaultCycle|null;
 };
+type Eip1193Provider = { request: (request: { method: string; params?: unknown[] }) => Promise<unknown> };
 
 const AUTH_CODE_KEY = "superarb-auth-code-v1.6.5";
 const AUTH_CODE_SESSION_KEY = "superarb-auth-code-session-v1.6.5";
 const CYCLE_LABELS = ["无周期", "募资中", "已锁定", "运行中", "结算中", "可领取", "已关闭", "已取消", "已逾期"];
+const BSC_CHAIN_ID = "0x38";
+const ERC20_INTERFACE = new Interface(["function approve(address spender,uint256 amount) returns (bool)"]);
+const VAULT_INTERFACE = new Interface([
+  "function polymarketDeposit(uint256 amount)",
+  "function polymarketWithdrawPrincipal(uint256 amount)",
+  "function joinPolymarketCycle(uint256 cycleId,uint256 amount)",
+  "function leavePolymarketCycle(uint256 cycleId,uint256 amount)",
+  "function requestExitAfterCycle(uint256 cycleId,uint256 amount)",
+]);
+const POWER_INTERFACE = new Interface([
+  "function buyWithUSDT(uint256 powerAmount) returns (uint256)",
+  "function buyWithMT(uint256 powerAmount,uint256 maxMtAmount) returns (uint256)",
+  "function buyWithSuperMTPowerBalance(uint256 powerAmount) returns (uint256)",
+]);
+const SUPERMT_POWER_INTERFACE = new Interface(["function approveExternalBalanceSpender(address spender,uint256 amountU) returns (bool)"]);
 
 const snapshot = ref<Snapshot | null>(null);
 const loading = ref(false);
@@ -277,8 +296,12 @@ const powerDialogVisible = ref(false);
 const powerPackages = ref(1);
 const powerPaymentMethod = ref<PowerPaymentMethod>("balance");
 const powerSubmitting = ref(false);
+const payoutNotice = ref("");
+const reownModal = isReownEnabled ? useAppKit() : null;
+const reownProvider = isReownEnabled ? useAppKitProvider<Eip1193Provider>("eip155") : null;
 let refreshTimer = 0;
 let vaultRefreshTimer = 0;
+let payoutNoticeRefreshTimer = 0;
 
 const categories = computed(() => ["全部", ...Array.from(new Set((snapshot.value?.markets || []).map((market) => market.category))).slice(0, 5)]);
 const filteredMarkets = computed(() => {
@@ -305,9 +328,20 @@ const contractStateClass = computed(() => {
   if (vaultStatus.value.vault.depositsPaused || vaultStatus.value.vault.withdrawalsPaused) return "state-pill warning";
   return "state-pill active";
 });
+const currentVaultPrincipal = computed(() => {
+  const member = vaultStatus.value?.member;
+  if (!member) return "0";
+  // This is the execution wallet's principal currently recorded in the vault,
+  // regardless of whether it is available, cycle-locked, or pending withdrawal.
+  return addTokenAmounts(member.availablePrincipal, member.lockedPrincipal, member.pendingWithdrawal);
+});
 const lockedPrincipalNote = computed(() => {
   if (!vaultStatus.value) return "等待合约状态";
-  return decimalGreaterThanZero(vaultStatus.value.member.lockedPrincipal) ? "周期运行中，暂不可提" : "当前没有锁定本金";
+  const member = vaultStatus.value.member;
+  if (!decimalGreaterThanZero(currentVaultPrincipal.value)) return "当前没有留存在合约的本金";
+  if (decimalGreaterThanZero(member.lockedPrincipal)) return "含周期锁定本金，运行期间不可提取";
+  if (decimalGreaterThanZero(member.pendingWithdrawal)) return "含待提取本金，等待合约结算";
+  return "执行钱包当前留存在 Polymarket 合约的本金";
 });
 const cycleLabel = computed(() => {
   const cycle = vaultStatus.value?.cycle;
@@ -368,7 +402,7 @@ const withdrawButtonLabel = computed(() => {
   if (!vaultStatus.value?.wallet.configured) return "请先配置钱包";
   if (vaultStatus.value.vault.migrationActive || vaultStatus.value.vault.migrationFinalized) return "合约迁移冻结";
   if (vaultStatus.value.member.blacklisted) return "当前钱包已受限";
-  if (vaultStatus.value.vault.withdrawalsPaused) return "提取已暂停";
+  if (vaultStatus.value.vault.withdrawalsPaused) return "Polymarket套利周期内不能提取";
   if (!isPositiveAmount(withdrawAmount.value)) return "输入提取金额";
   if (vaultStatus.value && compareAmounts(withdrawAmount.value, vaultStatus.value.member.availablePrincipal) > 0) return "可提取本金不足";
   return "提取到执行钱包";
@@ -411,7 +445,9 @@ onMounted(() => {
   void loadMarkets();
   void loadVaultStatus();
   void loadPowerStatus();
+  void loadPayoutNotice();
   refreshTimer = window.setInterval(() => void loadMarkets(true), 30_000);
+  payoutNoticeRefreshTimer = window.setInterval(() => void loadPayoutNotice(), 30_000);
   vaultRefreshTimer = window.setInterval(() => {
     void loadVaultStatus(true);
     void loadPowerStatus(true);
@@ -420,6 +456,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (refreshTimer) window.clearInterval(refreshTimer);
   if (vaultRefreshTimer) window.clearInterval(vaultRefreshTimer);
+  if (payoutNoticeRefreshTimer) window.clearInterval(payoutNoticeRefreshTimer);
 });
 
 async function loadMarkets(silent = false): Promise<void> {
@@ -435,6 +472,17 @@ async function loadMarkets(silent = false): Promise<void> {
     error.value = reason instanceof Error ? reason.message : "无法读取 Polymarket 官方数据";
     snapshot.value = null;
   } finally { loading.value = false; }
+}
+
+async function loadPayoutNotice(): Promise<void> {
+  try {
+    const response = await fetch("/api/liq2/information-notifications?notificationKey=polymarket_predicted_reward", { cache: "no-store" });
+    const payload = (await response.json().catch(() => ({}))) as { content?: string };
+    if (!response.ok || !payload.content?.trim()) throw new Error("notification unavailable");
+    payoutNotice.value = payload.content.trim();
+  } catch {
+    payoutNotice.value = "";
+  }
 }
 
 function openPowerPurchase(): void {
@@ -479,11 +527,40 @@ async function submitPowerPurchase():Promise<void> {
   } catch { return; }
   powerSubmitting.value = true;
   try {
-    const result = await requestVaultJson<{txHash:string;approvalTxHash?:string}>("/api/polymarket/power/purchase", {
-      method:"POST",
-      body:JSON.stringify({method:powerPaymentMethod.value,packages}),
-    });
-    ElMessage.success(result.approvalTxHash ? `授权并购买已确认：${shortHash(result.txHash)}` : `算力购买已确认：${shortHash(result.txHash)}`);
+    const provider = await connectTransactionWallet(powerStatus.value.wallet.address);
+    const wallet = await connectedAddress(provider);
+    const powerAmount = parseUnits(powerAmountText.value, 18);
+    const paymentAmount = parseUnits(powerPaymentMethod.value === "mt" ? powerMtText.value : powerPriceText.value, 18);
+    if (powerPaymentMethod.value === "balance") {
+      const approvalHash = await sendWalletTransaction(provider, {
+        from: wallet, to: powerStatus.value.contracts.superMtPower,
+        data: SUPERMT_POWER_INTERFACE.encodeFunctionData("approveExternalBalanceSpender", [powerStatus.value.contracts.power, paymentAmount]),
+      });
+      await waitForReceipt(provider, approvalHash);
+      const txHash = await sendWalletTransaction(provider, {
+        from: wallet, to: powerStatus.value.contracts.power,
+        data: POWER_INTERFACE.encodeFunctionData("buyWithSuperMTPowerBalance", [powerAmount]),
+      });
+      await waitForReceipt(provider, txHash);
+      ElMessage.success(`算力购买已确认：${shortHash(txHash)}`);
+    } else {
+      const token = powerPaymentMethod.value === "mt" ? powerStatus.value.contracts.mt : powerStatus.value.contracts.usdt;
+      const allowance = await readTokenAllowance(provider, wallet, token, powerStatus.value.contracts.power);
+      if (allowance < paymentAmount) {
+        const approvalHash = await sendWalletTransaction(provider, {
+          from: wallet, to: token, data: ERC20_INTERFACE.encodeFunctionData("approve", [powerStatus.value.contracts.power, paymentAmount]),
+        });
+        await waitForReceipt(provider, approvalHash);
+      }
+      const txHash = await sendWalletTransaction(provider, {
+        from: wallet, to: powerStatus.value.contracts.power,
+        data: powerPaymentMethod.value === "mt"
+          ? POWER_INTERFACE.encodeFunctionData("buyWithMT", [powerAmount, paymentAmount])
+          : POWER_INTERFACE.encodeFunctionData("buyWithUSDT", [powerAmount]),
+      });
+      await waitForReceipt(provider, txHash);
+      ElMessage.success(`算力购买已确认：${shortHash(txHash)}`);
+    }
     await Promise.all([loadPowerStatus(true), loadVaultStatus(true)]);
   } catch (reason) {
     ElMessage.error(errorText(reason));
@@ -505,10 +582,23 @@ async function submitDeposit():Promise<void> {
   } catch { return; }
   vaultSubmitting.value = "deposit";
   try {
-    const result = await requestVaultJson<{txHash:string;approvalTxHash?:string}>("/api/polymarket/vault/deposit", {method:"POST",body:JSON.stringify({amount})});
-    ElMessage.success(result.approvalTxHash
-      ? `授权并存入已确认：${shortHash(result.txHash)}`
-      : `存入已确认：${shortHash(result.txHash)}`);
+    const provider = await connectTransactionWallet(vaultStatus.value.wallet.address);
+    const wallet = await connectedAddress(provider);
+    const amountUnits = parseUnits(amount, 18);
+    const allowance = await readTokenAllowance(provider, wallet, vaultStatus.value.contracts.usdt, vaultStatus.value.contracts.vault);
+    if (allowance < amountUnits) {
+      const approvalHash = await sendWalletTransaction(provider, {
+        from: wallet, to: vaultStatus.value.contracts.usdt,
+        data: ERC20_INTERFACE.encodeFunctionData("approve", [vaultStatus.value.contracts.vault, amountUnits]),
+      });
+      await waitForReceipt(provider, approvalHash);
+    }
+    const txHash = await sendWalletTransaction(provider, {
+      from: wallet, to: vaultStatus.value.contracts.vault,
+      data: VAULT_INTERFACE.encodeFunctionData("polymarketDeposit", [amountUnits]),
+    });
+    await waitForReceipt(provider, txHash);
+    ElMessage.success(`存入已确认：${shortHash(txHash)}`);
     depositAmount.value = "";
     await loadVaultStatus();
   } catch (reason) {
@@ -526,8 +616,14 @@ async function submitWithdraw():Promise<void> {
   } catch { return; }
   vaultSubmitting.value = "withdraw";
   try {
-    const result = await requestVaultJson<{txHash:string}>("/api/polymarket/vault/withdraw", {method:"POST",body:JSON.stringify({amount})});
-    ElMessage.success(`提取已确认：${shortHash(result.txHash)}`);
+    const provider = await connectTransactionWallet(vaultStatus.value.wallet.address);
+    const wallet = await connectedAddress(provider);
+    const txHash = await sendWalletTransaction(provider, {
+      from: wallet, to: vaultStatus.value.contracts.vault,
+      data: VAULT_INTERFACE.encodeFunctionData("polymarketWithdrawPrincipal", [parseUnits(amount, 18)]),
+    });
+    await waitForReceipt(provider, txHash);
+    ElMessage.success(`提取已确认：${shortHash(txHash)}`);
     withdrawAmount.value = "";
     await loadVaultStatus();
   } catch (reason) {
@@ -550,8 +646,15 @@ async function submitCycleAction(action:"join"|"leave"|"request-exit"):Promise<v
   } catch { return; }
   vaultSubmitting.value = action;
   try {
-    const result = await requestVaultJson<{txHash:string}>(`/api/polymarket/vault/${labels.path}`, { method:"POST", body:JSON.stringify({amount}) });
-    ElMessage.success(`${labels.action}已确认：${shortHash(result.txHash)}`);
+    const provider = await connectTransactionWallet(vaultStatus.value.wallet.address);
+    const wallet = await connectedAddress(provider);
+    const method = action === "join" ? "joinPolymarketCycle" : action === "leave" ? "leavePolymarketCycle" : "requestExitAfterCycle";
+    const txHash = await sendWalletTransaction(provider, {
+      from: wallet, to: vaultStatus.value.contracts.vault,
+      data: VAULT_INTERFACE.encodeFunctionData(method, [BigInt(vaultStatus.value.vault.currentCycleId), parseUnits(amount, 18)]),
+    });
+    await waitForReceipt(provider, txHash);
+    ElMessage.success(`${labels.action}已确认：${shortHash(txHash)}`);
     cycleAmount.value = "";
     await loadVaultStatus();
   } catch (reason) {
@@ -569,6 +672,78 @@ async function requestVaultJson<T>(url:string, init:RequestInit={}):Promise<T> {
   const payload = await response.json().catch(() => ({})) as Record<string,unknown>;
   if (!response.ok || payload.ok === false) throw new Error(String(payload.error || payload.message || `HTTP ${response.status}`));
   return payload as T;
+}
+
+async function connectTransactionWallet(expectedAddress: string): Promise<Eip1193Provider> {
+  if (!isReownEnabled || !reownModal) {
+    throw new Error("钱包连接尚未配置。请在 .env 设置 VITE_REOWN_PROJECT_ID 后重启应用。");
+  }
+  if (!isEip1193Provider(reownProvider?.walletProvider)) {
+    await reownModal.open({ view: "Connect" });
+  }
+  const provider = reownProvider?.walletProvider;
+  if (!isEip1193Provider(provider)) throw new Error("请在钱包中选择账户并完成连接。");
+  await ensureBscNetwork(provider);
+  const address = await connectedAddress(provider);
+  if (address !== expectedAddress.toLowerCase()) {
+    throw new Error("连接的钱包必须与通用设置中的执行钱包一致。");
+  }
+  return provider;
+}
+
+function isEip1193Provider(value: unknown): value is Eip1193Provider {
+  return Boolean(value) && typeof (value as Eip1193Provider).request === "function";
+}
+
+async function connectedAddress(provider: Eip1193Provider): Promise<string> {
+  const accounts = await provider.request({ method: "eth_requestAccounts" });
+  const address = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0].toLowerCase() : "";
+  if (!/^0x[\da-f]{40}$/.test(address)) throw new Error("未读取到钱包地址。请重新连接钱包。");
+  return address;
+}
+
+async function ensureBscNetwork(provider: Eip1193Provider): Promise<void> {
+  if (String(await provider.request({ method: "eth_chainId" })).toLowerCase() === BSC_CHAIN_ID) return;
+  try {
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: BSC_CHAIN_ID }] });
+  } catch (caught) {
+    if ((caught as { code?: number }).code !== 4902) throw caught;
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [{ chainId: BSC_CHAIN_ID, chainName: "BNB Smart Chain", nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 }, rpcUrls: ["https://rpc.bscpro.supermtglobal.com"], blockExplorerUrls: ["https://bscscan.com"] }],
+    });
+  }
+}
+
+async function readTokenAllowance(provider: Eip1193Provider, owner: string, token: string, spender: string): Promise<bigint> {
+  const data = `0xdd62ed3e${encodeAddress(owner)}${encodeAddress(spender)}`;
+  const value = await provider.request({ method: "eth_call", params: [{ to: token, data }, "latest"] });
+  return /^0x[\da-f]+$/i.test(String(value)) ? BigInt(String(value)) : 0n;
+}
+
+async function sendWalletTransaction(provider: Eip1193Provider, transaction: { from: string; to: string; data: string }): Promise<string> {
+  const hash = String(await provider.request({ method: "eth_sendTransaction", params: [transaction] }) || "");
+  if (!/^0x[\da-f]{64}$/i.test(hash)) throw new Error("钱包未返回有效交易哈希。");
+  return hash;
+}
+
+async function waitForReceipt(provider: Eip1193Provider, txHash: string): Promise<void> {
+  const timeoutAt = Date.now() + 180_000;
+  while (Date.now() < timeoutAt) {
+    const receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [txHash] }) as { status?: string } | null;
+    if (receipt) {
+      if (String(receipt.status).toLowerCase() !== "0x1") throw new Error("链上交易执行失败。");
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+  }
+  throw new Error("交易仍在等待链上确认，请稍后在 BscScan 查询。");
+}
+
+function encodeAddress(value: string): string {
+  const normalized = value.toLowerCase().replace(/^0x/, "");
+  if (!/^[\da-f]{40}$/.test(normalized)) throw new Error("钱包地址无效。");
+  return normalized.padStart(64, "0");
 }
 
 function setMaximumDeposit():void { depositAmount.value = trimAmount(vaultStatus.value?.wallet.usdtBalance || ""); }
@@ -589,6 +764,13 @@ function decimalGreaterThanZero(value:string):boolean { return compareAmounts(va
 function compareAmounts(left:string,right:string):number {
   const units=(value:string)=>{const normalized=String(value||"0").replace(/,/g,"").trim();if(!/^\d+(?:\.\d+)?$/.test(normalized))return 0n;const [whole,fraction=""]=normalized.split(".");return BigInt(whole||"0")*10n**18n+BigInt(fraction.slice(0,18).padEnd(18,"0"));};
   const a=units(left),b=units(right);return a===b?0:a>b?1:-1;
+}
+function addTokenAmounts(...values:string[]):string {
+  const toUnits=(value:string)=>{const normalized=String(value||"0").replace(/,/g,"").trim();if(!/^\d+(?:\.\d+)?$/.test(normalized))return 0n;const [whole,fraction=""]=normalized.split(".");return BigInt(whole||"0")*10n**18n+BigInt(fraction.slice(0,18).padEnd(18,"0"));};
+  const total=values.reduce((sum,value)=>sum+toUnits(value),0n);
+  const whole=total/(10n**18n);
+  const fraction=(total%(10n**18n)).toString().padStart(18,"0").replace(/0+$/,"");
+  return `${whole}${fraction?`.${fraction}`:""}`;
 }
 function trimAmount(value:string):string { return String(value||"").replace(/(\.\d*?[1-9])0+$|\.0+$/,"$1"); }
 function multiplyDecimal(value:string,multiplier:number):string {

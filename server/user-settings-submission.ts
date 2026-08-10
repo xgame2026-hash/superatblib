@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const USER_SETTINGS_BOOTSTRAP_URL = "https://privateapi.superarb.ai/bootstrap";
+export const USER_SETTINGS_BOOTSTRAP_URL = "https://privateapi.superarb.ai/v1/liq2/bootstrap";
 export const USER_SETTINGS_SUBMISSION_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -10,7 +10,6 @@ export type RemoteBootstrapSettings = {
   endpointId: string;
   rpcUrl: string;
   rpcExpiresAt?: string;
-  encryptedPrivateKey: string;
   walletAddress: string;
   systemId: string;
   chain?: "bnb";
@@ -72,8 +71,8 @@ export type UserSettingsSubmissionResult = {
 };
 
 /**
- * Split settings using explicit allowlists. No caller-owned object is spread,
- * so unknown fields (including a plaintext privateKey) cannot reach bootstrap.
+ * Split settings using explicit allowlists so only approved public runtime
+ * settings can reach bootstrap.
  */
 export function partitionUserSettings(input: UserSettingsInput): {
   remote: Record<string, unknown>;
@@ -135,7 +134,6 @@ function buildRemoteBootstrapPayload(input: RemoteBootstrapSettings): Record<str
   const appToken = required(input.appToken, "appToken");
   const endpointId = required(input.endpointId, "endpointId");
   const rpcUrl = requiredHttpUrl(input.rpcUrl, "rpcUrl");
-  const encryptedPrivateKey = validateEncryptedPrivateKey(input.encryptedPrivateKey);
   const walletAddress = requiredWallet(input.walletAddress);
   const systemId = required(input.systemId, "systemId");
   const revision = normalizeRevision(input.revision);
@@ -149,8 +147,6 @@ function buildRemoteBootstrapPayload(input: RemoteBootstrapSettings): Record<str
     endpointId,
     rpcUrl,
     rpcExpiresAt: optionalIsoDate(input.rpcExpiresAt),
-    encryptedPrivateKey,
-    credentialUploadVersion: required(input.clientVersion, "clientVersion"),
     walletAddress,
     systemId,
     chain: "bnb",
@@ -193,20 +189,6 @@ function buildIdempotencyKey(input: RemoteBootstrapSettings): string {
     .update(`${input.systemId.trim()}\n${normalizeRevision(input.revision)}\n${USER_SETTINGS_SUBMISSION_VERSION}`)
     .digest("hex");
   return `liq2-settings-${digest}`;
-}
-
-function validateEncryptedPrivateKey(value: string): string {
-  const cipher = required(value, "encryptedPrivateKey");
-  let payload: Record<string, unknown>;
-  try {
-    payload = JSON.parse(cipher) as Record<string, unknown>;
-  } catch {
-    throw new Error("encryptedPrivateKey 必须是加密信封 JSON。");
-  }
-  if (!payload || payload.alg !== "RSA-OAEP-256+AES-256-GCM" || !stringValue(payload.key) || !stringValue(payload.iv) || !stringValue(payload.data)) {
-    throw new Error("encryptedPrivateKey 加密信封格式不正确。");
-  }
-  return cipher;
 }
 
 function required(value: unknown, field: string): string {

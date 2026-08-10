@@ -1,19 +1,13 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
-import { getPublicKey } from "@noble/secp256k1";
-import { keccak_256 } from "@noble/hashes/sha3.js";
-import { hexToBytes } from "@noble/hashes/utils.js";
 import { assertOfficialConfig } from "./official-config";
-import { encryptPrivateKeyEnvelope } from "./private-key-envelope";
 import { writePrivateTextFile } from "./local-secure-storage";
 import { ENV_FILE, stateFile } from "./runtime-paths";
 
 const DEFAULT_PRIVATE_MEMBER_API_URL = "https://privateapi.superarb.ai";
-const DEFAULT_BOOTSTRAP_PATH = "/bootstrap";
-const DEFAULT_TX_PUBLIC_KEY_PATH = resolve(process.cwd(), "server/tx-wallet-public.pem");
+const DEFAULT_BOOTSTRAP_PATH = "/v1/liq2/bootstrap";
 const DEFAULT_TIMEOUT_MS = 10_000;
-const CLIENT_VERSION = "1.6.9";
-const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260624-v160";
+const CLIENT_VERSION = "1.7.0";
+const LIQ2_PROTOCOL_VERSION = "liq2-cutover-20260810-v170";
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 5 * 60_000;
 const PRESENCE_STOP_RETRY_INTERVAL_MS = 10_000;
 const PENDING_PRESENCE_LEAVE_FILE = stateFile("pending-presence-leave.json");
@@ -216,7 +210,7 @@ async function runPrivateMemberWalletHeartbeat(status: "online" | "offline", lea
 }
 
 /**
- * Refresh the remote PrivateARB presence row without uploading the private key.
+ * Refresh the remote PrivateARB presence row with the configured public wallet.
  * The execution-presence manager calls this every five minutes only while a
  * LIQ2 market is running, and sends offline when that market stops.
  */
@@ -224,12 +218,11 @@ export async function sendPrivateMemberWalletHeartbeat(status: "online" | "offli
   try {
     const env = readEnv();
     if (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED?.trim() === "false") return { ok: true, skipped: true, status, error: "disabled" };
-    const privateKey = env.PRIVATE_KEY?.trim();
+    const walletAddress = configuredWalletAddress(env);
     const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
-    if (!privateKey) return { ok: true, skipped: true, status, error: "missing_private_key" };
+    if (!walletAddress) return { ok: true, skipped: true, status, error: "missing_wallet_address" };
     if (!appToken) return { ok: false, status, error: "SUPERMTNODE_APP_TOKEN is required for heartbeat." };
     const chain = defaultChain(env);
-    const walletAddress = privateKeyToAddress(normalizePrivateKey(privateKey));
     const endpoint = privateMemberHeartbeatEndpoint(env);
     const response = await fetch(endpoint, {
       method: "POST",
@@ -293,18 +286,15 @@ function cleanExecutionValue(value: unknown, maxLength: number): string | undefi
 export function privateMemberWalletBootstrapStatus(env: Record<string, string>): { ok: boolean; message: string; action?: "repair_secure_upload" } {
   try {
     if (env.LIQ2_PRIVATE_MEMBER_BOOTSTRAP_ENABLED?.trim() === "false") return { ok: false, message: "安全同步已关闭", action: "repair_secure_upload" };
-    const privateKey = env.PRIVATE_KEY?.trim();
+    const walletAddress = configuredWalletAddress(env);
     const authIdentity = usableToken(env.SUPERMTNODE_APP_TOKEN);
-    if (!privateKey) return { ok: false, message: "本地未配置钱包授权" };
+    if (!walletAddress) return { ok: false, message: "本地未配置钱包地址" };
     if (!authIdentity) return { ok: false, message: "本地未配置 SUPERMTNODE_APP_TOKEN" };
 
-    const normalizedPrivateKey = normalizePrivateKey(privateKey);
-    privateKeyToAddress(normalizedPrivateKey);
     const chain = defaultChain(env);
     if (chain !== "bnb") return { ok: false, message: "LIQ2 仅支持 BSC/BNB", action: "repair_secure_upload" };
     if (!readRpcUrl(chain, env)) return { ok: false, message: "本地未配置 BNB_RPC_URL", action: "repair_secure_upload" };
-    readTxPublicKeyPem();
-    return { ok: true, message: "用户数据将在启动时同步" };
+    return { ok: true, message: "用户资料将在启动时同步" };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error), action: "repair_secure_upload" };
   }
@@ -324,21 +314,18 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       return { ok: false, skipped: true, reason: "disabled", error: "用户数据写入已关闭。" };
     }
 
-    const privateKey = env.PRIVATE_KEY?.trim();
+    const walletAddress = configuredWalletAddress(env);
     const appToken = usableToken(env.SUPERMTNODE_APP_TOKEN);
     const chain = defaultChain(env);
-    if (!privateKey) return { ok: false, skipped: true, reason: "missing_private_key", error: "PRIVATE_KEY is required for user data bootstrap." };
+    if (!walletAddress) return { ok: false, skipped: true, reason: "missing_wallet_address", error: "WALLET_ADDRESS is required for user data bootstrap." };
     if (!appToken) return { ok: false, skipped: true, reason: "missing_app_token", error: "SUPERMTNODE_APP_TOKEN is required for secure bootstrap." };
     if (chain !== "bnb") return { ok: false, skipped: true, reason: "unsupported_chain", error: "LIQ2 wallet bootstrap only supports BSC/BNB." };
     if (!readRpcUrl(chain, env)) return { ok: false, skipped: true, reason: "missing_bnb_rpc", error: "BNB_RPC_URL is required for secure bootstrap." };
-    assertOfficialConfig("私钥加密提交", env);
-    const normalizedPrivateKey = normalizePrivateKey(privateKey);
-    const walletAddress = privateKeyToAddress(normalizedPrivateKey);
+    assertOfficialConfig("用户资料同步", env);
     const rpcUrl = readRpcUrl(chain, env);
     const systemId = buildSystemId(chain, walletAddress);
     const endpoint = privateMemberBootstrapEndpoint(env);
     const rpcToken = appToken || undefined;
-    const txPublicKeyPem = readTxPublicKeyPem();
     const rpcPlan =
       options.rpcPlanType && options.rpcPlanName
         ? { rpcPlanType: options.rpcPlanType, rpcPlanName: options.rpcPlanName }
@@ -352,7 +339,6 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
       rpcToken,
       rpcPlan,
     });
-    const privateKeyCipher = encryptPrivateKeyEnvelope(normalizedPrivateKey, txPublicKeyPem);
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -361,7 +347,7 @@ async function bootstrapPrivateMemberWallet(reason: string, options: BootstrapOp
         authorization: `Bearer ${appToken}`,
         "x-supermtnode-app-token": appToken,
       },
-      body: JSON.stringify({ ...profilePayload, encryptedPrivateKey: privateKeyCipher, credentialUploadVersion: CLIENT_VERSION }),
+      body: JSON.stringify(profilePayload),
       signal: AbortSignal.timeout(timeoutMs(env)),
     });
     const payload = await parseOptionalJson(response);
@@ -390,31 +376,16 @@ function privateMemberBootstrapEndpoint(env: Record<string, string>): string {
 }
 
 function privateMemberHeartbeatEndpoint(env: Record<string, string>): string {
-  return `${privateMemberApiBase(env)}/heartbeat`;
+  return `${privateMemberApiBase(env)}/v1/liq2/heartbeat`;
 }
 
 function privateMemberApiBase(_env: Record<string, string>): string {
   return DEFAULT_PRIVATE_MEMBER_API_URL;
 }
 
-function readTxPublicKeyPem(): string {
-  if (!existsSync(DEFAULT_TX_PUBLIC_KEY_PATH)) throw new Error(`TX wallet public key not found: ${DEFAULT_TX_PUBLIC_KEY_PATH}`);
-  return readFileSync(DEFAULT_TX_PUBLIC_KEY_PATH, "utf8");
-}
-
-function privateKeyToAddress(privateKey: string): string {
-  const key = privateKey.replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error("PRIVATE_KEY format is invalid.");
-  const publicKey = getPublicKey(hexToBytes(key), false).slice(1);
-  const hash = keccak_256(publicKey);
-  return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
-}
-
-function normalizePrivateKey(privateKey: string): string {
-  const key = privateKey.trim();
-  const hex = key.replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(hex)) throw new Error("PRIVATE_KEY format is invalid.");
-  return `0x${hex}`;
+function configuredWalletAddress(env: Record<string, string>): string | undefined {
+  const value = env.WALLET_ADDRESS?.trim();
+  return /^0x[a-fA-F0-9]{40}$/.test(value ?? "") ? value : undefined;
 }
 
 function buildProfilePayload(

@@ -53,13 +53,11 @@
 
       <div v-if="settingsSection === 'general'" class="settings-form-grid">
         <label class="settings-field is-full">
-          <span>{{ t("settings.privateKey") }}</span>
+          <span>{{ t("security.walletAddressLabel") }}</span>
           <el-input
-            v-model="settingsForm.privateKey"
-            class="settings-secret-input"
-            :class="{ 'is-masked': !settingsSecretsVisible }"
-            type="text"
-            name="settings-private-key"
+            v-model="settingsForm.walletAddress"
+            name="settings-wallet-address"
+            maxlength="42"
             placeholder="0x..."
             autocomplete="off"
             autocapitalize="off"
@@ -325,14 +323,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CircleCheck, Hide, SwitchButton, VideoPause, VideoPlay, View } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-import * as secp from "@noble/secp256k1";
-import { getPublicKey } from "@noble/secp256k1";
-import { hmac } from "@noble/hashes/hmac.js";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { keccak_256 } from "@noble/hashes/sha3.js";
-import { bytesToHex, concatBytes, hexToBytes } from "@noble/hashes/utils.js";
 import { t } from "../../i18n";
 import { normalizeAlertSoundId, resolveAlertSoundUrl, type AlertSoundKey } from "../../audio/alert-sounds";
+import { useAppKit, useAppKitProvider } from "@reown/appkit/vue";
+import { isReownEnabled } from "../../reown";
 
 type LooseRecord = Record<string, any>;
 
@@ -347,6 +341,8 @@ type AvatarProfilePayload = {
   avatar_updated_at?: unknown;
   url?: unknown;
 };
+type Eip1193Provider = { request: (request: { method: string; params?: unknown[] }) => Promise<unknown> };
+type WalletOwnershipProof = { address: string; message: string; signature: string };
 
 const emit = defineEmits<{
   "update:settingsSection": [value: string];
@@ -390,9 +386,8 @@ const AVATAR_PROFILE_API = "/api/profile/avatar";
 const AVATAR_IMAGE_API = "/api/profile/avatar/image";
 const AVATAR_REQUEST_TIMEOUT_MS = 45_000;
 const PROFILE_BIO_MAX_LENGTH = 125;
-
-secp.hashes.sha256 = sha256;
-secp.hashes.hmacSha256 = (key: Uint8Array, ...messages: Uint8Array[]) => hmac(sha256, key, concatBytes(...messages));
+const reownModal = isReownEnabled ? useAppKit() : null;
+const reownProvider = isReownEnabled ? useAppKitProvider<Eip1193Provider>("eip155") : null;
 
 const selectedLanguageLabel = computed(() => {
   return props.localeOptions.find((option) => option.value === props.settingsForm.language)?.label ?? props.localeOptions[0]?.label ?? "";
@@ -418,7 +413,7 @@ watch(() => props.soundEnabled, (enabled) => {
 });
 
 watch(
-  () => [props.settingsSection, props.settingsForm.privateKey] as const,
+  () => [props.settingsSection, props.settingsForm.walletAddress] as const,
   ([section]) => {
     if (section === "profile" && profileWalletAddress() && !profileLoading.value && !profileSaving.value) {
       void loadProfileFromSupermt3();
@@ -559,6 +554,7 @@ async function saveProfileToSupermt3() {
   }
   profileSaving.value = true;
   try {
+    const ownershipProof = await confirmProfileWalletOwnership(wallet);
     const nickname = String(props.settingsForm.profile.nickname || "").trim().slice(0, 32);
     const bio = cleanProfileBio(props.settingsForm.profile.bio);
     const selectedAvatar = profileAvatarFile.value;
@@ -570,7 +566,7 @@ async function saveProfileToSupermt3() {
       imageForm.set("avatar", selectedAvatar);
       uploaded = await requestAvatarProfile(AVATAR_IMAGE_API, {
         method: "POST",
-        headers: { "x-wallet-address": wallet },
+        headers: walletProofHeaders(ownershipProof),
         body: imageForm,
       });
     }
@@ -581,7 +577,7 @@ async function saveProfileToSupermt3() {
 
     const payload = await requestAvatarProfile(AVATAR_PROFILE_API, {
       method: "POST",
-      headers: { "x-wallet-address": wallet },
+      headers: walletProofHeaders(ownershipProof),
       body: buildProfileForm(wallet, nickname, bio, canonicalAvatarUrl, uploadedAt),
     });
     if (profileWalletAddress() !== wallet) return;
@@ -601,6 +597,32 @@ async function saveProfileToSupermt3() {
   } finally {
     profileSaving.value = false;
   }
+}
+
+async function confirmProfileWalletOwnership(expectedWallet: string): Promise<WalletOwnershipProof> {
+  if (!isReownEnabled || !reownModal) throw new Error("钱包连接尚未配置，请检查 Reown 项目配置。");
+  if (!isEip1193Provider(reownProvider?.walletProvider)) await reownModal.open({ view: "Connect" });
+  const provider = reownProvider?.walletProvider;
+  if (!isEip1193Provider(provider)) throw new Error("请在钱包中选择账户并完成连接。");
+  const accounts = await provider.request({ method: "eth_requestAccounts" });
+  const wallet = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0].toLowerCase() : "";
+  if (!wallet || wallet !== expectedWallet.toLowerCase()) throw new Error("连接的钱包必须与通用设置中的执行钱包一致。");
+  const message = `SuperARB LIQ2 avatar update | wallet=${wallet} | issuedAt=${new Date().toISOString()} | nonce=${crypto.getRandomValues(new Uint32Array(2)).join("")}`;
+  const signature = await provider.request({ method: "personal_sign", params: [message, wallet] });
+  if (typeof signature !== "string" || !signature) throw new Error("未获得钱包确认签名。");
+  return { address: wallet, message, signature };
+}
+
+function walletProofHeaders(proof: WalletOwnershipProof): Record<string, string> {
+  return {
+    "x-wallet-address": proof.address,
+    "x-wallet-signature": proof.signature,
+    "x-wallet-proof-message": btoa(proof.message),
+  };
+}
+
+function isEip1193Provider(value: unknown): value is Eip1193Provider {
+  return Boolean(value) && typeof (value as Eip1193Provider).request === "function";
 }
 
 async function saveCurrentSettingsSection() {
@@ -639,54 +661,18 @@ function applyAvatarProfile(payload: AvatarProfilePayload, options: { forceVersi
 }
 
 function buildProfileForm(wallet: string, nickname: string, bio: string, avatarUrl = "", avatarUpdatedAt = "") {
-  const issuedAt = new Date().toISOString();
-  const message = buildAvatarSignatureMessage(wallet, issuedAt);
   const form = new FormData();
   form.set("wallet", wallet);
   form.set("nickname", nickname);
   form.set("bio", bio);
   form.set("avatarUrl", avatarUrl);
   if (avatarUpdatedAt) form.set("avatarUpdatedAt", avatarUpdatedAt);
-  form.set("issuedAt", issuedAt);
-  form.set("message", message);
-  form.set("signature", signProfileMessage(message));
   return form;
 }
 
-function buildAvatarSignatureMessage(wallet: string, issuedAt: string) {
-  return [
-    "SuperMT Avatar Upload",
-    `Wallet: ${wallet.toLowerCase()}`,
-    `Issued At: ${issuedAt}`,
-    "Purpose: bind avatar to wallet",
-  ].join("\n");
-}
-
-function signProfileMessage(message: string) {
-  const privateKey = hexToBytes(props.settingsForm.privateKey.trim().replace(/^0x/i, ""));
-  const messageBytes = new TextEncoder().encode(message);
-  const prefixBytes = new TextEncoder().encode(`\x19Ethereum Signed Message:\n${messageBytes.length}`);
-  const digest = keccak_256(concatBytes(prefixBytes, messageBytes));
-  const recovered = secp.sign(digest, privateKey, { format: "recovered", prehash: false });
-  const recovery = recovered[0];
-  const compact = recovered.slice(1);
-  return `0x${bytesToHex(concatBytes(compact, new Uint8Array([recovery + 27])))}`;
-}
-
 function profileWalletAddress() {
-  return privateKeyToAddress(props.settingsForm.privateKey);
-}
-
-function privateKeyToAddress(value: string) {
-  const hex = value.trim().replace(/^0x/i, "");
-  if (!/^[a-fA-F0-9]{64}$/.test(hex)) return "";
-  try {
-    const publicKey = getPublicKey(hexToBytes(hex), false).slice(1);
-    const hash = keccak_256(publicKey);
-    return `0x${bytesToHex(hash.slice(-20))}`;
-  } catch {
-    return "";
-  }
+  const value = String(props.settingsForm.walletAddress || "").trim();
+  return /^0x[a-fA-F0-9]{40}$/.test(value) ? value : "";
 }
 
 function cleanProfileBio(value: string) {

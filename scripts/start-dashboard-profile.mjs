@@ -10,13 +10,13 @@ if (!/^[a-zA-Z0-9_-]{1,32}$/.test(profile)) {
 
 const envFile = resolve(process.cwd(), `.env.${profile}`);
 if (!existsSync(envFile)) {
-  console.error(`Missing .env.${profile}. Create it locally and add that wallet's PRIVATE_KEY before starting.`);
+  console.error(`Missing .env.${profile}. Create it locally and add that profile's WALLET_ADDRESS before starting.`);
   process.exit(1);
 }
 
 const env = parseEnv(readFileSync(envFile, "utf8"));
-if (!/^(?:0x)?[0-9a-fA-F]{64}$/.test(env.PRIVATE_KEY ?? "")) {
-  console.error(`.env.${profile} does not contain a valid PRIVATE_KEY.`);
+if (!/^0x[0-9a-fA-F]{40}$/.test(env.WALLET_ADDRESS ?? "")) {
+  console.error(`.env.${profile} does not contain a valid WALLET_ADDRESS.`);
   process.exit(1);
 }
 

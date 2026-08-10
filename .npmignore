@@ -6,5 +6,6 @@ dist/
 .superarb/
 .superarb-build-commit
 efft.md
+ops/
 server/state-api-rust/target/
 *.tgz
