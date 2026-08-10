@@ -676,7 +676,7 @@ async function requestVaultJson<T>(url:string, init:RequestInit={}):Promise<T> {
 
 async function connectTransactionWallet(expectedAddress: string): Promise<Eip1193Provider> {
   if (!isReownEnabled || !reownModal) {
-    throw new Error("钱包连接尚未配置。请在 .env 设置 VITE_REOWN_PROJECT_ID 后重启应用。");
+    throw new Error("钱包连接服务尚未初始化，请刷新页面后重试。");
   }
   if (!isEip1193Provider(reownProvider?.walletProvider)) {
     await reownModal.open({ view: "Connect" });

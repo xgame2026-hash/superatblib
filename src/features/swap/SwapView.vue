@@ -254,7 +254,7 @@ async function requestQuote(): Promise<SwapQuotePayload> {
 
 async function selectWallet(): Promise<Eip1193Provider> {
   if (isEip1193Provider(reownProvider?.walletProvider)) return reownProvider.walletProvider;
-  if (!isReownEnabled || !reownModal) throw new Error("Reown 尚未配置。请在 .env 设置 VITE_REOWN_PROJECT_ID 后重启应用。");
+  if (!isReownEnabled || !reownModal) throw new Error("钱包连接服务尚未初始化，请刷新页面后重试。");
   await reownModal.open({ view: "Connect" });
   if (isEip1193Provider(reownProvider?.walletProvider)) return reownProvider.walletProvider;
   throw new Error("请在钱包中选择账户并完成连接。");

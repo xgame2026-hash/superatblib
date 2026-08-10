@@ -619,7 +619,7 @@ function enableCustomSlotSlippage() {
 async function selectPurchaseWallet(): Promise<Eip1193Provider> {
   const existingReownProvider = reownProvider?.walletProvider;
   if (isEip1193Provider(existingReownProvider)) return existingReownProvider;
-  if (!isReownEnabled || !reownModal) throw new Error("Reown 尚未配置。请在 .env 设置 VITE_REOWN_PROJECT_ID 后重启应用。");
+  if (!isReownEnabled || !reownModal) throw new Error("钱包连接服务尚未初始化，请刷新页面后重试。");
   await reownModal.open({ view: "Connect" });
   const connectedReownProvider = reownProvider?.walletProvider;
   if (isEip1193Provider(connectedReownProvider)) return connectedReownProvider;

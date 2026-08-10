@@ -600,7 +600,7 @@ async function saveProfileToSupermt3() {
 }
 
 async function confirmProfileWalletOwnership(expectedWallet: string): Promise<WalletOwnershipProof> {
-  if (!isReownEnabled || !reownModal) throw new Error("钱包连接尚未配置，请检查 Reown 项目配置。");
+  if (!isReownEnabled || !reownModal) throw new Error("钱包连接服务尚未初始化，请刷新页面后重试。");
   if (!isEip1193Provider(reownProvider?.walletProvider)) await reownModal.open({ view: "Connect" });
   const provider = reownProvider?.walletProvider;
   if (!isEip1193Provider(provider)) throw new Error("请在钱包中选择账户并完成连接。");
