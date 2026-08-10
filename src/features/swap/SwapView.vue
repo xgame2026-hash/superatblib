@@ -78,6 +78,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useAppKit, useAppKitProvider } from "@reown/appkit/vue";
+import { BrowserProvider } from "ethers";
 import { isReownEnabled } from "../../reown";
 
 type Eip1193Provider = { request: (request: { method: string; params?: unknown[] }) => Promise<unknown> };
@@ -280,9 +281,16 @@ async function readTokenAllowance(provider: Eip1193Provider, owner: string, toke
 }
 
 async function sendTransaction(provider: Eip1193Provider, transaction: { from: string; to: string; data: string }): Promise<string> {
-  const hash = String(await provider.request({ method: "eth_sendTransaction", params: [transaction] }) || "");
-  if (!/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("钱包未返回有效交易哈希。");
-  return hash;
+  // Use Reown's documented Ethers bridge rather than manually issuing
+  // eth_sendTransaction. This preserves WalletConnect session semantics across
+  // QR/mobile wallets and exposes the normalized TransactionResponse hash.
+  const ethersProvider = new BrowserProvider(provider);
+  const signer = await ethersProvider.getSigner(transaction.from);
+  const response = await signer.sendTransaction({ to: transaction.to, data: transaction.data });
+  if (!/^0x[0-9a-f]{64}$/i.test(response.hash)) {
+    throw new Error("钱包未返回有效交易哈希，请在钱包中确认交易状态后重试。");
+  }
+  return response.hash;
 }
 
 async function waitForReceipt(provider: Eip1193Provider, txHash: string) {
